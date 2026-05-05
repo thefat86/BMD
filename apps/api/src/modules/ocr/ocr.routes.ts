@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { isSupportedMime, scanReceiptFile } from "./ocr.service.js";
 import { Errors } from "../../lib/errors.js";
+import { assertCanUseOcr } from "../../lib/plan-limits.js";
 
 export async function ocrRoutes(app: FastifyInstance): Promise<void> {
   app.addHook("onRequest", app.authenticate);
@@ -25,6 +26,8 @@ export async function ocrRoutes(app: FastifyInstance): Promise<void> {
    * }
    */
   app.post("/receipts/scan", async (req) => {
+    // Spec §6.3 : appliquer le quota OCR mensuel du plan (FREE = 5/mois)
+    await assertCanUseOcr((req.user as any).sub);
     // @fastify/multipart attache req.file()
     const data = await (req as any).file();
     if (!data) {

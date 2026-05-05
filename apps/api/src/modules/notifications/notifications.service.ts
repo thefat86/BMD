@@ -86,10 +86,16 @@ export async function notifyGroupMembers(input: {
   groupId: string;
   excludeUserId?: string;
   notification: NotifyInput;
+  /// Si true, on ignore les `doNotDisturb` (cas critique : règlement, suspension)
+  bypassDND?: boolean;
 }): Promise<void> {
   try {
     const members = await prisma.groupMember.findMany({
-      where: { groupId: input.groupId },
+      where: {
+        groupId: input.groupId,
+        // Spec §3.12 : filtre Ne Pas Déranger sauf si bypassDND
+        ...(input.bypassDND ? {} : { doNotDisturb: false }),
+      },
       select: { userId: true },
     });
     const targetIds = members

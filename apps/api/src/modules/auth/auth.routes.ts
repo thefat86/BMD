@@ -55,6 +55,8 @@ const updateMeSchema = z.object({
   defaultCurrency: z.string().length(3).optional(),
   defaultLocale: z.string().min(2).max(8).optional(),
   avatar: z.string().url().nullable().optional(),
+  /// Tonalité des rappels (spec §3.8) : sympa | ferme | humour | pro
+  reminderTone: z.enum(["sympa", "ferme", "humour", "pro"]).optional(),
 });
 
 const addContactSchema = refineContactValue(

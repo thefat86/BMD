@@ -2,6 +2,10 @@ import { GroupType, MemberRole, Prisma } from "@prisma/client";
 import { prisma } from "../../lib/db.js";
 import { Errors } from "../../lib/errors.js";
 import {
+  assertCanAddMember,
+  assertCanCreateGroup,
+} from "../../lib/plan-limits.js";
+import {
   notifyGroupMembers,
   notifyOne,
 } from "../notifications/notifications.service.js";
@@ -16,6 +20,9 @@ export interface CreateGroupInput {
 export async function createGroup(input: CreateGroupInput) {
   const name = input.name.trim();
   if (!name) throw Errors.badRequest("Group name required");
+
+  // Spec §6.3 : appliquer les limites du plan (FREE = 2 groupes max par défaut)
+  await assertCanCreateGroup(input.createdById);
 
   return prisma.group.create({
     data: {
@@ -91,6 +98,8 @@ export async function addMemberByContact(input: {
   displayName?: string;
 }) {
   await assertRole(input.groupId, input.invitedById, ["ADMIN", "TREASURER"]);
+  // Spec §6.3 : limite "members per group" du plan du créateur
+  await assertCanAddMember(input.groupId);
   const value = input.contactValue.trim();
 
   let contact = await prisma.userContact.findUnique({
@@ -594,6 +603,39 @@ export async function joinGroupViaToken(input: {
 // ACTIVITY LOG (fil d'événements)
 // ============================================================
 
+/**
+ * Audit log signé (spec §3.6 §9.1) — chaîne de hash anti-falsification.
+ *
+ * Chaque entrée porte :
+ *  - prevHash : selfHash de la précédente entrée du même groupe
+ *  - selfHash : sha256(prevHash + id + groupId + actorId + kind + payloadJSON + createdAt)
+ *
+ * Vérification d'intégrité : on rejoue la chaîne en recalculant chaque selfHash
+ * et en confirmant que prevHash[n+1] = selfHash[n]. Toute altération casse
+ * la chaîne au point d'altération, rendant la fraude détectable.
+ */
+async function computeLogHash(input: {
+  prevHash: string | null;
+  id: string;
+  groupId: string;
+  actorId: string | null;
+  kind: string;
+  payload: any;
+  createdAt: Date;
+}): Promise<string> {
+  const { createHash } = await import("crypto");
+  const blob = JSON.stringify({
+    prev: input.prevHash,
+    id: input.id,
+    g: input.groupId,
+    a: input.actorId,
+    k: input.kind,
+    p: input.payload ?? null,
+    t: input.createdAt.toISOString(),
+  });
+  return createHash("sha256").update(blob).digest("hex");
+}
+
 export async function logActivity(input: {
   groupId: string;
   actorId?: string;
@@ -601,17 +643,86 @@ export async function logActivity(input: {
   payload?: any;
 }): Promise<void> {
   try {
-    await prisma.activityLog.create({
+    // 1. On récupère le selfHash de la dernière entrée du groupe (chaîne)
+    const last = await prisma.activityLog.findFirst({
+      where: { groupId: input.groupId },
+      orderBy: { createdAt: "desc" },
+      select: { selfHash: true },
+    });
+    const prevHash = last?.selfHash ?? null;
+
+    // 2. On crée l'entrée (sans selfHash d'abord)
+    const created = await prisma.activityLog.create({
       data: {
         groupId: input.groupId,
         actorId: input.actorId ?? null,
         kind: input.kind,
         payload: input.payload ?? undefined,
+        prevHash,
       },
     });
-  } catch {
+
+    // 3. On calcule le hash et on le persiste
+    const selfHash = await computeLogHash({
+      prevHash,
+      id: created.id,
+      groupId: created.groupId,
+      actorId: created.actorId,
+      kind: created.kind,
+      payload: created.payload,
+      createdAt: created.createdAt,
+    });
+    await prisma.activityLog.update({
+      where: { id: created.id },
+      data: { selfHash },
+    });
+  } catch (e) {
+    console.warn("[logActivity] failed", e);
     // Best-effort : ne pas planter une opération métier si le log échoue
   }
+}
+
+/**
+ * Vérifie l'intégrité du journal d'audit d'un groupe.
+ * Retourne { valid, brokenAt: index? } pour permettre l'affichage admin.
+ *
+ * Coût : O(n) par groupe — appelable sur demande (pas en hot-path).
+ */
+export async function verifyActivityChain(input: {
+  groupId: string;
+  actorUserId: string;
+}): Promise<{
+  valid: boolean;
+  count: number;
+  brokenAt?: number;
+}> {
+  // Auth check : seuls les admins du groupe peuvent vérifier
+  await assertRole(input.groupId, input.actorUserId, ["ADMIN"]);
+  const entries = await prisma.activityLog.findMany({
+    where: { groupId: input.groupId },
+    orderBy: { createdAt: "asc" },
+  });
+  let prevHash: string | null = null;
+  for (let i = 0; i < entries.length; i++) {
+    const e = entries[i];
+    if (e.prevHash !== prevHash) {
+      return { valid: false, count: entries.length, brokenAt: i };
+    }
+    const expected = await computeLogHash({
+      prevHash,
+      id: e.id,
+      groupId: e.groupId,
+      actorId: e.actorId,
+      kind: e.kind,
+      payload: e.payload,
+      createdAt: e.createdAt,
+    });
+    if (e.selfHash !== expected) {
+      return { valid: false, count: entries.length, brokenAt: i };
+    }
+    prevHash = e.selfHash;
+  }
+  return { valid: true, count: entries.length };
 }
 
 export async function listActivities(input: {

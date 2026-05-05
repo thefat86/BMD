@@ -241,6 +241,9 @@ export default function GroupSettingsPage(): JSX.Element {
         Tu es <strong>{myRole?.toLowerCase()}</strong> dans ce groupe
       </p>
 
+      {/* === Mode "Ne pas déranger" (spec §3.12) === */}
+      <DndToggle group={group} meId={me?.id} onChanged={load} />
+
       {/* === BASE === */}
       <div className="card" style={{ marginTop: 20 }}>
         <h2 style={{ marginTop: 0 }}>Informations</h2>
@@ -700,3 +703,92 @@ const btnSmall: React.CSSProperties = {
   cursor: "pointer",
   minHeight: 36,
 };
+
+/**
+ * Toggle "Ne pas déranger" pour la membership courante (spec §3.12).
+ * Lit le flag `doNotDisturb` depuis le membre courant, déclenche un PATCH
+ * /groups/:id/dnd, puis recharge le groupe via onChanged().
+ */
+function DndToggle({
+  group,
+  meId,
+  onChanged,
+}: {
+  group: any;
+  meId?: string;
+  onChanged: () => void | Promise<void>;
+}): JSX.Element | null {
+  const [busy, setBusy] = useState(false);
+  if (!group || !meId) return null;
+  const me = group.members.find((m: any) => m.user.id === meId);
+  if (!me) return null;
+  const dnd = !!me.doNotDisturb;
+
+  async function toggle() {
+    setBusy(true);
+    try {
+      await api.setGroupDND(group.id, !dnd);
+      await onChanged();
+    } catch (e) {
+      window.alert(`Échec : ${(e as Error).message}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div
+      className="card"
+      style={{
+        marginTop: 20,
+        background: dnd
+          ? "rgba(232,163,61,0.06)"
+          : "rgba(255,255,255,0.02)",
+      }}
+    >
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 12,
+          flexWrap: "wrap",
+        }}
+      >
+        <div style={{ flex: 1, minWidth: 200 }}>
+          <h2 style={{ margin: 0, fontSize: 16 }}>
+            {dnd ? "🔕" : "🔔"} Notifications de ce groupe
+          </h2>
+          <p
+            className="muted"
+            style={{ fontSize: 12, margin: "6px 0 0", lineHeight: 1.5 }}
+          >
+            {dnd
+              ? "Désactivées · tu ne reçois plus de notifs sauf paiement direct."
+              : "Activées · tu reçois les notifs de tout ce qui se passe."}
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={toggle}
+          disabled={busy}
+          style={{
+            padding: "10px 16px",
+            background: dnd
+              ? "var(--saffron, #E8A33D)"
+              : "rgba(255,255,255,0.05)",
+            color: dnd ? "#16111E" : "var(--cream, #F4E4C1)",
+            border: "1px solid var(--line-soft, rgba(244,228,193,0.08))",
+            borderRadius: 10,
+            fontWeight: 700,
+            cursor: busy ? "wait" : "pointer",
+            minHeight: 44,
+            fontSize: 13,
+            whiteSpace: "nowrap",
+          }}
+        >
+          {dnd ? "Réactiver" : "Mettre en sourdine"}
+        </button>
+      </div>
+    </div>
+  );
+}

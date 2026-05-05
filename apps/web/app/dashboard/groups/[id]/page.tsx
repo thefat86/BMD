@@ -18,6 +18,7 @@ import {
 } from "../../../../lib/ui/itemized-expense";
 import { BottomNav } from "../../../../lib/ui/bottom-nav";
 import { ScanReceiptModal } from "../../../../lib/ui/scan-receipt-modal";
+import { CsvImportModal } from "../../../../lib/ui/csv-import-modal";
 import { BarChart, DonutChart } from "../../../../lib/ui/charts";
 import { validateContact } from "../../../../lib/validators";
 
@@ -126,6 +127,9 @@ export default function GroupDetailPage() {
   const [splitMode, setSplitMode] = useState<SplitMode>("EQUAL");
   const [participants, setParticipants] = useState<Record<string, boolean>>({});
   const [shares, setShares] = useState<Record<string, string>>({});
+
+  // Import CSV — modal saisie en lot (spec §8.4)
+  const [csvImportOpen, setCsvImportOpen] = useState(false);
 
   // OCR — ouverture du modal de scan IA (style maquette)
   const [scanModalOpen, setScanModalOpen] = useState(false);
@@ -2078,6 +2082,21 @@ export default function GroupDetailPage() {
             >
               📄 PDF
             </Link>
+            <button
+              onClick={() => setCsvImportOpen(true)}
+              title="Importer en lot depuis un CSV (spec §8.4)"
+              style={{
+                fontSize: 11,
+                padding: "6px 10px",
+                minHeight: 32,
+                background: "transparent",
+                border: "1px solid var(--border, #ccc)",
+                borderRadius: 6,
+                cursor: "pointer",
+              }}
+            >
+              ⬆ Import CSV
+            </button>
           </div>
         </div>
 
@@ -2372,6 +2391,16 @@ export default function GroupDetailPage() {
         onCreate={() => {
           setEditingExpenseId(null);
           setOpenPanel("expense");
+        }}
+      />
+
+      {/* Modal d'import CSV en lot (spec §8.4) */}
+      <CsvImportModal
+        open={csvImportOpen}
+        groupId={groupId}
+        onClose={() => setCsvImportOpen(false)}
+        onImported={() => {
+          void refresh();
         }}
       />
 

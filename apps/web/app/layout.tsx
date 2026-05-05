@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from "next";
 import "./globals.css";
 import { PwaRegister } from "./pwa-register";
 import { ToastProvider } from "../lib/ui/toast";
+import { IdleLogout } from "../lib/ui/idle-logout";
 
 export const metadata: Metadata = {
   title: "BMD · Back Mes Do",
@@ -42,6 +43,7 @@ export default function RootLayout({
       <body>
         <ToastProvider>{children}</ToastProvider>
         <PwaRegister />
+        <IdleLogout />
       </body>
     </html>
   );

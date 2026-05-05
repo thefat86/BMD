@@ -19,6 +19,8 @@ import {
   updateGroup,
 } from "./groups.service.js";
 import { validateContact } from "../../lib/validators.js";
+import { prisma } from "../../lib/db.js";
+import { Errors } from "../../lib/errors.js";
 
 const createGroupSchema = z.object({
   name: z.string().min(1).max(120),
@@ -235,6 +237,33 @@ export async function groupsRoutes(app: FastifyInstance): Promise<void> {
     return { id: updated.id, role: updated.role };
   });
 
+  /**
+   * PATCH /groups/:id/dnd
+   * Toggle "Ne pas déranger" (spec §3.12) pour la membership de
+   * l'utilisateur courant dans ce groupe.
+   * Body: { doNotDisturb: boolean }
+   */
+  app.patch("/groups/:id/dnd", async (req) => {
+    const { id: groupId } = z
+      .object({ id: z.string().uuid() })
+      .parse(req.params);
+    const body = z
+      .object({ doNotDisturb: z.boolean() })
+      .parse(req.body);
+    // On modifie uniquement la propre membership de l'utilisateur
+    const r = await prisma.groupMember.updateMany({
+      where: {
+        groupId,
+        userId: req.user.sub,
+      },
+      data: { doNotDisturb: body.doNotDisturb },
+    });
+    if (r.count === 0) {
+      throw Errors.notFound("Tu n'es pas membre de ce groupe");
+    }
+    return { doNotDisturb: body.doNotDisturb };
+  });
+
   // ============================================================
   // INVITE TOKENS (lien partageable + QR)
   // ============================================================
@@ -319,6 +348,20 @@ export async function groupsRoutes(app: FastifyInstance): Promise<void> {
   // ============================================================
   // ACTIVITY LOG
   // ============================================================
+
+  /**
+   * GET /groups/:id/activity/verify
+   * Vérifie l'intégrité de la chaîne de hash du journal d'audit (spec §3.6 §9.1).
+   * Retourne { valid, count, brokenAt? }. Admin uniquement.
+   */
+  app.get("/groups/:id/activity/verify", async (req) => {
+    const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
+    const { verifyActivityChain } = await import("./groups.service.js");
+    return verifyActivityChain({
+      groupId: id,
+      actorUserId: req.user.sub,
+    });
+  });
 
   app.get("/groups/:id/activity", async (req) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params);

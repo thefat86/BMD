@@ -47,6 +47,8 @@ model User {
   expenseItemClaims      ExpenseItemClaim[]     @relation("ExpenseItemClaim")
   /// Plan tarifaire de l'utilisateur (spec §6.3) — null = Découverte par défaut
   planCode               String                 @default("FREE")
+  /// Tonalité des rappels (spec §3.8) : sympa | ferme | humour | pro
+  reminderTone           String                 @default("sympa")
 }
 
 enum ContactType {
@@ -142,6 +144,10 @@ model GroupMember {
   user     User       @relation(fields: [userId], references: [id], onDelete: Cascade)
   role     MemberRole @default(MEMBER)
   joinedAt DateTime   @default(now())
+  /// Mode "Ne pas déranger" pour ce groupe (spec §3.12).
+  /// Si true, le membre ne reçoit pas de notification pour les évènements
+  /// du groupe (sauf SETTLEMENT_PROPOSED qui le concerne directement).
+  doNotDisturb Boolean @default(false)
 
   expenseShares ExpenseShare[]
 
@@ -534,6 +540,13 @@ model ActivityLog {
   // Champ libre pour le contexte (description de la dépense, nom du membre, etc.)
   payload   Json?
   createdAt DateTime     @default(now())
+  /// Hash SHA-256 de l'entrée précédente du groupe (chaîne immuable, spec §3.6 §9.1).
+  /// Permet de détecter toute modification a posteriori : si on altère une
+  /// entrée, son hash change et toutes les suivantes deviennent invalides.
+  prevHash  String?
+  /// Hash SHA-256 de cette entrée elle-même = sha256(prevHash + id + groupId + actorId + kind + payload + createdAt).
+  /// Calculé à l'insertion et stocké pour vérification ultérieure.
+  selfHash  String?
 
   @@index([groupId, createdAt])
 }

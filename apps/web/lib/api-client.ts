@@ -50,6 +50,17 @@ export function isUnauthorized(e: unknown): boolean {
   return e instanceof ApiError && e.status === 401;
 }
 
+/**
+ * Détecte une erreur "plan insuffisant" (HTTP 402) — l'UI peut alors
+ * afficher un CTA d'upgrade plutôt qu'un message d'erreur générique.
+ */
+export function isPlanRequired(e: unknown): boolean {
+  return (
+    e instanceof ApiError &&
+    (e.status === 402 || e.code === "plan_required")
+  );
+}
+
 async function request<T>(
   method: string,
   path: string,
@@ -126,7 +137,21 @@ export const api = {
     defaultCurrency?: string;
     defaultLocale?: string;
     avatar?: string | null;
+    /** Tonalité des rappels (spec §3.8) : sympa | ferme | humour | pro */
+    reminderTone?: "sympa" | "ferme" | "humour" | "pro";
   }) => request<{ user: any }>("PATCH", "/auth/me", input),
+
+  /**
+   * Toggle "Ne pas déranger" sur un groupe (spec §3.12).
+   * L'utilisateur ne reçoit plus de notifications pour ce groupe sauf si
+   * une opération `bypassDND` (paiement le concernant directement).
+   */
+  setGroupDND: (groupId: string, doNotDisturb: boolean) =>
+    request<{ doNotDisturb: boolean }>(
+      "PATCH",
+      `/groups/${groupId}/dnd`,
+      { doNotDisturb },
+    ),
 
   addContact: (contactType: "PHONE" | "EMAIL", contactValue: string) =>
     request<{ sent: true; expiresAt: string; message: string }>(
@@ -234,6 +259,32 @@ export const api = {
   ) => request<any>("POST", `/groups/${groupId}/expenses`, input),
 
   /**
+   * Import en lot depuis un CSV (spec §8.4).
+   * Toutes les lignes deviennent des dépenses EQUAL avec tous les membres
+   * comme participants et l'utilisateur courant comme payeur.
+   */
+  importCsvExpenses: (
+    groupId: string,
+    rows: Array<{
+      description: string;
+      amount: string;
+      occurredAt?: string;
+      category?: string;
+    }>,
+  ) =>
+    request<{
+      total: number;
+      success: number;
+      failed: number;
+      results: Array<{
+        ok: boolean;
+        description: string;
+        error?: string;
+        expenseId?: string;
+      }>;
+    }>("POST", `/groups/${groupId}/expenses/import-csv`, { rows }),
+
+  /**
    * Édite une dépense existante. Seul le payeur ou un admin/trésorier peut.
    * Si `amount` ou les `participants` changent, les parts sont recalculées.
    */
@@ -331,6 +382,17 @@ export const api = {
     ),
 
   // ============ ACTIVITY FEED ============
+
+  /**
+   * Vérifie l'intégrité de la chaîne de hash de l'audit log (spec §3.6 §9.1).
+   * Admin uniquement. Retourne valid=false + brokenAt si une entrée a été
+   * altérée a posteriori (ce qui ne devrait jamais arriver en production).
+   */
+  verifyActivityChain: (groupId: string) =>
+    request<{ valid: boolean; count: number; brokenAt?: number }>(
+      "GET",
+      `/groups/${groupId}/activity/verify`,
+    ),
 
   /** Feed d'activité d'un groupe (50 derniers événements). */
   listActivity: (groupId: string) =>

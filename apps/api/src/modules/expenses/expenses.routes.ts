@@ -88,6 +88,93 @@ export async function expensesRoutes(app: FastifyInstance): Promise<void> {
   });
 
   /**
+   * POST /groups/:id/expenses/import-csv (spec §8.4 saisie en lot)
+   * Body: { rows: Array<{ description, amount, occurredAt?, category? }> }
+   *
+   * Pour chaque ligne, crée une dépense en mode EQUAL avec tous les
+   * membres comme participants et l'utilisateur courant comme payeur
+   * (l'utilisateur peut éditer ensuite chaque dépense pour ajuster).
+   *
+   * Retourne le nombre de succès/échecs avec détails ligne par ligne
+   * pour permettre à l'UI d'afficher un rapport d'import.
+   */
+  app.post("/groups/:id/expenses/import-csv", async (req, reply) => {
+    const params = z.object({ id: z.string().uuid() }).parse(req.params);
+    const body = z
+      .object({
+        rows: z
+          .array(
+            z.object({
+              description: z.string().min(1).max(200),
+              amount: z.string().regex(/^\d+([.,]\d{1,4})?$/),
+              occurredAt: z.string().optional(),
+              category: z.string().max(50).optional(),
+            }),
+          )
+          .min(1)
+          .max(500),
+      })
+      .parse(req.body);
+
+    // On charge le groupe pour récupérer la liste des membres (participants)
+    const { getGroupForMember } = await import("../groups/groups.service.js");
+    const group = await getGroupForMember(params.id, req.user.sub);
+    const participants = group.members.map((m: any) => ({ userId: m.userId }));
+
+    const results: Array<{
+      ok: boolean;
+      description: string;
+      error?: string;
+      expenseId?: string;
+    }> = [];
+    for (const row of body.rows) {
+      try {
+        const amount = row.amount.replace(",", ".");
+        // Date format flexible : ISO ou DD/MM/YYYY
+        let occurredAt: Date | undefined;
+        if (row.occurredAt) {
+          const parts = row.occurredAt.match(
+            /^(\d{1,2})[\/\.\-](\d{1,2})[\/\.\-](\d{4})$/,
+          );
+          if (parts) {
+            occurredAt = new Date(`${parts[3]}-${parts[2].padStart(2, "0")}-${parts[1].padStart(2, "0")}`);
+          } else {
+            occurredAt = new Date(row.occurredAt);
+          }
+          if (isNaN(occurredAt.getTime())) occurredAt = undefined;
+        }
+        const created = await createExpense({
+          groupId: params.id,
+          actorUserId: req.user.sub,
+          description: row.description,
+          amount,
+          splitMode: "EQUAL",
+          participants,
+          occurredAt,
+          category: row.category,
+        });
+        results.push({
+          ok: true,
+          description: row.description,
+          expenseId: created.id,
+        });
+      } catch (err) {
+        results.push({
+          ok: false,
+          description: row.description,
+          error: (err as Error).message,
+        });
+      }
+    }
+    return reply.code(201).send({
+      total: body.rows.length,
+      success: results.filter((r) => r.ok).length,
+      failed: results.filter((r) => !r.ok).length,
+      results,
+    });
+  });
+
+  /**
    * PATCH /expenses/:id — modifie une dépense (payeur ou admin uniquement).
    */
   app.patch("/expenses/:id", async (req) => {

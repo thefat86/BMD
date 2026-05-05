@@ -4,6 +4,7 @@ import { prisma } from "../../lib/db.js";
 import { Errors } from "../../lib/errors.js";
 import { computeBalanceWithSuggestions } from "../settlements/balance.service.js";
 import { getGroupForMember } from "../groups/groups.service.js";
+import { assertFeatureEnabled } from "../../lib/plan-limits.js";
 
 /**
  * MODULE M09 · SWAP DE DETTES (compensation triangulaire / N-aire)
@@ -33,6 +34,8 @@ export async function proposeSwap(input: {
   actorUserId: string;
   description?: string;
 }) {
+  // Spec §3.6 : feature Premium uniquement
+  await assertFeatureEnabled(input.actorUserId, "debtSwap");
   const group = await getGroupForMember(input.groupId, input.actorUserId);
 
   // Vérifier qu'il n'y a pas déjà un swap PROPOSED actif sur ce groupe

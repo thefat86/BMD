@@ -1,0 +1,89 @@
+# ============================================
+# Dépendances & artefacts de build
+# ============================================
+node_modules/
+.next/
+dist/
+build/
+coverage/
+.turbo/
+*.tsbuildinfo
+.cache/
+
+# ============================================
+# Variables d'environnement (NE JAMAIS COMMITTER)
+# ============================================
+.env
+.env.local
+.env.*.local
+.env.production
+
+# ============================================
+# Logs & temp
+# ============================================
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+*.swp
+*.swo
+*~
+
+# ============================================
+# Bases de données locales / migrations dev
+# ============================================
+prisma/migrations/dev.db*
+*.sqlite
+*.sqlite3
+
+# ============================================
+# IDE & éditeurs
+# ============================================
+.vscode/
+.idea/
+*.iml
+.project
+.classpath
+.settings/
+
+# ============================================
+# macOS (fichiers système Finder)
+# ============================================
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# ============================================
+# iCloud Drive (fichiers de sync, à ignorer)
+# ============================================
+.icloud
+*.icloud
+.DocumentRevisions-V100
+.fseventsd
+.Spotlight-V100
+.TemporaryItems
+.Trashes
+.com.apple.timemachine.donotpresent
+
+# ============================================
+# Linux
+# ============================================
+*.pid
+*.seed
+*.pid.lock
+
+# ============================================
+# Tests / outputs locaux
+# ============================================
+/tmp/
+.test-results/
+playwright-report/
+playwright/.cache/
+
+# ============================================
+# Fichiers personnels / brouillons
+# ============================================
+TODO.local.md
+NOTES.local.md

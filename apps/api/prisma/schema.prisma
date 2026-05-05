@@ -1,0 +1,197 @@
+// Prisma schema · BMD backend
+// docs : https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================================
+// USERS & AUTH
+// ============================================================
+
+model User {
+  id              String   @id @default(uuid())
+  displayName     String
+  avatar          String?
+  defaultCurrency String   @default("EUR")
+  defaultLocale   String   @default("fr")
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  contacts          UserContact[]
+  groupMemberships  GroupMember[]
+  expensesPaid      Expense[]      @relation("ExpensePaidBy")
+  expenseShares     ExpenseShare[]
+  sessions          Session[]
+  settlementsFrom   Settlement[]   @relation("SettlementFrom")
+  settlementsTo     Settlement[]   @relation("SettlementTo")
+}
+
+enum ContactType {
+  PHONE
+  EMAIL
+}
+
+model UserContact {
+  id          String      @id @default(uuid())
+  userId      String
+  user        User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type        ContactType
+  value       String
+  isVerified  Boolean     @default(false)
+  isPrimary   Boolean     @default(false)
+  verifiedAt  DateTime?
+  createdAt   DateTime    @default(now())
+
+  @@unique([type, value])
+  @@index([userId])
+}
+
+model OtpCode {
+  id           String      @id @default(uuid())
+  contactType  ContactType
+  contactValue String
+  codeHash     String
+  attempts     Int         @default(0)
+  expiresAt    DateTime
+  consumedAt   DateTime?
+  createdAt    DateTime    @default(now())
+
+  @@index([contactType, contactValue, consumedAt])
+}
+
+model Session {
+  id        String    @id @default(uuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String    @unique
+  device    String?
+  expiresAt DateTime
+  createdAt DateTime  @default(now())
+  revokedAt DateTime?
+}
+
+// ============================================================
+// GROUPS
+// ============================================================
+
+enum GroupType {
+  TONTINE
+  COLOC
+  TRAVEL
+  EVENT
+  CLUB
+  PARISH
+  GENERIC
+}
+
+enum MemberRole {
+  ADMIN
+  TREASURER
+  MEMBER
+  OBSERVER
+}
+
+model Group {
+  id              String    @id @default(uuid())
+  name            String
+  type            GroupType
+  defaultCurrency String    @default("EUR")
+  createdById     String
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  members  GroupMember[]
+  expenses Expense[]
+  settlements Settlement[]
+}
+
+model GroupMember {
+  id       String     @id @default(uuid())
+  groupId  String
+  group    Group      @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  userId   String
+  user     User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role     MemberRole @default(MEMBER)
+  joinedAt DateTime   @default(now())
+
+  expenseShares ExpenseShare[]
+
+  @@unique([groupId, userId])
+  @@index([userId])
+}
+
+// ============================================================
+// EXPENSES
+// ============================================================
+
+enum SplitMode {
+  EQUAL
+  UNEQUAL
+  PERCENTAGE
+}
+
+model Expense {
+  id          String    @id @default(uuid())
+  groupId     String
+  group       Group     @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  description String
+  amount      Decimal   @db.Decimal(14, 4)
+  currency    String
+  category    String?
+  paidById    String
+  paidBy      User      @relation("ExpensePaidBy", fields: [paidById], references: [id])
+  splitMode   SplitMode @default(EQUAL)
+  occurredAt  DateTime  @default(now())
+  createdAt   DateTime  @default(now())
+
+  shares ExpenseShare[]
+
+  @@index([groupId, occurredAt])
+}
+
+model ExpenseShare {
+  id            String      @id @default(uuid())
+  expenseId     String
+  expense       Expense     @relation(fields: [expenseId], references: [id], onDelete: Cascade)
+  groupMemberId String
+  groupMember   GroupMember @relation(fields: [groupMemberId], references: [id], onDelete: Cascade)
+  userId        String
+  user          User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  amountOwed    Decimal     @db.Decimal(14, 4)
+
+  @@index([expenseId])
+  @@index([userId])
+}
+
+// ============================================================
+// SETTLEMENTS
+// ============================================================
+
+enum SettlementStatus {
+  PROPOSED
+  PAID
+  CONFIRMED
+  CANCELLED
+}
+
+model Settlement {
+  id                 String           @id @default(uuid())
+  groupId            String
+  group              Group            @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  fromUserId         String
+  fromUser           User             @relation("SettlementFrom", fields: [fromUserId], references: [id])
+  toUserId           String
+  toUser             User             @relation("SettlementTo", fields: [toUserId], references: [id])
+  amount             Decimal          @db.Decimal(14, 4)
+  currency           String
+  status             SettlementStatus @default(PROPOSED)
+  proposedAt         DateTime         @default(now())
+  confirmedByPayerAt DateTime?
+  confirmedByPayeeAt DateTime?
+}

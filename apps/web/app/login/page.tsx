@@ -2,7 +2,7 @@
 import { Suspense, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { api, setToken } from "../../lib/api-client";
-import { validateContact } from "@bmd/shared-types";
+import { validateContact } from "../../lib/validators";
 
 const PENDING_INVITE_KEY = "bmd_pending_invite_token";
 

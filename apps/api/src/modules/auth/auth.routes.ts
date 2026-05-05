@@ -6,7 +6,7 @@ import { requestOtp, verifyOtp } from "./otp.service.js";
 import { verifyAndIssue } from "./auth.service.js";
 import { revokeSession } from "./jwt.service.js";
 import { Errors } from "../../lib/errors.js";
-import { validateContact } from "@bmd/shared-types";
+import { validateContact } from "../../lib/validators.js";
 
 /**
  * Refine Zod : on appelle nos validators partagés (E.164, RFC 5322 simplifié)

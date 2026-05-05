@@ -12,7 +12,7 @@ import { useToast } from "../../../../lib/ui/toast";
 import { NotificationBell } from "../../../../lib/ui/notification-bell";
 import { ExpenseAttachments } from "../../../../lib/ui/expense-attachments";
 import { DebtTransferPanel } from "../../../../lib/ui/debt-transfer-panel";
-import { validateContact } from "@bmd/shared-types";
+import { validateContact } from "../../../../lib/validators";
 
 type SplitMode = "EQUAL" | "UNEQUAL" | "PERCENTAGE";
 

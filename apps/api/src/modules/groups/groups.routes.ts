@@ -18,7 +18,7 @@ import {
   revokeInviteToken,
   updateGroup,
 } from "./groups.service.js";
-import { validateContact } from "@bmd/shared-types";
+import { validateContact } from "../../lib/validators.js";
 
 const createGroupSchema = z.object({
   name: z.string().min(1).max(120),

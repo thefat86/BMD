@@ -323,6 +323,36 @@ export const api = {
   getTontine: (groupId: string) =>
     request<{ tontine: any | null }>("GET", `/groups/${groupId}/tontine`),
 
+  /**
+   * Historique des tontines du groupe (gains par bénéficiaire + dates effectives).
+   * Pour le suivi long terme (2+ ans, plusieurs tontines successives).
+   */
+  getTontineHistory: (groupId: string) =>
+    request<{
+      tontines: Array<{
+        id: string;
+        frequency: string;
+        currency: string;
+        status: string;
+        contributionAmount: string;
+        startDate: string;
+        completedAt: string | null;
+        turns: Array<{
+          id: string;
+          turnNumber: number;
+          beneficiary: { id: string; displayName: string; avatar: string | null };
+          dueDate: string;
+          scheduledDate: string | null;
+          distributedAt: string | null;
+          status: string;
+          totalReceived: string;
+          currency: string;
+          contributorCount: number;
+          paidCount: number;
+        }>;
+      }>;
+    }>("GET", `/groups/${groupId}/tontine/history`),
+
   createTontine: (
     groupId: string,
     input: {

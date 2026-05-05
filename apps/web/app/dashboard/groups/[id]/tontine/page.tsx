@@ -9,6 +9,7 @@ import {
   isUnauthorized,
 } from "../../../../../lib/api-client";
 import { useToast } from "../../../../../lib/ui/toast";
+import { BarChart } from "../../../../../lib/ui/charts";
 
 type Status = "DRAFT" | "ACTIVE" | "COMPLETED" | "CANCELLED";
 
@@ -496,6 +497,9 @@ export default function TontinePage() {
               </button>
             )}
           </div>
+
+          {/* Historique : gains par bénéficiaire (chart) */}
+          <TontineHistoryBlock groupId={groupId} currency={tontine.currency} />
 
           {/* Liste des tours */}
           {tontine.turns.map((turn: any) => (
@@ -1057,6 +1061,119 @@ function TurnDateBlock({
             </div>
           )}
         </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Historique d'une tontine : graphique des gains cumulés par bénéficiaire
+ * et liste des tours distribués.
+ *
+ * Chargé séparément du flux principal pour ne pas alourdir le rendu initial.
+ * Visible dès qu'au moins 1 tour a été distribué — sinon retourne null.
+ */
+function TontineHistoryBlock({
+  groupId,
+  currency,
+}: {
+  groupId: string;
+  currency: string;
+}) {
+  const [history, setHistory] = useState<any | null>(null);
+  const [show, setShow] = useState(false);
+
+  useEffect(() => {
+    api
+      .getTontineHistory(groupId)
+      .then(setHistory)
+      .catch(() => setHistory(null));
+  }, [groupId]);
+
+  if (!history) return null;
+  const t = history.tontines[0];
+  if (!t) return null;
+  const distributedTurns = t.turns.filter((x: any) => x.status === "DISTRIBUTED");
+  if (distributedTurns.length === 0) return null;
+
+  // Aggrège les gains par bénéficiaire (cumul si plusieurs tours)
+  const gainsByBeneficiary: Record<string, { name: string; total: number }> = {};
+  for (const turn of distributedTurns) {
+    const id = turn.beneficiary.id;
+    if (!gainsByBeneficiary[id]) {
+      gainsByBeneficiary[id] = {
+        name: turn.beneficiary.displayName,
+        total: 0,
+      };
+    }
+    gainsByBeneficiary[id].total += parseFloat(turn.totalReceived);
+  }
+  const data = Object.values(gainsByBeneficiary).map((b) => ({
+    label: b.name.split(" ")[0],
+    value: Math.round(b.total),
+  }));
+
+  return (
+    <div className="card">
+      <div className="card-head">
+        <h2>📈 Historique des gains</h2>
+        <button
+          className="btn-ghost btn-sm"
+          onClick={() => setShow(!show)}
+          style={{ padding: "6px 12px" }}
+        >
+          {show ? "Masquer" : `${distributedTurns.length} tour${distributedTurns.length > 1 ? "s" : ""} ▾`}
+        </button>
+      </div>
+      {show && (
+        <>
+          <div
+            style={{
+              fontSize: 11,
+              color: "var(--cream-soft, #c9bfae)",
+              marginBottom: 12,
+            }}
+          >
+            Cumul des montants reçus depuis le début de la tontine
+          </div>
+
+          <BarChart
+            data={data}
+            height={180}
+            valueFormat={(n) => n.toFixed(0)}
+            unit={currency}
+          />
+
+          <div className="section-title" style={{ marginTop: 16 }}>
+            🏆 Détail des distributions
+          </div>
+          <div className="list">
+            {distributedTurns.map((turn: any) => (
+              <div key={turn.id} className="list-item">
+                <div className="icon">🎁</div>
+                <div className="text">
+                  <div className="name">
+                    Tour {turn.turnNumber} · {turn.beneficiary.displayName}
+                  </div>
+                  <div className="meta">
+                    {turn.distributedAt
+                      ? new Date(turn.distributedAt).toLocaleDateString("fr-FR", {
+                          day: "numeric",
+                          month: "long",
+                          year: "numeric",
+                        })
+                      : "Date inconnue"}{" "}
+                    · {turn.paidCount}/{turn.contributorCount} cotisants
+                  </div>
+                </div>
+                <div className="amount amount-pos">
+                  {parseFloat(turn.totalReceived).toFixed(0)}{" "}
+                  <small>{currency}</small>
+                </div>
+              </div>
+            ))}
+          </div>
+        </>
       )}
     </div>
   );

@@ -9,6 +9,7 @@ import {
   isUnauthorized,
 } from "../../lib/api-client";
 import { NotificationBell } from "../../lib/ui/notification-bell";
+import { BarChart } from "../../lib/ui/charts";
 
 const TYPES = [
   { value: "TONTINE", label: "🪙 Tontine" },
@@ -196,6 +197,47 @@ export default function DashboardPage() {
           >
             ✓ Créer
           </button>
+        </div>
+      )}
+
+      {/* Vue d'ensemble : graphique répartition par type de groupe */}
+      {groups.length >= 2 && (
+        <div className="card">
+          <div className="card-head">
+            <h2>📊 Répartition de mes groupes</h2>
+            <span className="muted" style={{ fontSize: 11 }}>
+              par type
+            </span>
+          </div>
+          <BarChart
+            data={Object.entries(
+              groups.reduce(
+                (acc: Record<string, number>, g: any) => {
+                  acc[g.type] = (acc[g.type] ?? 0) + 1;
+                  return acc;
+                },
+                {} as Record<string, number>,
+              ),
+            ).map(([k, v]) => ({
+              label:
+                k === "TONTINE"
+                  ? "Tontines"
+                  : k === "COLOC"
+                    ? "Colocs"
+                    : k === "TRAVEL"
+                      ? "Voyages"
+                      : k === "EVENT"
+                        ? "Évents"
+                        : k === "CLUB"
+                          ? "Clubs"
+                          : k === "PARISH"
+                            ? "Paroisses"
+                            : "Autres",
+              value: v,
+            }))}
+            height={140}
+            valueFormat={(n) => String(n)}
+          />
         </div>
       )}
 

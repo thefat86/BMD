@@ -625,3 +625,91 @@ export async function listTurnAcks(input: {
     })),
   };
 }
+
+/**
+ * Historique des tontines d'un groupe (toutes, y compris terminées).
+ * Pour le suivi long terme : "qui a gagné quoi quand" — utile sur 2+ ans.
+ *
+ * Retourne pour chaque tontine :
+ *  - méta (frequency, currency, status, périodes)
+ *  - liste des tours DISTRIBUTED avec : bénéficiaire, date effective, montant pot
+ *
+ * Le groupe peut avoir une seule tontine (relation 1-1 dans le schéma actuel),
+ * mais on prépare le terrain pour une hypothétique relation N-N future.
+ */
+export async function getTontineHistory(input: {
+  groupId: string;
+  actorUserId: string;
+}) {
+  const isMember = await prisma.groupMember.findUnique({
+    where: {
+      groupId_userId: { groupId: input.groupId, userId: input.actorUserId },
+    },
+  });
+  if (!isMember) throw Errors.forbidden("Pas membre du groupe");
+
+  const tontine = await prisma.tontine.findUnique({
+    where: { groupId: input.groupId },
+    include: {
+      turns: {
+        orderBy: { turnNumber: "asc" },
+        include: {
+          beneficiary: { select: { id: true, displayName: true, avatar: true } },
+          contributions: {
+            select: {
+              id: true,
+              status: true,
+              amount: true,
+              paidAt: true,
+              confirmedAt: true,
+              contributor: { select: { id: true, displayName: true } },
+            },
+          },
+        },
+      },
+    },
+  });
+  if (!tontine) {
+    return { tontines: [] };
+  }
+
+  // Calcule le pot effectivement reçu pour chaque tour distribué
+  // = somme des contributions confirmées
+  const turns = tontine.turns.map((t) => {
+    const confirmedContributions = t.contributions.filter(
+      (c) => c.status === "CONFIRMED" || c.status === "PAID",
+    );
+    const totalReceived = confirmedContributions.reduce(
+      (sum, c) => sum + parseFloat(c.amount.toString()),
+      0,
+    );
+    return {
+      id: t.id,
+      turnNumber: t.turnNumber,
+      beneficiary: t.beneficiary,
+      dueDate: t.dueDate.toISOString(),
+      scheduledDate: t.scheduledDate?.toISOString() ?? null,
+      distributedAt: t.distributedAt?.toISOString() ?? null,
+      status: t.status,
+      totalReceived: totalReceived.toFixed(2),
+      currency: tontine.currency,
+      contributorCount: t.contributions.length,
+      paidCount: confirmedContributions.length,
+    };
+  });
+
+  return {
+    tontines: [
+      {
+        id: tontine.id,
+        frequency: tontine.frequency,
+        currency: tontine.currency,
+        status: tontine.status,
+        contributionAmount: tontine.contributionAmount.toString(),
+        startDate: tontine.startDate.toISOString(),
+        completedAt: tontine.completedAt?.toISOString() ?? null,
+        turns,
+      },
+    ],
+  };
+}

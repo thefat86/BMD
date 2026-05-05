@@ -12,6 +12,7 @@ import {
   createTontine,
   distributeTurn,
   getTontineByGroup,
+  getTontineHistory,
   getTontineStats,
   listTurnAcks,
   markContributionPaid,
@@ -86,6 +87,21 @@ export async function tontinesRoutes(app: FastifyInstance): Promise<void> {
         stats: await getTontineStats(tontine.id),
       },
     };
+  });
+
+  /**
+   * GET /groups/:groupId/tontine/history
+   * Historique des tontines (toutes périodes) pour le suivi long terme.
+   * Inclut les tours distribués avec leurs montants effectivement reçus.
+   */
+  app.get("/groups/:groupId/tontine/history", async (req) => {
+    const { groupId } = z
+      .object({ groupId: z.string().uuid() })
+      .parse(req.params);
+    return getTontineHistory({
+      groupId,
+      actorUserId: (req.user as any).sub,
+    });
   });
 
   /**

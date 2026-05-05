@@ -227,6 +227,27 @@ export default function MarketingPage() {
             padding: 4px 8px;
           }
         }
+        /* === Nav links (onglets centraux) === */
+        @media (max-width: 900px) {
+          .bmd-nav-links {
+            display: none !important;
+          }
+        }
+        .bmd-nav-links a:hover {
+          color: var(--saffron) !important;
+        }
+        /* === Hero responsive === */
+        @media (max-width: 768px) {
+          .bmd-mkt .hero-grid {
+            grid-template-columns: 1fr !important;
+            padding: 32px 24px !important;
+            gap: 24px !important;
+          }
+          .bmd-mkt .hero-logo > div {
+            width: 200px !important;
+            height: 200px !important;
+          }
+        }
       `}</style>
 
       <div className="bmd-mkt" dir={rtl ? "rtl" : "ltr"}>
@@ -325,17 +346,6 @@ export default function MarketingPage() {
               FAQ
             </a>
           </div>
-          <style jsx global>{`
-            @media (max-width: 900px) {
-              .bmd-nav-links {
-                display: none !important;
-              }
-            }
-            .bmd-nav-links a:hover {
-              color: var(--saffron) !important;
-            }
-          `}</style>
-
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
             <LangPicker
               locale={locale}
@@ -981,19 +991,6 @@ export default function MarketingPage() {
         </footer>
       </div>
 
-      <style jsx global>{`
-        @media (max-width: 768px) {
-          .bmd-mkt .hero-grid {
-            grid-template-columns: 1fr !important;
-            padding: 32px 24px !important;
-            gap: 24px !important;
-          }
-          .bmd-mkt .hero-logo > div {
-            width: 200px !important;
-            height: 200px !important;
-          }
-        }
-      `}</style>
     </>
   );
 }

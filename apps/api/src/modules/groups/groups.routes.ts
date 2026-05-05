@@ -4,9 +4,19 @@ import { ContactType, GroupType, MemberRole } from "@prisma/client";
 import {
   addMemberByContact,
   batchInviteMembers,
+  changeMemberRole,
   createGroup,
+  createInviteToken,
+  deleteGroup,
   getGroupForMember,
+  getPublicTokenInfo,
+  joinGroupViaToken,
+  listActivities,
   listGroupsForUser,
+  listInviteTokens,
+  removeMember,
+  revokeInviteToken,
+  updateGroup,
 } from "./groups.service.js";
 
 const createGroupSchema = z.object({
@@ -129,5 +139,170 @@ export async function groupsRoutes(app: FastifyInstance): Promise<void> {
       role: body.role,
     });
     return result;
+  });
+
+  // ============================================================
+  // SETTINGS GROUPE (rename / delete)
+  // ============================================================
+
+  app.patch("/groups/:id", async (req) => {
+    const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
+    const body = z
+      .object({
+        name: z.string().min(1).max(120).optional(),
+        defaultCurrency: z.string().length(3).optional(),
+      })
+      .parse(req.body);
+    const updated = await updateGroup({
+      groupId: id,
+      actorUserId: req.user.sub,
+      name: body.name,
+      defaultCurrency: body.defaultCurrency,
+    });
+    return {
+      id: updated.id,
+      name: updated.name,
+      defaultCurrency: updated.defaultCurrency,
+    };
+  });
+
+  app.delete("/groups/:id", async (req, reply) => {
+    const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
+    await deleteGroup({ groupId: id, actorUserId: req.user.sub });
+    return reply.code(204).send();
+  });
+
+  // ============================================================
+  // GESTION DES MEMBRES (remove / change role)
+  // ============================================================
+
+  app.delete("/groups/:gid/members/:mid", async (req, reply) => {
+    const { gid, mid } = z
+      .object({ gid: z.string().uuid(), mid: z.string().uuid() })
+      .parse(req.params);
+    await removeMember({
+      groupId: gid,
+      actorUserId: req.user.sub,
+      memberId: mid,
+    });
+    return reply.code(204).send();
+  });
+
+  app.patch("/groups/:gid/members/:mid", async (req) => {
+    const { gid, mid } = z
+      .object({ gid: z.string().uuid(), mid: z.string().uuid() })
+      .parse(req.params);
+    const body = z
+      .object({ role: z.nativeEnum(MemberRole) })
+      .parse(req.body);
+    const updated = await changeMemberRole({
+      groupId: gid,
+      actorUserId: req.user.sub,
+      memberId: mid,
+      newRole: body.role,
+    });
+    return { id: updated.id, role: updated.role };
+  });
+
+  // ============================================================
+  // INVITE TOKENS (lien partageable + QR)
+  // ============================================================
+
+  app.post("/groups/:id/invite-tokens", async (req, reply) => {
+    const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
+    const body = z
+      .object({
+        maxUses: z.number().int().positive().optional(),
+        expiresInDays: z.number().int().positive().max(365).optional(),
+      })
+      .parse(req.body ?? {});
+    const t = await createInviteToken({
+      groupId: id,
+      actorUserId: req.user.sub,
+      maxUses: body.maxUses,
+      expiresInDays: body.expiresInDays,
+    });
+    return reply.code(201).send({
+      id: t.id,
+      token: t.token,
+      maxUses: t.maxUses,
+      uses: t.uses,
+      expiresAt: t.expiresAt?.toISOString() ?? null,
+      createdAt: t.createdAt.toISOString(),
+    });
+  });
+
+  app.get("/groups/:id/invite-tokens", async (req) => {
+    const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
+    const tokens = await listInviteTokens({
+      groupId: id,
+      actorUserId: req.user.sub,
+    });
+    return tokens.map((t) => ({
+      id: t.id,
+      token: t.token,
+      maxUses: t.maxUses,
+      uses: t.uses,
+      expiresAt: t.expiresAt?.toISOString() ?? null,
+      createdAt: t.createdAt.toISOString(),
+    }));
+  });
+
+  app.delete("/invite-tokens/:id", async (req, reply) => {
+    const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
+    await revokeInviteToken({ tokenId: id, actorUserId: req.user.sub });
+    return reply.code(204).send();
+  });
+
+  /**
+   * GET /invite-info/:token (PUBLIC, pas d'auth)
+   * Page d'aperçu du groupe avant join.
+   */
+  app.get(
+    "/invite-info/:token",
+    { config: { skipAuth: true } as any },
+    async (req) => {
+      const { token } = z
+        .object({ token: z.string().min(8).max(50) })
+        .parse(req.params);
+      const info = await getPublicTokenInfo(token);
+      return info;
+    },
+  );
+
+  /**
+   * POST /invite-join/:token (auth requise)
+   * Rejoint le groupe via un token. L'utilisateur doit déjà avoir un compte.
+   */
+  app.post("/invite-join/:token", async (req) => {
+    const { token } = z
+      .object({ token: z.string().min(8).max(50) })
+      .parse(req.params);
+    const result = await joinGroupViaToken({
+      token,
+      actorUserId: req.user.sub,
+    });
+    return result;
+  });
+
+  // ============================================================
+  // ACTIVITY LOG
+  // ============================================================
+
+  app.get("/groups/:id/activity", async (req) => {
+    const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
+    const items = await listActivities({
+      groupId: id,
+      actorUserId: req.user.sub,
+    });
+    return items.map((a) => ({
+      id: a.id,
+      kind: a.kind,
+      actor: a.actor
+        ? { id: a.actor.id, displayName: a.actor.displayName }
+        : null,
+      payload: a.payload,
+      createdAt: a.createdAt.toISOString(),
+    }));
   });
 }

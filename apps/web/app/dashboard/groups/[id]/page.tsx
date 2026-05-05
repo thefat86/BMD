@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import {
@@ -8,6 +8,7 @@ import {
   getToken,
   isUnauthorized,
 } from "../../../../lib/api-client";
+import { useToast } from "../../../../lib/ui/toast";
 
 type SplitMode = "EQUAL" | "UNEQUAL" | "PERCENTAGE";
 
@@ -28,10 +29,44 @@ const GROUP_TYPE_ICONS: Record<string, string> = {
   GENERIC: "📁",
 };
 
+function activityIcon(kind: string): string {
+  switch (kind) {
+    case "GROUP_CREATED":
+    case "GROUP_UPDATED":
+      return "📁";
+    case "MEMBER_JOINED":
+    case "MEMBER_INVITED":
+      return "👋";
+    case "MEMBER_REMOVED":
+      return "👋";
+    case "MEMBER_ROLE_CHANGED":
+      return "🛡";
+    case "EXPENSE_ADDED":
+      return "💸";
+    case "EXPENSE_UPDATED":
+      return "✏️";
+    case "EXPENSE_DELETED":
+      return "🗑";
+    case "SETTLEMENT_CREATED":
+      return "💳";
+    case "TONTINE_CREATED":
+    case "TONTINE_ACTIVATED":
+      return "🪙";
+    case "SWAP_PROPOSED":
+    case "SWAP_ACCEPTED":
+      return "🔄";
+    case "INVITE_TOKEN_CREATED":
+      return "🔗";
+    default:
+      return "•";
+  }
+}
+
 export default function GroupDetailPage() {
   const router = useRouter();
   const params = useParams();
   const groupId = params.id as string;
+  const toast = useToast();
 
   const [group, setGroup] = useState<any>(null);
   const [expenses, setExpenses] = useState<any[]>([]);
@@ -39,6 +74,19 @@ export default function GroupDetailPage() {
   const [me, setMe] = useState<any>(null);
   const [error, setError] = useState<string | null>(null);
   const [activeSwap, setActiveSwap] = useState<any>(null);
+
+  // Activity feed (M11-like)
+  const [activities, setActivities] = useState<any[]>([]);
+  const [showActivity, setShowActivity] = useState(false);
+
+  // Search / filter sur la liste de dépenses
+  const [searchTerm, setSearchTerm] = useState("");
+
+  // Confirmation modal pour suppression
+  const [confirmDelete, setConfirmDelete] = useState<{
+    expenseId: string;
+    description: string;
+  } | null>(null);
 
   // Un seul panel ouvert à la fois (mobile-friendly)
   const [openPanel, setOpenPanel] = useState<"none" | "invite" | "expense">(
@@ -67,15 +115,16 @@ export default function GroupDetailPage() {
   // Split presets (M10)
   const [presets, setPresets] = useState<any[]>([]);
 
-  async function refresh() {
+  async function refresh(silent = false) {
     try {
-      const [m, g, e, b, swaps, ps] = await Promise.all([
+      const [m, g, e, b, swaps, ps, acts] = await Promise.all([
         api.me(),
         api.getGroup(groupId),
         api.listExpenses(groupId),
         api.getBalance(groupId),
         api.listSwaps(groupId, false),
         api.listPresets(groupId),
+        api.listActivity(groupId).catch(() => []),
       ]);
       setMe(m.user);
       setGroup(g);
@@ -83,13 +132,19 @@ export default function GroupDetailPage() {
       setBalance(b);
       setActiveSwap(swaps[0] ?? null);
       setPresets(ps);
+      setActivities(acts);
     } catch (er) {
       if (isUnauthorized(er)) {
         clearToken();
         router.replace("/login");
         return;
       }
-      setError((er as Error).message);
+      // En polling silencieux on log juste, on n'affiche pas une erreur visuelle
+      if (silent) {
+        console.warn("[refresh] silent error", er);
+      } else {
+        setError((er as Error).message);
+      }
     }
   }
 
@@ -99,6 +154,40 @@ export default function GroupDetailPage() {
       return;
     }
     void refresh();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [groupId]);
+
+  /**
+   * Auto-refresh polling : recharge toutes les 15s tant que l'onglet est
+   * visible. Si l'utilisateur passe sur un autre onglet on suspend pour
+   * économiser les requêtes (et la batterie sur mobile).
+   */
+  const pollingRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (!groupId) return;
+    function start() {
+      if (pollingRef.current != null) return;
+      pollingRef.current = window.setInterval(
+        () => void refresh(true),
+        15_000,
+      );
+    }
+    function stop() {
+      if (pollingRef.current != null) {
+        clearInterval(pollingRef.current);
+        pollingRef.current = null;
+      }
+    }
+    function onVisibility() {
+      if (document.visibilityState === "visible") start();
+      else stop();
+    }
+    if (document.visibilityState === "visible") start();
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      stop();
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [groupId]);
 
@@ -174,6 +263,74 @@ export default function GroupDetailPage() {
     shares,
     group,
   ]);
+
+  // ============ FILTRE / EXPORT CSV / DELETE ============
+
+  /** Filtre simple sur description et montant (insensible à la casse). */
+  const filteredExpenses = useMemo(() => {
+    const q = searchTerm.trim().toLowerCase();
+    if (!q) return expenses;
+    return expenses.filter((e: any) => {
+      const desc = (e.description ?? "").toLowerCase();
+      const payer = (e.paidBy?.displayName ?? "").toLowerCase();
+      const amt = String(e.amount ?? "");
+      return desc.includes(q) || payer.includes(q) || amt.includes(q);
+    });
+  }, [expenses, searchTerm]);
+
+  /**
+   * Export CSV : description, montant, devise, payeur, date, mode, parts.
+   * Utilise un Blob + ObjectURL pour le download, fonctionne offline.
+   */
+  function exportExpensesCsv() {
+    if (!group || expenses.length === 0) {
+      toast.warning("Aucune dépense à exporter");
+      return;
+    }
+    const headers = [
+      "Date",
+      "Description",
+      "Montant",
+      "Devise",
+      "Payé par",
+      "Mode",
+      "Participants",
+    ];
+    const rows = filteredExpenses.map((e: any) => [
+      new Date(e.occurredAt).toISOString().slice(0, 10),
+      `"${(e.description ?? "").replace(/"/g, '""')}"`,
+      String(parseFloat(e.amount).toFixed(2)),
+      e.currency ?? group.defaultCurrency ?? "",
+      `"${(e.paidBy?.displayName ?? "").replace(/"/g, '""')}"`,
+      e.splitMode ?? "",
+      String(e.shares?.length ?? 0),
+    ]);
+    const csv = [headers, ...rows].map((r) => r.join(",")).join("\n");
+    // BOM UTF-8 pour qu'Excel ouvre correctement les accents
+    const blob = new Blob(["\uFEFF" + csv], {
+      type: "text/csv;charset=utf-8;",
+    });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `bmd-${group.name.replace(/[^a-z0-9]/gi, "-")}-depenses.csv`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    toast.success(`${rows.length} dépenses exportées`);
+  }
+
+  async function performDeleteExpense(expenseId: string) {
+    try {
+      await api.deleteExpense(expenseId);
+      toast.success("Dépense supprimée");
+      setConfirmDelete(null);
+      await refresh();
+    } catch (er) {
+      toast.error(er);
+    }
+  }
 
   // ============ INVITATIONS (Contact Picker + RGPD) ============
 
@@ -389,6 +546,7 @@ export default function GroupDetailPage() {
               })),
       };
       await api.createExpense(groupId, payload);
+      toast.success(`Dépense « ${description} » enregistrée`);
       setOpenPanel("none");
       setDescription("");
       setAmount("");
@@ -401,6 +559,7 @@ export default function GroupDetailPage() {
         router.replace("/login");
         return;
       }
+      toast.error(e);
       setError((e as Error).message);
     }
   }
@@ -521,7 +680,7 @@ export default function GroupDetailPage() {
 
       {/* Page header */}
       <div className="page-header">
-        <div className="titles">
+        <div className="titles" style={{ flex: 1 }}>
           <h1>
             <span style={{ marginRight: 8 }}>{groupIcon}</span>
             {group.name}
@@ -531,6 +690,25 @@ export default function GroupDetailPage() {
             · {group.defaultCurrency} · {group.type.toLowerCase()}
           </div>
         </div>
+        <Link
+          href={`/dashboard/groups/${groupId}/settings`}
+          aria-label="Paramètres du groupe"
+          title="Paramètres du groupe"
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            justifyContent: "center",
+            width: 44,
+            height: 44,
+            borderRadius: 10,
+            border: "1px solid var(--border, rgba(255,255,255,0.1))",
+            color: "inherit",
+            textDecoration: "none",
+            fontSize: 20,
+          }}
+        >
+          ⚙️
+        </Link>
       </div>
 
       {error && <div className="error">{error}</div>}
@@ -1460,37 +1638,246 @@ export default function GroupDetailPage() {
       <div className="card">
         <div className="card-head">
           <h2>🧾 Dépenses</h2>
-          <span className="muted" style={{ fontSize: 11 }}>
-            {expenses.length}
-          </span>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <span className="muted" style={{ fontSize: 11 }}>
+              {filteredExpenses.length}
+              {searchTerm ? ` / ${expenses.length}` : ""}
+            </span>
+            <button
+              onClick={exportExpensesCsv}
+              title="Exporter au format CSV (compatible Excel)"
+              style={{
+                fontSize: 11,
+                padding: "6px 10px",
+                minHeight: "32px",
+                background: "transparent",
+                border: "1px solid var(--border, #ccc)",
+                borderRadius: 6,
+                cursor: "pointer",
+              }}
+            >
+              ⬇ CSV
+            </button>
+          </div>
         </div>
+
+        {expenses.length > 0 && (
+          <input
+            type="search"
+            value={searchTerm}
+            onChange={(ev) => setSearchTerm(ev.target.value)}
+            placeholder="🔍 Filtrer par description, montant, payeur…"
+            style={{
+              width: "100%",
+              padding: "10px 12px",
+              fontSize: 14,
+              border: "1px solid var(--border, #ccc)",
+              borderRadius: 8,
+              marginBottom: 12,
+              boxSizing: "border-box",
+            }}
+          />
+        )}
+
         {expenses.length === 0 ? (
           <p className="muted text-center" style={{ padding: "20px 0" }}>
             Aucune dépense pour l'instant
           </p>
+        ) : filteredExpenses.length === 0 ? (
+          <p className="muted text-center" style={{ padding: "20px 0" }}>
+            Aucun résultat pour « {searchTerm} »
+          </p>
         ) : (
           <div className="list">
-            {expenses.map((e: any) => (
-              <div key={e.id} className="list-item">
-                <div className="icon">💸</div>
-                <div className="text">
-                  <div className="name">{e.description}</div>
-                  <div className="meta">
-                    {e.paidBy.displayName} · {e.shares.length}p ·{" "}
-                    {new Date(e.occurredAt).toLocaleDateString("fr-FR", {
-                      day: "numeric",
-                      month: "short",
-                    })}
+            {filteredExpenses.map((e: any) => {
+              const canEdit =
+                me?.id === e.paidBy?.id ||
+                group.members.some(
+                  (m: Member) =>
+                    m.user.id === me?.id &&
+                    (m.role === "ADMIN" || m.role === "TREASURER"),
+                );
+              return (
+                <div key={e.id} className="list-item">
+                  <div className="icon">💸</div>
+                  <div className="text">
+                    <div className="name">{e.description}</div>
+                    <div className="meta">
+                      {e.paidBy.displayName} · {e.shares.length}p ·{" "}
+                      {new Date(e.occurredAt).toLocaleDateString("fr-FR", {
+                        day: "numeric",
+                        month: "short",
+                      })}
+                    </div>
+                  </div>
+                  <div
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 8,
+                    }}
+                  >
+                    <div className="amount">
+                      {parseFloat(e.amount).toFixed(2)}
+                    </div>
+                    {canEdit && (
+                      <button
+                        onClick={() =>
+                          setConfirmDelete({
+                            expenseId: e.id,
+                            description: e.description,
+                          })
+                        }
+                        title="Supprimer cette dépense"
+                        aria-label="Supprimer la dépense"
+                        style={{
+                          background: "transparent",
+                          border: "none",
+                          color: "#ef4444",
+                          fontSize: 18,
+                          cursor: "pointer",
+                          padding: "4px 8px",
+                          minHeight: "32px",
+                          minWidth: "32px",
+                        }}
+                      >
+                        🗑
+                      </button>
+                    )}
                   </div>
                 </div>
-                <div className="amount">
-                  {parseFloat(e.amount).toFixed(2)}
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </div>
+
+      {/* === ACTIVITÉ === */}
+      <div className="card">
+        <div className="card-head">
+          <h2>📰 Activité</h2>
+          <button
+            onClick={() => setShowActivity((v) => !v)}
+            style={{
+              fontSize: 11,
+              padding: "6px 10px",
+              minHeight: "32px",
+              background: "transparent",
+              border: "1px solid var(--border, #ccc)",
+              borderRadius: 6,
+              cursor: "pointer",
+            }}
+          >
+            {showActivity ? "Masquer" : `Voir (${activities.length})`}
+          </button>
+        </div>
+        {showActivity &&
+          (activities.length === 0 ? (
+            <p className="muted text-center" style={{ padding: "20px 0" }}>
+              Aucune activité enregistrée
+            </p>
+          ) : (
+            <div className="list">
+              {activities.slice(0, 30).map((a: any) => (
+                <div key={a.id} className="list-item">
+                  <div className="icon">{activityIcon(a.kind)}</div>
+                  <div className="text">
+                    <div className="name" style={{ fontSize: 14 }}>
+                      {a.message}
+                    </div>
+                    <div className="meta" style={{ fontSize: 11 }}>
+                      {a.actorName ?? "Système"} ·{" "}
+                      {new Date(a.createdAt).toLocaleString("fr-FR", {
+                        day: "numeric",
+                        month: "short",
+                        hour: "2-digit",
+                        minute: "2-digit",
+                      })}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ))}
+      </div>
+
+      {/* === MODAL CONFIRMATION SUPPRESSION === */}
+      {confirmDelete && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          onClick={() => setConfirmDelete(null)}
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(0,0,0,0.55)",
+            zIndex: 9998,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: 16,
+          }}
+        >
+          <div
+            onClick={(ev) => ev.stopPropagation()}
+            style={{
+              background: "#fff",
+              borderRadius: 16,
+              padding: 24,
+              maxWidth: 400,
+              width: "100%",
+              boxShadow: "0 20px 50px rgba(0,0,0,0.2)",
+            }}
+          >
+            <h3 style={{ marginTop: 0, color: "#111827" }}>
+              Supprimer cette dépense&nbsp;?
+            </h3>
+            <p style={{ color: "#374151", lineHeight: 1.5 }}>
+              «&nbsp;<strong>{confirmDelete.description}</strong>&nbsp;» sera
+              définitivement supprimée. Les balances seront recalculées
+              automatiquement.
+            </p>
+            <div
+              style={{
+                display: "flex",
+                gap: 8,
+                justifyContent: "flex-end",
+                marginTop: 16,
+                flexWrap: "wrap",
+              }}
+            >
+              <button
+                onClick={() => setConfirmDelete(null)}
+                style={{
+                  padding: "10px 16px",
+                  background: "transparent",
+                  border: "1px solid #d1d5db",
+                  borderRadius: 8,
+                  cursor: "pointer",
+                  minHeight: 44,
+                }}
+              >
+                Annuler
+              </button>
+              <button
+                onClick={() => performDeleteExpense(confirmDelete.expenseId)}
+                style={{
+                  padding: "10px 16px",
+                  background: "#ef4444",
+                  color: "#fff",
+                  border: "none",
+                  borderRadius: 8,
+                  cursor: "pointer",
+                  minHeight: 44,
+                  fontWeight: 600,
+                }}
+              >
+                Supprimer
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

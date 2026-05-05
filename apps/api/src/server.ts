@@ -66,6 +66,8 @@ export async function buildServer(): Promise<FastifyInstance> {
   });
 
   app.decorate("authenticate", async function (req: any, _reply: any) {
+    // Permet à certaines routes d'opt-out de l'auth via { config: { skipAuth: true } }
+    if (req.routeOptions?.config?.skipAuth) return;
     const token = req.headers.authorization?.replace(/^Bearer\s+/i, "") ?? "";
     await req.jwtVerify();
     await assertSessionActive(req.user, token);

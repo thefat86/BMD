@@ -221,3 +221,354 @@ export async function batchInviteMembers(input: {
 
   return result;
 }
+
+import { randomBytes } from "node:crypto";
+import type { ActivityKind } from "@prisma/client";
+
+// ============================================================
+// SETTINGS GROUPE (rename / delete / change defaults)
+// ============================================================
+
+export async function updateGroup(input: {
+  groupId: string;
+  actorUserId: string;
+  name?: string;
+  defaultCurrency?: string;
+}) {
+  await assertRole(input.groupId, input.actorUserId, ["ADMIN"]);
+
+  const updated = await prisma.group.update({
+    where: { id: input.groupId },
+    data: {
+      ...(input.name && { name: input.name.trim() }),
+      ...(input.defaultCurrency && {
+        defaultCurrency: input.defaultCurrency.toUpperCase(),
+      }),
+    },
+  });
+
+  if (input.name) {
+    await logActivity({
+      groupId: input.groupId,
+      actorId: input.actorUserId,
+      kind: "GROUP_RENAMED",
+      payload: { newName: updated.name },
+    });
+  }
+
+  return updated;
+}
+
+export async function deleteGroup(input: {
+  groupId: string;
+  actorUserId: string;
+}) {
+  await assertRole(input.groupId, input.actorUserId, ["ADMIN"]);
+  // Cascade : tout est nettoyé via les @relation onDelete: Cascade
+  await prisma.group.delete({ where: { id: input.groupId } });
+  return { deleted: true };
+}
+
+// ============================================================
+// GESTION DES MEMBRES
+// ============================================================
+
+export async function removeMember(input: {
+  groupId: string;
+  actorUserId: string;
+  memberId: string;
+}) {
+  // ADMIN peut retirer n'importe qui SAUF le dernier ADMIN
+  // Tout membre peut se retirer lui-même (sauf s'il est dernier ADMIN)
+  const member = await prisma.groupMember.findUnique({
+    where: { id: input.memberId },
+    include: { user: true },
+  });
+  if (!member || member.groupId !== input.groupId) {
+    throw Errors.notFound("Membre introuvable dans ce groupe");
+  }
+
+  const isSelfRemoval = member.userId === input.actorUserId;
+  if (!isSelfRemoval) {
+    await assertRole(input.groupId, input.actorUserId, ["ADMIN"]);
+  }
+
+  // Empêche de retirer le dernier ADMIN
+  if (member.role === "ADMIN") {
+    const otherAdmins = await prisma.groupMember.count({
+      where: {
+        groupId: input.groupId,
+        role: "ADMIN",
+        id: { not: member.id },
+      },
+    });
+    if (otherAdmins === 0) {
+      throw Errors.badRequest(
+        "Impossible de retirer le dernier admin. Promeut d'abord un autre membre.",
+      );
+    }
+  }
+
+  await prisma.groupMember.delete({ where: { id: input.memberId } });
+
+  await logActivity({
+    groupId: input.groupId,
+    actorId: input.actorUserId,
+    kind: isSelfRemoval ? "MEMBER_LEFT" : "MEMBER_REMOVED",
+    payload: { memberName: member.user.displayName },
+  });
+
+  return { removed: true };
+}
+
+export async function changeMemberRole(input: {
+  groupId: string;
+  actorUserId: string;
+  memberId: string;
+  newRole: MemberRole;
+}) {
+  await assertRole(input.groupId, input.actorUserId, ["ADMIN"]);
+
+  const member = await prisma.groupMember.findUnique({
+    where: { id: input.memberId },
+    include: { user: true },
+  });
+  if (!member || member.groupId !== input.groupId) {
+    throw Errors.notFound("Membre introuvable");
+  }
+
+  // Si on retrograde un ADMIN, vérifier qu'il en reste au moins un
+  if (member.role === "ADMIN" && input.newRole !== "ADMIN") {
+    const otherAdmins = await prisma.groupMember.count({
+      where: {
+        groupId: input.groupId,
+        role: "ADMIN",
+        id: { not: member.id },
+      },
+    });
+    if (otherAdmins === 0) {
+      throw Errors.badRequest("Le groupe doit garder au moins 1 admin");
+    }
+  }
+
+  const updated = await prisma.groupMember.update({
+    where: { id: input.memberId },
+    data: { role: input.newRole },
+  });
+
+  await logActivity({
+    groupId: input.groupId,
+    actorId: input.actorUserId,
+    kind: "ROLE_CHANGED",
+    payload: {
+      memberName: member.user.displayName,
+      newRole: input.newRole,
+    },
+  });
+
+  return updated;
+}
+
+// ============================================================
+// INVITE TOKENS (lien partageable + QR code)
+// ============================================================
+
+function generateToken(): string {
+  // 16 bytes = 128 bits, base64url-safe
+  return randomBytes(16)
+    .toString("base64")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=/g, "");
+}
+
+export async function createInviteToken(input: {
+  groupId: string;
+  actorUserId: string;
+  maxUses?: number; // null = illimité
+  expiresInDays?: number;
+}) {
+  await assertRole(input.groupId, input.actorUserId, ["ADMIN", "TREASURER"]);
+
+  const token = generateToken();
+  const expiresAt = input.expiresInDays
+    ? new Date(Date.now() + input.expiresInDays * 24 * 60 * 60 * 1000)
+    : null;
+
+  const created = await prisma.groupInviteToken.create({
+    data: {
+      token,
+      groupId: input.groupId,
+      createdById: input.actorUserId,
+      maxUses: input.maxUses,
+      expiresAt,
+    },
+  });
+
+  await logActivity({
+    groupId: input.groupId,
+    actorId: input.actorUserId,
+    kind: "INVITE_LINK_CREATED",
+    payload: { tokenId: created.id },
+  });
+
+  return created;
+}
+
+export async function listInviteTokens(input: {
+  groupId: string;
+  actorUserId: string;
+}) {
+  await getGroupForMember(input.groupId, input.actorUserId);
+  return prisma.groupInviteToken.findMany({
+    where: { groupId: input.groupId, revokedAt: null },
+    orderBy: { createdAt: "desc" },
+  });
+}
+
+export async function revokeInviteToken(input: {
+  tokenId: string;
+  actorUserId: string;
+}) {
+  const t = await prisma.groupInviteToken.findUnique({
+    where: { id: input.tokenId },
+  });
+  if (!t) throw Errors.notFound("Token introuvable");
+  await assertRole(t.groupId, input.actorUserId, ["ADMIN", "TREASURER"]);
+  await prisma.groupInviteToken.update({
+    where: { id: input.tokenId },
+    data: { revokedAt: new Date() },
+  });
+  return { revoked: true };
+}
+
+/**
+ * Récupère les infos publiques d'un token (pour la page /join).
+ * Ne nécessite PAS d'auth — c'est l'écran d'aperçu pour l'invité.
+ * Mais on filtre les infos sensibles.
+ */
+export async function getPublicTokenInfo(token: string) {
+  const t = await prisma.groupInviteToken.findUnique({
+    where: { token },
+    include: {
+      group: {
+        select: {
+          id: true,
+          name: true,
+          type: true,
+          defaultCurrency: true,
+          _count: { select: { members: true } },
+        },
+      },
+      createdBy: {
+        select: { displayName: true },
+      },
+    },
+  });
+  if (!t) throw Errors.notFound("Lien introuvable ou expiré");
+  if (t.revokedAt) throw Errors.notFound("Lien révoqué");
+  if (t.expiresAt && t.expiresAt < new Date()) {
+    throw Errors.notFound("Lien expiré");
+  }
+  if (t.maxUses && t.uses >= t.maxUses) {
+    throw Errors.notFound("Lien déjà utilisé son maximum");
+  }
+  return {
+    token: t.token,
+    group: t.group,
+    invitedBy: t.createdBy.displayName,
+  };
+}
+
+/**
+ * Utilise le token pour rejoindre le groupe.
+ * Le user doit déjà être authentifié.
+ */
+export async function joinGroupViaToken(input: {
+  token: string;
+  actorUserId: string;
+}) {
+  const t = await prisma.groupInviteToken.findUnique({
+    where: { token: input.token },
+  });
+  if (!t) throw Errors.notFound("Lien introuvable");
+  if (t.revokedAt) throw Errors.badRequest("Lien révoqué");
+  if (t.expiresAt && t.expiresAt < new Date()) {
+    throw Errors.badRequest("Lien expiré");
+  }
+  if (t.maxUses && t.uses >= t.maxUses) {
+    throw Errors.badRequest("Lien déjà utilisé son maximum");
+  }
+
+  // Vérifier qu'on n'est pas déjà membre
+  const existing = await prisma.groupMember.findUnique({
+    where: { groupId_userId: { groupId: t.groupId, userId: input.actorUserId } },
+  });
+  if (existing) {
+    return { groupId: t.groupId, alreadyMember: true };
+  }
+
+  // Ajouter comme MEMBER + incrémenter le compteur
+  await prisma.$transaction([
+    prisma.groupMember.create({
+      data: {
+        groupId: t.groupId,
+        userId: input.actorUserId,
+        role: "MEMBER",
+      },
+    }),
+    prisma.groupInviteToken.update({
+      where: { id: t.id },
+      data: { uses: { increment: 1 } },
+    }),
+  ]);
+
+  await logActivity({
+    groupId: t.groupId,
+    actorId: input.actorUserId,
+    kind: "MEMBER_JOINED",
+    payload: { via: "invite_link" },
+  });
+
+  return { groupId: t.groupId, alreadyMember: false };
+}
+
+// ============================================================
+// ACTIVITY LOG (fil d'événements)
+// ============================================================
+
+export async function logActivity(input: {
+  groupId: string;
+  actorId?: string;
+  kind: ActivityKind;
+  payload?: any;
+}): Promise<void> {
+  try {
+    await prisma.activityLog.create({
+      data: {
+        groupId: input.groupId,
+        actorId: input.actorId ?? null,
+        kind: input.kind,
+        payload: input.payload ?? undefined,
+      },
+    });
+  } catch {
+    // Best-effort : ne pas planter une opération métier si le log échoue
+  }
+}
+
+export async function listActivities(input: {
+  groupId: string;
+  actorUserId: string;
+  limit?: number;
+}) {
+  await getGroupForMember(input.groupId, input.actorUserId);
+  return prisma.activityLog.findMany({
+    where: { groupId: input.groupId },
+    include: {
+      actor: { select: { id: true, displayName: true } },
+    },
+    orderBy: { createdAt: "desc" },
+    take: Math.min(input.limit ?? 50, 200),
+  });
+}

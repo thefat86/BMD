@@ -163,3 +163,150 @@ export async function listExpensesForGroup(groupId: string, actorUserId: string)
     orderBy: { occurredAt: "desc" },
   });
 }
+
+/**
+ * Met à jour une dépense existante. Recalcule les parts si nécessaire.
+ * Seul le payeur ou un admin du groupe peut modifier.
+ */
+export async function updateExpense(input: {
+  expenseId: string;
+  actorUserId: string;
+  description?: string;
+  amount?: string;
+  currency?: string;
+  category?: string | null;
+  paidByUserId?: string;
+  splitMode?: SplitMode;
+  participants?: Array<{ userId: string; share?: number }>;
+  occurredAt?: Date;
+}) {
+  const existing = await prisma.expense.findUnique({
+    where: { id: input.expenseId },
+    include: { group: { include: { members: true } } },
+  });
+  if (!existing) throw Errors.notFound("Dépense introuvable");
+
+  // Permission : payeur OU admin/treasurer du groupe
+  const member = existing.group.members.find(
+    (m) => m.userId === input.actorUserId,
+  );
+  if (!member) throw Errors.forbidden("Pas membre du groupe");
+  const canEdit =
+    existing.paidById === input.actorUserId ||
+    member.role === "ADMIN" ||
+    member.role === "TREASURER";
+  if (!canEdit) {
+    throw Errors.forbidden(
+      "Seul le payeur ou un admin/trésorier peut modifier cette dépense",
+    );
+  }
+
+  // Si le partage change, recalculer les parts
+  const willChangeAmount = input.amount !== undefined;
+  const willChangeSplit =
+    input.splitMode !== undefined || input.participants !== undefined;
+
+  const newAmount = input.amount
+    ? new Decimal(input.amount)
+    : new Decimal(existing.amount.toString());
+  if (newAmount.lessThanOrEqualTo(0)) {
+    throw Errors.badRequest("Le montant doit être positif");
+  }
+
+  const memberIds = new Set(existing.group.members.map((m) => m.userId));
+  const newPaidBy = input.paidByUserId ?? existing.paidById;
+  if (!memberIds.has(newPaidBy)) {
+    throw Errors.badRequest("Le payeur doit être membre du groupe");
+  }
+
+  return prisma.$transaction(async (tx) => {
+    let updateData: any = {
+      ...(input.description && { description: input.description.trim() }),
+      ...(input.amount && {
+        amount: new Prisma.Decimal(newAmount.toString()),
+      }),
+      ...(input.currency && { currency: input.currency }),
+      ...(input.category !== undefined && { category: input.category }),
+      ...(input.paidByUserId && { paidById: newPaidBy }),
+      ...(input.splitMode && { splitMode: input.splitMode }),
+      ...(input.occurredAt && { occurredAt: input.occurredAt }),
+    };
+
+    if (willChangeAmount || willChangeSplit) {
+      // Récupérer le splitMode et les participants à utiliser
+      const newSplitMode = input.splitMode ?? existing.splitMode;
+      let participants = input.participants;
+      if (!participants) {
+        // Garder les mêmes participants qu'avant
+        const oldShares = await tx.expenseShare.findMany({
+          where: { expenseId: existing.id },
+        });
+        participants = oldShares.map((s) => ({
+          userId: s.userId,
+          share:
+            newSplitMode === "EQUAL"
+              ? undefined
+              : parseFloat(s.amountOwed.toString()),
+        }));
+      }
+      const newShares = computeShares(newAmount, newSplitMode, participants);
+      const memberMap = new Map(
+        existing.group.members.map((m) => [m.userId, m.id]),
+      );
+      // Effacer les anciennes parts puis recréer
+      await tx.expenseShare.deleteMany({ where: { expenseId: existing.id } });
+      updateData.shares = {
+        create: newShares.map((s) => ({
+          userId: s.userId,
+          groupMemberId: memberMap.get(s.userId)!,
+          amountOwed: new Prisma.Decimal(s.amountOwed.toString()),
+        })),
+      };
+    }
+
+    return tx.expense.update({
+      where: { id: existing.id },
+      data: updateData,
+      include: {
+        paidBy: { select: { id: true, displayName: true, avatar: true } },
+        shares: {
+          include: {
+            user: { select: { id: true, displayName: true } },
+          },
+        },
+      },
+    });
+  });
+}
+
+/**
+ * Supprime une dépense. Seul le payeur ou un admin peut.
+ * Les parts (ExpenseShare) sont supprimées en cascade.
+ */
+export async function deleteExpense(input: {
+  expenseId: string;
+  actorUserId: string;
+}) {
+  const existing = await prisma.expense.findUnique({
+    where: { id: input.expenseId },
+    include: { group: { include: { members: true } } },
+  });
+  if (!existing) throw Errors.notFound("Dépense introuvable");
+
+  const member = existing.group.members.find(
+    (m) => m.userId === input.actorUserId,
+  );
+  if (!member) throw Errors.forbidden("Pas membre du groupe");
+  const canDelete =
+    existing.paidById === input.actorUserId ||
+    member.role === "ADMIN" ||
+    member.role === "TREASURER";
+  if (!canDelete) {
+    throw Errors.forbidden(
+      "Seul le payeur ou un admin/trésorier peut supprimer",
+    );
+  }
+
+  await prisma.expense.delete({ where: { id: existing.id } });
+  return { deleted: true };
+}

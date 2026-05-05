@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import "./globals.css";
 import { PwaRegister } from "./pwa-register";
+import { ToastProvider } from "../lib/ui/toast";
 
 export const metadata: Metadata = {
   title: "BMD · Back Mes Do",
@@ -39,7 +40,7 @@ export default function RootLayout({
   return (
     <html lang="fr">
       <body>
-        {children}
+        <ToastProvider>{children}</ToastProvider>
         <PwaRegister />
       </body>
     </html>

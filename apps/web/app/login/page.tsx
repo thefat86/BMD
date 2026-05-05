@@ -1,10 +1,22 @@
 "use client";
-import { useState } from "react";
-import { useRouter } from "next/navigation";
+import { Suspense, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { api, setToken } from "../../lib/api-client";
 
+const PENDING_INVITE_KEY = "bmd_pending_invite_token";
+
+// Wrap dans Suspense car useSearchParams() le requiert (Next 15)
 export default function LoginPage() {
+  return (
+    <Suspense fallback={<div className="container">Chargement…</div>}>
+      <LoginPageInner />
+    </Suspense>
+  );
+}
+
+function LoginPageInner() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [step, setStep] = useState<"contact" | "code">("contact");
   const [contactType, setContactType] = useState<"PHONE" | "EMAIL">("PHONE");
   const [contactValue, setContactValue] = useState("+33");
@@ -37,7 +49,19 @@ export default function LoginPage() {
         displayName: displayName || undefined,
       });
       setToken(r.token);
-      router.push("/dashboard");
+
+      // Si l'utilisateur arrive ici via un lien d'invitation,
+      // on le redirige vers la page /join/[token] pour finir le flow.
+      let next = searchParams?.get("next");
+      if (!next) {
+        try {
+          const pending = localStorage.getItem(PENDING_INVITE_KEY);
+          if (pending) next = `/join/${pending}`;
+        } catch {
+          /* localStorage indisponible */
+        }
+      }
+      router.push(next ?? "/dashboard");
     } catch (e) {
       setError((e as Error).message);
     } finally {

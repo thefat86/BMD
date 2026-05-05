@@ -205,6 +205,119 @@ export const api = {
     },
   ) => request<any>("POST", `/groups/${groupId}/expenses`, input),
 
+  /**
+   * Édite une dépense existante. Seul le payeur ou un admin/trésorier peut.
+   * Si `amount` ou les `participants` changent, les parts sont recalculées.
+   */
+  updateExpense: (
+    expenseId: string,
+    input: {
+      description?: string;
+      amount?: string;
+      splitMode?: "EQUAL" | "UNEQUAL" | "PERCENTAGE";
+      paidByUserId?: string;
+      participants?: Array<{ userId: string; share?: number }>;
+    },
+  ) => request<any>("PATCH", `/expenses/${expenseId}`, input),
+
+  /** Supprime une dépense. Cascade auto sur les ExpenseShare. */
+  deleteExpense: (expenseId: string) =>
+    request<void>("DELETE", `/expenses/${expenseId}`),
+
+  // ============ GROUP SETTINGS / MEMBERS ============
+
+  /** Renomme le groupe ou change la devise par défaut. */
+  updateGroup: (
+    groupId: string,
+    input: { name?: string; defaultCurrency?: string },
+  ) => request<any>("PATCH", `/groups/${groupId}`, input),
+
+  /** Supprime un groupe (admin uniquement, cascade sur tout). */
+  deleteGroup: (groupId: string) =>
+    request<void>("DELETE", `/groups/${groupId}`),
+
+  /** Retire un membre. Empêche de retirer le dernier admin. */
+  removeMember: (groupId: string, memberId: string) =>
+    request<void>("DELETE", `/groups/${groupId}/members/${memberId}`),
+
+  /** Change le rôle d'un membre (ADMIN, TREASURER, MEMBER, OBSERVER). */
+  changeMemberRole: (
+    groupId: string,
+    memberId: string,
+    role: "ADMIN" | "TREASURER" | "MEMBER" | "OBSERVER",
+  ) =>
+    request<any>("PATCH", `/groups/${groupId}/members/${memberId}`, { role }),
+
+  // ============ INVITE TOKENS (lien partageable + QR) ============
+
+  /**
+   * Crée un lien d'invitation. `expiresInHours` (défaut 168 = 7j),
+   * `maxUses` (défaut illimité).
+   */
+  createInviteToken: (
+    groupId: string,
+    opts?: { expiresInHours?: number; maxUses?: number | null },
+  ) =>
+    request<{
+      id: string;
+      token: string;
+      expiresAt: string;
+      maxUses: number | null;
+      uses: number;
+    }>("POST", `/groups/${groupId}/invite-tokens`, opts ?? {}),
+
+  /** Liste les tokens actifs d'un groupe (admin/trésorier). */
+  listInviteTokens: (groupId: string) =>
+    request<
+      Array<{
+        id: string;
+        token: string;
+        expiresAt: string;
+        maxUses: number | null;
+        uses: number;
+        revokedAt: string | null;
+        createdAt: string;
+      }>
+    >("GET", `/groups/${groupId}/invite-tokens`),
+
+  /** Révoque un token (le rend inutilisable). */
+  revokeInviteToken: (tokenId: string) =>
+    request<void>("DELETE", `/invite-tokens/${tokenId}`),
+
+  /**
+   * Récupère les infos publiques d'un token (PAS d'auth requise).
+   * Utilisé par la page /join/[token] pour afficher "Rejoindre {nom du groupe}".
+   */
+  getInviteInfo: (token: string) =>
+    request<{
+      group: { id: string; name: string; type: string };
+      valid: boolean;
+      reason?: string;
+    }>("GET", `/invite-info/${token}`),
+
+  /** Rejoint un groupe via le token (auth requise). */
+  joinViaInviteToken: (token: string) =>
+    request<{ groupId: string; memberId: string }>(
+      "POST",
+      `/invite-join/${token}`,
+    ),
+
+  // ============ ACTIVITY FEED ============
+
+  /** Feed d'activité d'un groupe (50 derniers événements). */
+  listActivity: (groupId: string) =>
+    request<
+      Array<{
+        id: string;
+        kind: string;
+        message: string;
+        actorId: string | null;
+        actorName: string | null;
+        meta: any;
+        createdAt: string;
+      }>
+    >("GET", `/groups/${groupId}/activity`),
+
   // ============ TONTINES (M08) ============
 
   getTontine: (groupId: string) =>

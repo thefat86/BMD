@@ -19,6 +19,8 @@ async function truncateAll() {
   // Plus rapide que deleteMany et règle automatiquement les FK constraints.
   // Inclut TOUTES les tables (anciennes et nouvelles), sans dépendre de l'ordre.
   const tables = [
+    "ActivityLog",
+    "GroupInviteToken",
     "DebtSwapLeg",
     "DebtSwapParticipant",
     "DebtSwap",

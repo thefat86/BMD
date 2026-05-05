@@ -25,16 +25,18 @@ model User {
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
-  contacts             UserContact[]
-  groupMemberships     GroupMember[]
-  expensesPaid         Expense[]              @relation("ExpensePaidBy")
-  expenseShares        ExpenseShare[]
-  sessions             Session[]
-  settlementsFrom      Settlement[]           @relation("SettlementFrom")
-  settlementsTo        Settlement[]           @relation("SettlementTo")
-  tontineContributions TontineContribution[]
-  tontineTurns         TontineTurn[]          @relation("TurnBeneficiary")
+  contacts               UserContact[]
+  groupMemberships       GroupMember[]
+  expensesPaid           Expense[]              @relation("ExpensePaidBy")
+  expenseShares          ExpenseShare[]
+  sessions               Session[]
+  settlementsFrom        Settlement[]           @relation("SettlementFrom")
+  settlementsTo          Settlement[]           @relation("SettlementTo")
+  tontineContributions   TontineContribution[]
+  tontineTurns           TontineTurn[]          @relation("TurnBeneficiary")
   debtSwapParticipations DebtSwapParticipant[]
+  inviteTokensCreated    GroupInviteToken[]     @relation("InviteTokensCreatedBy")
+  activitiesGenerated    ActivityLog[]          @relation("ActivityActor")
 }
 
 enum ContactType {
@@ -111,12 +113,14 @@ model Group {
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
 
-  members      GroupMember[]
-  expenses     Expense[]
-  settlements  Settlement[]
-  tontine      Tontine?
-  debtSwaps    DebtSwap[]
-  splitPresets SplitPreset[]
+  members       GroupMember[]
+  expenses      Expense[]
+  settlements   Settlement[]
+  tontine       Tontine?
+  debtSwaps     DebtSwap[]
+  splitPresets  SplitPreset[]
+  inviteTokens  GroupInviteToken[]
+  activityLogs  ActivityLog[]
 }
 
 model GroupMember {
@@ -365,4 +369,62 @@ model SplitPreset {
   updatedAt   DateTime @updatedAt
 
   @@index([groupId])
+}
+
+// ============================================================
+// GROUP INVITE TOKENS — pour partager un lien rejoignable
+// ============================================================
+
+model GroupInviteToken {
+  id          String    @id @default(uuid())
+  token       String    @unique // chaîne URL-safe utilisée dans le lien
+  groupId     String
+  group       Group     @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  createdById String
+  createdBy   User      @relation("InviteTokensCreatedBy", fields: [createdById], references: [id])
+  maxUses     Int?      // null = illimité
+  uses        Int       @default(0)
+  expiresAt   DateTime?
+  createdAt   DateTime  @default(now())
+  revokedAt   DateTime?
+
+  @@index([groupId])
+  @@index([token])
+}
+
+// ============================================================
+// ACTIVITY LOG — fil d'événements par groupe (qui a fait quoi quand)
+// ============================================================
+
+enum ActivityKind {
+  GROUP_CREATED
+  MEMBER_JOINED
+  MEMBER_LEFT
+  MEMBER_REMOVED
+  ROLE_CHANGED
+  EXPENSE_ADDED
+  EXPENSE_UPDATED
+  EXPENSE_DELETED
+  TONTINE_CREATED
+  TONTINE_TURN_DISTRIBUTED
+  SWAP_PROPOSED
+  SWAP_ACCEPTED
+  SWAP_REJECTED
+  GROUP_RENAMED
+  GROUP_DELETED
+  INVITE_LINK_CREATED
+}
+
+model ActivityLog {
+  id        String       @id @default(uuid())
+  groupId   String
+  group     Group        @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  actorId   String?
+  actor     User?        @relation("ActivityActor", fields: [actorId], references: [id], onDelete: SetNull)
+  kind      ActivityKind
+  // Champ libre pour le contexte (description de la dépense, nom du membre, etc.)
+  payload   Json?
+  createdAt DateTime     @default(now())
+
+  @@index([groupId, createdAt])
 }

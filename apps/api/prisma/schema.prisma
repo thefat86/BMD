@@ -45,6 +45,8 @@ model User {
   debtTransfersAssumer   DebtTransfer[]         @relation("DebtTransferAssumer")
   debtTransfersCreditor  DebtTransfer[]         @relation("DebtTransferCreditor")
   expenseItemClaims      ExpenseItemClaim[]     @relation("ExpenseItemClaim")
+  /// Plan tarifaire de l'utilisateur (spec §6.3) — null = Découverte par défaut
+  planCode               String                 @default("FREE")
 }
 
 enum ContactType {
@@ -642,8 +644,44 @@ model DebtTransfer {
   acceptedByCreditor  DateTime?
   rejectedBy          String?
   rejectedAt          DateTime?
+  /// Délai d'expiration de la proposition (spec §3.6 : 48h par défaut).
+  /// Si dépassé sans validation des 2 parties, le statut passe à CANCELLED.
+  expiresAt           DateTime?
   createdAt           DateTime            @default(now())
   activatedAt         DateTime?
 
   @@index([groupId, status])
+}
+
+// ============================================================
+// PLANS (spec §6.3) — configurables depuis la console admin
+// ============================================================
+//
+// 3 plans seedés au démarrage :
+//   FREE       (Découverte) — 2 groupes, 8 membres/groupe, 5 OCR/mois
+//   PREMIUM    — illimité, swap, multi-devises (2.99 €/mois)
+//   COMMUNITY  — Premium + admin client + reçus fiscaux (10 €/mois)
+//
+// Les limites sont stockées en JSON pour permettre des modifications en
+// temps réel depuis la console admin sans migration de schéma.
+
+model Plan {
+  /// Code stable utilisé en référence (FREE, PREMIUM, COMMUNITY)
+  code         String   @id
+  /// Nom commercial affiché (peut être traduit)
+  name         String
+  /// Prix mensuel en centimes EUR (0 pour gratuit)
+  priceCents   Int      @default(0)
+  /// Tarif annuel en centimes (offre groupée — null si pas de tarif annuel)
+  priceCentsYearly Int?
+  /// Limites configurables : { maxGroups, maxMembersPerGroup, ocrPerMonth, ... }
+  limits       Json
+  /// Description marketing courte (peut être traduite)
+  description  String?
+  /// Ordre d'affichage dans le pricing (1 = premier)
+  displayOrder Int      @default(0)
+  /// Si false, le plan n'est plus offert aux nouveaux utilisateurs
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
 }

@@ -2058,6 +2058,26 @@ export default function GroupDetailPage() {
             >
               ⬇ CSV
             </button>
+            {/* Export PDF (spec §3.11) — ouvre la page imprimable */}
+            <Link
+              href={`/dashboard/groups/${groupId}/print`}
+              target="_blank"
+              title="Vue imprimable / Enregistrer en PDF"
+              style={{
+                fontSize: 11,
+                padding: "6px 10px",
+                minHeight: 32,
+                background: "transparent",
+                border: "1px solid var(--border, #ccc)",
+                borderRadius: 6,
+                textDecoration: "none",
+                color: "inherit",
+                display: "inline-flex",
+                alignItems: "center",
+              }}
+            >
+              📄 PDF
+            </Link>
           </div>
         </div>
 

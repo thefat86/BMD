@@ -613,8 +613,166 @@ export default function ProfilePage() {
         </p>
       </div>
 
+      {/* === Sessions actives (spec §7.5) === */}
+      <SessionsBlock />
+
       {/* Bottom-nav mobile (visible uniquement < 768px) */}
       <BottomNav active="profile" hideFab />
     </div>
   );
+}
+
+/**
+ * Liste des sessions actives + bouton révoquer pour chacune.
+ * Spec §7.5 : "Sessions actives listées dans le profil, possibilité de
+ * déconnecter à distance."
+ *
+ * La session courante est marquée et non-révocable depuis ici (l'utilisateur
+ * doit utiliser le bouton "Se déconnecter" plus haut pour ça, ce qui évite
+ * une déconnexion accidentelle suivie d'un état incohérent).
+ */
+function SessionsBlock(): JSX.Element | null {
+  const [sessions, setSessions] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  async function load() {
+    setLoading(true);
+    try {
+      const list = await api.listSessions();
+      setSessions(list);
+    } catch {
+      // Silencieux : si l'utilisateur n'a pas accès, on n'affiche rien
+      setSessions([]);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    void load();
+  }, []);
+
+  async function revoke(id: string) {
+    if (
+      !window.confirm(
+        "Déconnecter cet appareil ? Il ne pourra plus accéder à ton compte sans se reconnecter.",
+      )
+    ) {
+      return;
+    }
+    try {
+      await api.revokeSession(id);
+      await load();
+    } catch (e) {
+      window.alert(`Échec : ${(e as Error).message}`);
+    }
+  }
+
+  if (loading || sessions.length === 0) return null;
+
+  return (
+    <div className="card">
+      <div className="card-head">
+        <h2>🔓 Sessions actives</h2>
+        <span className="muted" style={{ fontSize: 11 }}>
+          {sessions.length}
+        </span>
+      </div>
+      <p
+        className="muted"
+        style={{ fontSize: 12, marginBottom: 10, lineHeight: 1.5 }}
+      >
+        Voici les appareils qui ont accès à ton compte. Tu peux en
+        déconnecter un à distance s'il n'est plus à toi.
+      </p>
+      <div className="list">
+        {sessions.map((s) => {
+          const ua = s.device ?? "Appareil inconnu";
+          const isMobile = /mobile|iphone|android/i.test(ua);
+          return (
+            <div key={s.id} className="list-item">
+              <div className="icon">{isMobile ? "📱" : "💻"}</div>
+              <div className="text">
+                <div className="name">
+                  {/* Description compacte du user-agent */}
+                  {parseUA(ua)}
+                  {s.isCurrent && (
+                    <span
+                      style={{
+                        fontSize: 9,
+                        color: "var(--saffron)",
+                        marginLeft: 6,
+                        letterSpacing: 1,
+                      }}
+                    >
+                      CETTE SESSION
+                    </span>
+                  )}
+                </div>
+                <div className="meta">
+                  Connectée le{" "}
+                  {new Date(s.createdAt).toLocaleDateString("fr-FR", {
+                    day: "numeric",
+                    month: "short",
+                    year: "numeric",
+                  })}{" "}
+                  · expire le{" "}
+                  {new Date(s.expiresAt).toLocaleDateString("fr-FR", {
+                    day: "numeric",
+                    month: "short",
+                  })}
+                </div>
+              </div>
+              {!s.isCurrent && (
+                <button
+                  type="button"
+                  onClick={() => revoke(s.id)}
+                  aria-label="Déconnecter"
+                  style={{
+                    background: "transparent",
+                    border: "none",
+                    color: "var(--rose, #ef4444)",
+                    cursor: "pointer",
+                    fontSize: 14,
+                    padding: "6px 10px",
+                    minHeight: 36,
+                  }}
+                >
+                  ✗ Déconnecter
+                </button>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+/** Parse léger d'un user-agent → label lisible (Chrome on iPhone, Firefox on Mac…) */
+function parseUA(ua: string): string {
+  if (!ua) return "Appareil inconnu";
+  const browser =
+    /Edg/i.test(ua)
+      ? "Edge"
+      : /Chrome/i.test(ua) && !/Edg/i.test(ua)
+        ? "Chrome"
+        : /Safari/i.test(ua) && !/Chrome/i.test(ua)
+          ? "Safari"
+          : /Firefox/i.test(ua)
+            ? "Firefox"
+            : "Navigateur";
+  const os =
+    /iPhone|iPad/i.test(ua)
+      ? "iPhone"
+      : /Android/i.test(ua)
+        ? "Android"
+        : /Macintosh|Mac OS/i.test(ua)
+          ? "macOS"
+          : /Windows/i.test(ua)
+            ? "Windows"
+            : /Linux/i.test(ua)
+              ? "Linux"
+              : "appareil";
+  return `${browser} sur ${os}`;
 }

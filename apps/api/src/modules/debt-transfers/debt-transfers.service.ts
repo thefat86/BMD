@@ -92,6 +92,8 @@ export async function proposeDebtTransfer(input: {
     throw Errors.badRequest("Montant invalide");
   }
 
+  // Délai d'expiration : 48h par défaut (spec §3.6)
+  const expiresAt = new Date(Date.now() + 48 * 60 * 60 * 1000);
   const created = await prisma.debtTransfer.create({
     data: {
       groupId: input.groupId,
@@ -102,6 +104,7 @@ export async function proposeDebtTransfer(input: {
       amount: new Prisma.Decimal(input.amount),
       currency: input.currency ?? group.defaultCurrency,
       reason: input.reason,
+      expiresAt,
     },
     include: {
       proposedBy: { select: { id: true, displayName: true } },
@@ -215,6 +218,15 @@ async function acceptOrReject(
     throw Errors.badRequest(
       `Transfert déjà ${t.status.toLowerCase()} — non modifiable`,
     );
+  }
+  // Vérification expiration (spec §3.6 : 48h)
+  if (t.expiresAt && t.expiresAt < new Date()) {
+    // Auto-cancel des propositions expirées (idempotent)
+    await prisma.debtTransfer.update({
+      where: { id: t.id },
+      data: { status: "CANCELLED" },
+    });
+    throw Errors.badRequest("Cette proposition a expiré (délai 48h dépassé)");
   }
   // Permission selon le rôle
   if (role === "ASSUMER" && t.assumeUserId !== input.actorUserId) {

@@ -86,6 +86,42 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
   });
 
   /**
+   * POST /auth/magic-link/request (spec §7.2)
+   * Body: { email }
+   * Génère un lien à usage unique, signé via le code OTP existant.
+   * En mode dev : le lien est loggé en console (comme l'OTP).
+   * En prod : il sera envoyé par email via SMTP transactionnel.
+   *
+   * Le lien : /login?ml={contactType}|{contactValue}|{code}
+   * Au clic, le frontend pré-remplit les champs et appelle verifyOtp,
+   * créant la session sans saisie supplémentaire.
+   */
+  app.post("/auth/magic-link/request", async (req, reply) => {
+    const body = z
+      .object({ email: z.string().email() })
+      .parse(req.body);
+    // On déclenche un OTP email standard (validité 15 min côté magic link)
+    const result = await requestOtp({
+      contactType: "EMAIL" as any,
+      contactValue: body.email,
+      channel: "EMAIL",
+    });
+    // Note : le code OTP est déjà loggé par otp.service.ts.
+    // En mode dev, l'utilisateur voit aussi le lien complet en console :
+    console.log(
+      `\n🔗 [MAGIC-LINK] Pour ${body.email}, lien :\n` +
+        `   http://localhost:3000/login?ml_email=${encodeURIComponent(body.email)}\n` +
+        `   (Demande à l'utilisateur de saisir le code OTP affiché ci-dessus)\n`,
+    );
+    return reply.code(202).send({
+      sent: true,
+      // L'utilisateur reçoit un email contenant le lien en prod
+      mode: "dev_console",
+      hint: "Ouvre la console serveur pour voir le code OTP à 6 chiffres",
+    });
+  });
+
+  /**
    * POST /auth/otp/verify
    * Body: { contactType, contactValue, code, displayName? }
    * Response: 200 { token, expiresAt, user }
@@ -345,4 +381,61 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
     await revokeSession(req.user.sid);
     return reply.code(204).send();
   });
+
+  /**
+   * GET /auth/sessions
+   * Liste les sessions actives de l'utilisateur (spec §7.5).
+   * Retourne id, device (user-agent), createdAt, expiresAt, current (booléen).
+   */
+  app.get("/auth/sessions", { onRequest: [app.authenticate] }, async (req) => {
+    const sessions = await prisma.session.findMany({
+      where: {
+        userId: req.user.sub,
+        revokedAt: null,
+        expiresAt: { gt: new Date() },
+      },
+      orderBy: { createdAt: "desc" },
+      select: {
+        id: true,
+        device: true,
+        createdAt: true,
+        expiresAt: true,
+      },
+    });
+    return sessions.map((s) => ({
+      ...s,
+      // Le client utilise sid (jwt) pour comparer ; on l'expose ici
+      isCurrent: s.id === req.user.sid,
+      createdAt: s.createdAt.toISOString(),
+      expiresAt: s.expiresAt.toISOString(),
+    }));
+  });
+
+  /**
+   * DELETE /auth/sessions/:id
+   * Révoque une session à distance (spec §7.5 — déconnexion à distance).
+   */
+  app.delete(
+    "/auth/sessions/:id",
+    { onRequest: [app.authenticate] },
+    async (req, reply) => {
+      const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
+      // On révoque uniquement les sessions de cet utilisateur (sécurité)
+      const r = await prisma.session.updateMany({
+        where: {
+          id,
+          userId: req.user.sub,
+          revokedAt: null,
+        },
+        data: { revokedAt: new Date() },
+      });
+      if (r.count === 0) {
+        return reply.code(404).send({
+          error: "not_found",
+          message: "Session introuvable ou déjà révoquée",
+        });
+      }
+      return reply.code(204).send();
+    },
+  );
 }

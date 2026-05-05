@@ -95,6 +95,18 @@ export const api = {
       contactValue,
     }),
 
+  /**
+   * Demande un magic link par email (spec §7.2).
+   * Mode dev : le code OTP est loggé en console serveur.
+   * Mode prod : le lien sera envoyé par email transactionnel.
+   */
+  requestMagicLink: (email: string) =>
+    request<{ sent: true; mode: string; hint: string }>(
+      "POST",
+      "/auth/magic-link/request",
+      { email },
+    ),
+
   verifyOtp: (input: {
     contactType: "PHONE" | "EMAIL";
     contactValue: string;
@@ -136,6 +148,22 @@ export const api = {
     request<{ ok: true }>("PUT", `/auth/contacts/${contactId}/primary`),
 
   logout: () => request<void>("POST", "/auth/logout"),
+
+  /** Liste les sessions actives de l'utilisateur (spec §7.5). */
+  listSessions: () =>
+    request<
+      Array<{
+        id: string;
+        device: string | null;
+        createdAt: string;
+        expiresAt: string;
+        isCurrent: boolean;
+      }>
+    >("GET", "/auth/sessions"),
+
+  /** Révoque une session à distance (déconnexion d'un autre appareil). */
+  revokeSession: (sessionId: string) =>
+    request<void>("DELETE", `/auth/sessions/${sessionId}`),
 
   listGroups: () =>
     request<
@@ -721,6 +749,40 @@ export const api = {
         id: string;
       }>
     >("GET", "/admin/activity"),
+
+  /** Liste les plans tarifaires (spec §6.3 — admin). */
+  adminListPlans: () =>
+    request<
+      Array<{
+        code: string;
+        name: string;
+        priceCents: number;
+        priceCentsYearly: number | null;
+        description: string | null;
+        limits: Record<string, any>;
+        displayOrder: number;
+        isActive: boolean;
+        userCount: number;
+        createdAt: string;
+        updatedAt: string;
+      }>
+    >("GET", "/admin/plans"),
+
+  /**
+   * Met à jour un plan (admin uniquement). Modifications appliquées en
+   * temps réel à tous les utilisateurs sur ce plan.
+   */
+  adminUpdatePlan: (
+    code: string,
+    body: {
+      name?: string;
+      priceCents?: number;
+      priceCentsYearly?: number | null;
+      description?: string | null;
+      limits?: Record<string, any>;
+      isActive?: boolean;
+    },
+  ) => request<any>("PATCH", `/admin/plans/${code}`, body),
 
   // ============ NOTIFICATIONS ============
 

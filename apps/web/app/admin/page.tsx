@@ -612,8 +612,211 @@ export default function AdminPage() {
               ))
             )}
           </div>
+
+          {/* === PLANS TARIFAIRES (spec §6.3) === */}
+          <PlansBlock />
         </>
       )}
+    </div>
+  );
+}
+
+/**
+ * Bloc admin · gestion des plans tarifaires (spec §6.3).
+ *  - Liste les 3 plans seedés (FREE / PREMIUM / COMMUNITY)
+ *  - Affiche prix mensuel, prix annuel, nombre d'utilisateurs
+ *  - Permet de toggler isActive et de modifier le prix mensuel inline
+ *
+ * Pour des modifications plus avancées (limites JSON détaillées, traductions),
+ * un mode "édition avancée" sera nécessaire. MVP : on couvre les 80%.
+ */
+function PlansBlock(): JSX.Element {
+  const [plans, setPlans] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [editing, setEditing] = useState<string | null>(null);
+  const [draftPrice, setDraftPrice] = useState("");
+
+  async function load() {
+    setLoading(true);
+    try {
+      const list = await api.adminListPlans();
+      setPlans(list);
+    } catch (e) {
+      console.warn("Failed to load plans", e);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    void load();
+  }, []);
+
+  async function toggleActive(p: any) {
+    try {
+      await api.adminUpdatePlan(p.code, { isActive: !p.isActive });
+      await load();
+    } catch (e) {
+      window.alert(`Échec : ${(e as Error).message}`);
+    }
+  }
+
+  async function savePrice(p: any) {
+    const cents = Math.round(parseFloat(draftPrice) * 100);
+    if (!Number.isFinite(cents) || cents < 0) {
+      window.alert("Prix invalide");
+      return;
+    }
+    try {
+      await api.adminUpdatePlan(p.code, { priceCents: cents });
+      setEditing(null);
+      await load();
+    } catch (e) {
+      window.alert(`Échec : ${(e as Error).message}`);
+    }
+  }
+
+  if (loading) return <div />;
+
+  return (
+    <div className="card">
+      <div className="card-head">
+        <h2>💎 Plans tarifaires</h2>
+        <span className="muted" style={{ fontSize: 11 }}>
+          {plans.length}
+        </span>
+      </div>
+      <p className="muted" style={{ fontSize: 12, marginBottom: 12 }}>
+        Modifications appliquées en temps réel à tous les utilisateurs (spec §6.3).
+      </p>
+      <div className="list">
+        {plans.map((p) => {
+          const isEditing = editing === p.code;
+          return (
+            <div
+              key={p.code}
+              className="list-item"
+              style={{ flexWrap: "wrap" }}
+            >
+              <div
+                className="icon"
+                style={{
+                  background: p.isActive
+                    ? "linear-gradient(135deg, var(--saffron), var(--terracotta))"
+                    : "rgba(255,255,255,0.06)",
+                  color: p.isActive ? "#16111E" : "var(--cream-soft)",
+                }}
+              >
+                {p.code === "FREE"
+                  ? "🌱"
+                  : p.code === "PREMIUM"
+                    ? "✨"
+                    : "🏛"}
+              </div>
+              <div className="text" style={{ flex: 1, minWidth: 180 }}>
+                <div className="name">
+                  {p.name}
+                  {!p.isActive && (
+                    <span
+                      style={{
+                        fontSize: 9,
+                        color: "var(--rose, #ef4444)",
+                        marginLeft: 6,
+                        letterSpacing: 1,
+                      }}
+                    >
+                      INACTIF
+                    </span>
+                  )}
+                </div>
+                <div className="meta">
+                  {p.userCount} utilisateur{p.userCount > 1 ? "s" : ""} ·
+                  code <code>{p.code}</code>
+                </div>
+              </div>
+              <div
+                style={{ display: "flex", alignItems: "center", gap: 8 }}
+              >
+                {isEditing ? (
+                  <>
+                    <input
+                      type="number"
+                      step="0.01"
+                      value={draftPrice}
+                      onChange={(e) => setDraftPrice(e.target.value)}
+                      style={{
+                        width: 80,
+                        padding: "6px 8px",
+                        fontSize: 13,
+                        background: "rgba(0,0,0,0.3)",
+                        border: "1px solid var(--saffron)",
+                        borderRadius: 6,
+                        color: "var(--cream)",
+                      }}
+                    />
+                    <button
+                      onClick={() => savePrice(p)}
+                      className="btn btn-sm"
+                      style={{ padding: "6px 10px", minHeight: 32 }}
+                    >
+                      ✓
+                    </button>
+                    <button
+                      onClick={() => setEditing(null)}
+                      className="btn-ghost btn-sm"
+                      style={{ padding: "6px 10px", minHeight: 32 }}
+                    >
+                      ✕
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <button
+                      onClick={() => {
+                        setEditing(p.code);
+                        setDraftPrice((p.priceCents / 100).toFixed(2));
+                      }}
+                      style={{
+                        background: "transparent",
+                        border: "none",
+                        color: "var(--cream-soft)",
+                        cursor: "pointer",
+                        fontSize: 13,
+                        fontWeight: 600,
+                        padding: "6px 8px",
+                        minHeight: 36,
+                      }}
+                      title="Modifier le prix"
+                    >
+                      {p.priceCents === 0
+                        ? "Gratuit"
+                        : `${(p.priceCents / 100).toFixed(2)} € /mois ✏️`}
+                    </button>
+                    <button
+                      onClick={() => toggleActive(p)}
+                      style={{
+                        background: "transparent",
+                        border: "1px solid var(--line-soft)",
+                        color: p.isActive
+                          ? "var(--emerald, #10b981)"
+                          : "var(--rose, #ef4444)",
+                        cursor: "pointer",
+                        fontSize: 11,
+                        padding: "6px 10px",
+                        borderRadius: 6,
+                        minHeight: 32,
+                      }}
+                      title={p.isActive ? "Désactiver" : "Activer"}
+                    >
+                      {p.isActive ? "✓ Actif" : "✗ Inactif"}
+                    </button>
+                  </>
+                )}
+              </div>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }

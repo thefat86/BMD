@@ -1,5 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
+import { prisma } from "../../lib/db.js";
 import {
   assertSuperAdmin,
   getStats,
@@ -149,5 +150,57 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
       label: e.label,
       id: e.id,
     }));
+  });
+
+  /**
+   * GET /admin/plans
+   * Liste les plans tarifaires (spec §6.3).
+   * Inclut le nombre d'utilisateurs sur chaque plan.
+   */
+  app.get("/admin/plans", async () => {
+    const plans = await prisma.plan.findMany({
+      orderBy: { displayOrder: "asc" },
+    });
+    // Compteur d'utilisateurs par plan
+    const counts = await prisma.user.groupBy({
+      by: ["planCode"],
+      _count: { _all: true },
+    });
+    const countByCode = Object.fromEntries(
+      counts.map((c) => [c.planCode, c._count._all]),
+    );
+    return plans.map((p) => ({
+      ...p,
+      priceCents: p.priceCents,
+      priceCentsYearly: p.priceCentsYearly,
+      userCount: countByCode[p.code] ?? 0,
+      createdAt: p.createdAt.toISOString(),
+      updatedAt: p.updatedAt.toISOString(),
+    }));
+  });
+
+  /**
+   * PATCH /admin/plans/:code
+   * Met à jour un plan : prix, limites JSON, description, état actif.
+   * Spec §6.3 : "Toute modification est appliquée en temps réel".
+   */
+  app.patch("/admin/plans/:code", async (req) => {
+    const { code } = z
+      .object({ code: z.string().min(1).max(40) })
+      .parse(req.params);
+    const body = z
+      .object({
+        name: z.string().min(1).max(80).optional(),
+        priceCents: z.number().int().min(0).optional(),
+        priceCentsYearly: z.number().int().min(0).nullable().optional(),
+        description: z.string().max(500).nullable().optional(),
+        limits: z.record(z.any()).optional(),
+        isActive: z.boolean().optional(),
+      })
+      .parse(req.body);
+    return prisma.plan.update({
+      where: { code },
+      data: body as any,
+    });
   });
 }

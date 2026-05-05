@@ -1,0 +1,544 @@
+"use client";
+import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
+import Link from "next/link";
+import {
+  api,
+  clearToken,
+  getToken,
+  isUnauthorized,
+} from "../../../lib/api-client";
+
+const CURRENCIES = [
+  { v: "EUR", lbl: "EUR · Euro" },
+  { v: "USD", lbl: "USD · US Dollar" },
+  { v: "GBP", lbl: "GBP · British Pound" },
+  { v: "CHF", lbl: "CHF · Franc Suisse" },
+  { v: "XAF", lbl: "XAF · Franc CFA BEAC" },
+  { v: "XOF", lbl: "XOF · Franc CFA BCEAO" },
+  { v: "MAD", lbl: "MAD · Dirham marocain" },
+  { v: "TND", lbl: "TND · Dinar tunisien" },
+  { v: "DZD", lbl: "DZD · Dinar algérien" },
+  { v: "EGP", lbl: "EGP · Livre égyptienne" },
+  { v: "NGN", lbl: "NGN · Naira nigérian" },
+  { v: "GHS", lbl: "GHS · Cedi ghanéen" },
+  { v: "KES", lbl: "KES · Shilling kényan" },
+  { v: "ZAR", lbl: "ZAR · Rand sud-africain" },
+  { v: "CAD", lbl: "CAD · Dollar canadien" },
+  { v: "CNY", lbl: "CNY · Yuan chinois" },
+];
+
+const LOCALES = [
+  { v: "fr", lbl: "🇫🇷 Français" },
+  { v: "en", lbl: "🇬🇧 English" },
+  { v: "ar", lbl: "🇸🇦 العربية" },
+];
+
+export default function ProfilePage() {
+  const router = useRouter();
+  const [user, setUser] = useState<any>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [success, setSuccess] = useState<string | null>(null);
+
+  // Profil edit
+  const [editingProfile, setEditingProfile] = useState(false);
+  const [displayName, setDisplayName] = useState("");
+  const [defaultCurrency, setDefaultCurrency] = useState("EUR");
+  const [defaultLocale, setDefaultLocale] = useState("fr");
+  const [savingProfile, setSavingProfile] = useState(false);
+
+  // Add contact
+  const [showAddContact, setShowAddContact] = useState(false);
+  const [contactType, setContactType] = useState<"PHONE" | "EMAIL">("PHONE");
+  const [contactValue, setContactValue] = useState("+33");
+  const [addStep, setAddStep] = useState<"contact" | "code">("contact");
+  const [otpCode, setOtpCode] = useState("");
+  const [adding, setAdding] = useState(false);
+
+  async function refresh() {
+    try {
+      const r = await api.me();
+      setUser(r.user);
+      setDisplayName(r.user.displayName);
+      setDefaultCurrency(r.user.defaultCurrency);
+      setDefaultLocale(r.user.defaultLocale);
+    } catch (e) {
+      if (isUnauthorized(e)) {
+        clearToken();
+        router.replace("/login");
+        return;
+      }
+      setError((e as Error).message);
+    }
+  }
+
+  useEffect(() => {
+    if (!getToken()) {
+      router.replace("/login");
+      return;
+    }
+    void refresh();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  function flash(msg: string) {
+    setSuccess(msg);
+    setError(null);
+    setTimeout(() => setSuccess(null), 3000);
+  }
+
+  async function saveProfile() {
+    setError(null);
+    setSavingProfile(true);
+    try {
+      await api.updateMe({
+        displayName: displayName.trim(),
+        defaultCurrency,
+        defaultLocale,
+      });
+      await refresh();
+      setEditingProfile(false);
+      flash("Profil mis à jour");
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setSavingProfile(false);
+    }
+  }
+
+  async function startAddContact() {
+    setError(null);
+    setAdding(true);
+    try {
+      await api.addContact(contactType, contactValue);
+      setAddStep("code");
+      flash("Code envoyé. Récupère-le dans la console du backend.");
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setAdding(false);
+    }
+  }
+
+  async function confirmAddContact() {
+    setError(null);
+    setAdding(true);
+    try {
+      await api.verifyContact({
+        contactType,
+        contactValue,
+        code: otpCode,
+      });
+      setShowAddContact(false);
+      setAddStep("contact");
+      setContactValue(contactType === "PHONE" ? "+33" : "");
+      setOtpCode("");
+      await refresh();
+      flash("Contact ajouté et vérifié ✓");
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setAdding(false);
+    }
+  }
+
+  async function removeContact(id: string) {
+    if (!window.confirm("Supprimer ce contact ?")) return;
+    setError(null);
+    try {
+      await api.deleteContact(id);
+      await refresh();
+      flash("Contact supprimé");
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }
+
+  async function makePrimary(id: string) {
+    setError(null);
+    try {
+      await api.setPrimaryContact(id);
+      await refresh();
+      flash("Contact principal mis à jour");
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }
+
+  function logout() {
+    clearToken();
+    api.logout().catch(() => {});
+    router.replace("/login");
+  }
+
+  if (!user) {
+    return (
+      <div className="container">
+        <p className="muted">Chargement…</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="container">
+      {/* Top bar */}
+      <div className="between" style={{ marginBottom: 14 }}>
+        <Link
+          href="/dashboard"
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 4,
+            fontSize: 13,
+            color: "var(--cream-soft)",
+          }}
+        >
+          ← Mes groupes
+        </Link>
+        <span
+          style={{
+            fontFamily: "Cormorant Garamond, serif",
+            fontSize: 18,
+            color: "var(--cream)",
+            fontWeight: 700,
+          }}
+        >
+          BMD<span style={{ color: "var(--saffron)" }}>·</span>
+        </span>
+      </div>
+
+      {/* Page header */}
+      <div className="page-header">
+        <div className="titles">
+          <h1>👤 Mon profil</h1>
+          <div className="sub">Compte et préférences</div>
+        </div>
+      </div>
+
+      {error && <div className="error">{error}</div>}
+      {success && <div className="success">{success}</div>}
+
+      {/* === Profil === */}
+      <div className="card">
+        <div className="card-head">
+          <h2>Identité</h2>
+          {!editingProfile ? (
+            <button
+              className="btn-ghost btn-sm"
+              onClick={() => setEditingProfile(true)}
+            >
+              ✎ Modifier
+            </button>
+          ) : (
+            <button
+              className="btn-ghost btn-sm"
+              onClick={() => {
+                setEditingProfile(false);
+                setDisplayName(user.displayName);
+                setDefaultCurrency(user.defaultCurrency);
+                setDefaultLocale(user.defaultLocale);
+              }}
+            >
+              ✕
+            </button>
+          )}
+        </div>
+
+        {!editingProfile ? (
+          <div className="list">
+            <div className="list-item">
+              <div
+                className="icon"
+                style={{
+                  background:
+                    "linear-gradient(135deg,var(--saffron),var(--terracotta))",
+                  color: "#16111e",
+                  fontSize: 18,
+                  fontWeight: 700,
+                }}
+              >
+                {user.displayName.charAt(0).toUpperCase()}
+              </div>
+              <div className="text">
+                <div className="name">{user.displayName}</div>
+                <div className="meta">Nom affiché aux autres membres</div>
+              </div>
+            </div>
+            <div className="list-item">
+              <div className="icon">💱</div>
+              <div className="text">
+                <div className="name">{user.defaultCurrency}</div>
+                <div className="meta">Devise par défaut</div>
+              </div>
+            </div>
+            <div className="list-item">
+              <div className="icon">🌍</div>
+              <div className="text">
+                <div className="name">
+                  {LOCALES.find((l) => l.v === user.defaultLocale)?.lbl ??
+                    user.defaultLocale}
+                </div>
+                <div className="meta">Langue préférée</div>
+              </div>
+            </div>
+          </div>
+        ) : (
+          <>
+            <div className="field">
+              <label>Nom affiché</label>
+              <input
+                value={displayName}
+                onChange={(e) => setDisplayName(e.target.value)}
+                placeholder="Aïcha M."
+              />
+            </div>
+            <div className="field">
+              <label>Devise par défaut</label>
+              <select
+                value={defaultCurrency}
+                onChange={(e) => setDefaultCurrency(e.target.value)}
+              >
+                {CURRENCIES.map((c) => (
+                  <option key={c.v} value={c.v}>
+                    {c.lbl}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="field">
+              <label>Langue</label>
+              <select
+                value={defaultLocale}
+                onChange={(e) => setDefaultLocale(e.target.value)}
+              >
+                {LOCALES.map((l) => (
+                  <option key={l.v} value={l.v}>
+                    {l.lbl}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <button
+              className="btn btn-block"
+              onClick={saveProfile}
+              disabled={!displayName.trim() || savingProfile}
+            >
+              {savingProfile ? "Enregistrement…" : "✓ Enregistrer"}
+            </button>
+          </>
+        )}
+      </div>
+
+      {/* === Contacts === */}
+      <div className="card">
+        <div className="card-head">
+          <h2>📞 Contacts vérifiés</h2>
+          <span className="muted" style={{ fontSize: 11 }}>
+            {user.contacts.length}
+          </span>
+        </div>
+
+        <div className="list">
+          {user.contacts.map((c: any) => (
+            <div key={c.id} className="list-item">
+              <div className="icon">
+                {c.type === "PHONE" ? "📞" : "✉️"}
+              </div>
+              <div className="text">
+                <div className="name">
+                  {c.value}
+                  {c.isPrimary && (
+                    <span
+                      className="chip chip-saffron"
+                      style={{
+                        marginLeft: 6,
+                        fontSize: 9,
+                        padding: "2px 6px",
+                      }}
+                    >
+                      ★ Principal
+                    </span>
+                  )}
+                </div>
+                <div className="meta">
+                  {c.isVerified ? (
+                    <>
+                      ✓ Vérifié
+                      {c.verifiedAt &&
+                        ` · ${new Date(c.verifiedAt).toLocaleDateString("fr-FR", { day: "numeric", month: "short", year: "2-digit" })}`}
+                    </>
+                  ) : (
+                    "⚠ Non vérifié"
+                  )}
+                </div>
+              </div>
+              {c.isVerified && !c.isPrimary && (
+                <button
+                  className="btn-ghost btn-sm"
+                  onClick={() => makePrimary(c.id)}
+                  style={{ padding: "4px 10px" }}
+                  title="Définir comme principal"
+                >
+                  ★
+                </button>
+              )}
+              <button
+                className="btn-ghost btn-sm"
+                onClick={() => removeContact(c.id)}
+                style={{
+                  padding: "4px 10px",
+                  color: "var(--rose)",
+                  borderColor: "rgba(217,113,74,0.3)",
+                }}
+                title="Supprimer"
+              >
+                ✕
+              </button>
+            </div>
+          ))}
+        </div>
+
+        {!showAddContact ? (
+          <button
+            className="btn-ghost btn-block"
+            onClick={() => {
+              setShowAddContact(true);
+              setAddStep("contact");
+            }}
+            style={{ marginTop: 12 }}
+          >
+            ＋ Ajouter un contact
+          </button>
+        ) : (
+          <div
+            style={{
+              marginTop: 14,
+              padding: 14,
+              background: "var(--overlay)",
+              border: "1px solid var(--line)",
+              borderRadius: 12,
+            }}
+          >
+            <div className="between" style={{ marginBottom: 10 }}>
+              <strong
+                style={{
+                  fontSize: 14,
+                  color: "var(--cream)",
+                  fontFamily: "Cormorant Garamond, serif",
+                }}
+              >
+                {addStep === "contact"
+                  ? "Nouveau contact"
+                  : "Vérifier le code"}
+              </strong>
+              <button
+                className="btn-ghost btn-sm"
+                onClick={() => {
+                  setShowAddContact(false);
+                  setAddStep("contact");
+                  setOtpCode("");
+                }}
+              >
+                ✕
+              </button>
+            </div>
+
+            {addStep === "contact" && (
+              <>
+                <div className="field">
+                  <label>Type</label>
+                  <select
+                    value={contactType}
+                    onChange={(e) => {
+                      const t = e.target.value as "PHONE" | "EMAIL";
+                      setContactType(t);
+                      setContactValue(t === "PHONE" ? "+33" : "");
+                    }}
+                  >
+                    <option value="PHONE">📞 Téléphone</option>
+                    <option value="EMAIL">✉️ Email</option>
+                  </select>
+                </div>
+                <div className="field">
+                  <label>
+                    {contactType === "PHONE"
+                      ? "Numéro"
+                      : "Adresse email"}
+                  </label>
+                  <input
+                    type={contactType === "EMAIL" ? "email" : "tel"}
+                    inputMode={contactType === "EMAIL" ? "email" : "tel"}
+                    value={contactValue}
+                    onChange={(e) => setContactValue(e.target.value)}
+                    placeholder={
+                      contactType === "PHONE"
+                        ? "+237 6 88 12 34 56"
+                        : "autre@email.com"
+                    }
+                  />
+                </div>
+                <button
+                  className="btn btn-block"
+                  onClick={startAddContact}
+                  disabled={adding || contactValue.trim().length < 3}
+                >
+                  {adding ? "Envoi…" : "✓ Envoyer un code"}
+                </button>
+              </>
+            )}
+
+            {addStep === "code" && (
+              <>
+                <p
+                  className="muted"
+                  style={{ fontSize: 12, marginBottom: 10 }}
+                >
+                  Code envoyé à <strong>{contactValue}</strong>.
+                  En mode dev, il s'affiche dans la console du backend.
+                </p>
+                <div className="field">
+                  <label>Code à 6 chiffres</label>
+                  <input
+                    value={otpCode}
+                    onChange={(e) => setOtpCode(e.target.value)}
+                    placeholder="123456"
+                    inputMode="numeric"
+                    maxLength={6}
+                    style={{
+                      fontSize: 22,
+                      letterSpacing: 6,
+                      textAlign: "center",
+                    }}
+                  />
+                </div>
+                <button
+                  className="btn btn-block"
+                  onClick={confirmAddContact}
+                  disabled={adding || otpCode.length < 4}
+                >
+                  {adding ? "Vérification…" : "✓ Vérifier et ajouter"}
+                </button>
+              </>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* === Sécurité === */}
+      <div className="card">
+        <div className="card-head">
+          <h2>🔐 Sécurité</h2>
+        </div>
+        <button className="btn-ghost btn-block" onClick={logout}>
+          ↩ Me déconnecter
+        </button>
+        <p
+          className="muted text-center"
+          style={{ fontSize: 11, marginTop: 10 }}
+        >
+          Pour supprimer ton compte, contacte le support.
+        </p>
+      </div>
+    </div>
+  );
+}

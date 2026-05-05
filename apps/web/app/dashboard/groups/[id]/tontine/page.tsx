@@ -11,6 +11,13 @@ import {
 
 type Status = "DRAFT" | "ACTIVE" | "COMPLETED" | "CANCELLED";
 
+const STATUS_BADGE: Record<Status, { chip: string; label: string }> = {
+  DRAFT: { chip: "chip-muted", label: "Brouillon" },
+  ACTIVE: { chip: "chip-saffron", label: "🟢 Active" },
+  COMPLETED: { chip: "chip-emerald", label: "✓ Terminée" },
+  CANCELLED: { chip: "chip-rose", label: "Annulée" },
+};
+
 export default function TontinePage() {
   const router = useRouter();
   const params = useParams();
@@ -21,11 +28,14 @@ export default function TontinePage() {
   const [tontine, setTontine] = useState<any>(null);
   const [error, setError] = useState<string | null>(null);
 
-  // Form de création
+  // Création
   const [showCreate, setShowCreate] = useState(false);
   const [contributionAmount, setContributionAmount] = useState("250");
-  const [frequency, setFrequency] = useState<"WEEKLY" | "BIWEEKLY" | "MONTHLY">("MONTHLY");
-  const [startDate, setStartDate] = useState(new Date().toISOString().slice(0, 10));
+  const [frequency, setFrequency] =
+    useState<"WEEKLY" | "BIWEEKLY" | "MONTHLY">("MONTHLY");
+  const [startDate, setStartDate] = useState(
+    new Date().toISOString().slice(0, 10),
+  );
   const [orderMode, setOrderMode] = useState<"MANUAL" | "RANDOM">("MANUAL");
   const [manualOrder, setManualOrder] = useState<string[]>([]);
   const [notes, setNotes] = useState("");
@@ -40,7 +50,6 @@ export default function TontinePage() {
       setMe(m.user);
       setGroup(g);
       setTontine(t.tontine);
-      // pré-remplir l'ordre par défaut
       if (!t.tontine && g.members) {
         setManualOrder(g.members.map((mem: any) => mem.user.id));
       }
@@ -73,8 +82,6 @@ export default function TontinePage() {
         orderMode,
         notes: notes || undefined,
       });
-
-      // Activer immédiatement avec l'ordre choisi
       await api.activateTontine(
         created.id,
         orderMode === "MANUAL" ? manualOrder : undefined,
@@ -95,7 +102,6 @@ export default function TontinePage() {
       setError((e as Error).message);
     }
   }
-
   async function confirm(contributionId: string) {
     setError(null);
     try {
@@ -105,7 +111,6 @@ export default function TontinePage() {
       setError((e as Error).message);
     }
   }
-
   async function distribute(turnId: string) {
     setError(null);
     try {
@@ -115,9 +120,7 @@ export default function TontinePage() {
       setError((e as Error).message);
     }
   }
-
   async function cancel() {
-    if (!confirm) return;
     if (!window.confirm("Annuler cette tontine ? Cette action est irréversible.")) return;
     try {
       await api.cancelTontine(tontine.id);
@@ -135,71 +138,90 @@ export default function TontinePage() {
     setManualOrder(newOrder);
   }
 
-  if (!group) {
+  function memberName(userId: string): string {
     return (
-      <div className="container">
-        <p>Chargement…</p>
-      </div>
+      group?.members.find((m: any) => m.user.id === userId)?.user.displayName ??
+      "?"
     );
   }
 
-  // Helpers d'affichage
-  const statusBadge: Record<Status, { color: string; label: string }> = {
-    DRAFT: { color: "var(--gold)", label: "Brouillon" },
-    ACTIVE: { color: "var(--saffron)", label: "🟢 Active" },
-    COMPLETED: { color: "var(--emerald)", label: "✓ Terminée" },
-    CANCELLED: { color: "#D9714A", label: "Annulée" },
-  };
-
-  function memberName(userId: string): string {
+  if (!group) {
     return (
-      group.members.find((m: any) => m.user.id === userId)?.user.displayName ??
-      "?"
+      <div className="container">
+        <p className="muted">Chargement…</p>
+      </div>
     );
   }
 
   return (
     <div className="container">
-      <Link
-        href={`/dashboard/groups/${groupId}`}
-        className="btn-ghost"
-        style={{ display: "inline-block", marginBottom: 18 }}
-      >
-        ← Retour au groupe
-      </Link>
-
-      <div className="brand">
-        🪙{" "}
-        <span style={{ color: "var(--cream)" }}>
-          Tontine · {group.name}
+      {/* Top bar */}
+      <div className="between" style={{ marginBottom: 14 }}>
+        <Link
+          href={`/dashboard/groups/${groupId}`}
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 4,
+            fontSize: 13,
+            color: "var(--cream-soft)",
+          }}
+        >
+          ← {group.name}
+        </Link>
+        <span
+          style={{
+            fontFamily: "Cormorant Garamond, serif",
+            fontSize: 18,
+            color: "var(--cream)",
+            fontWeight: 700,
+          }}
+        >
+          BMD<span style={{ color: "var(--saffron)" }}>·</span>
         </span>
+      </div>
+
+      {/* Page header */}
+      <div className="page-header">
+        <div className="titles">
+          <h1>
+            <span style={{ marginRight: 8 }}>🪙</span>
+            Tontine
+          </h1>
+          <div className="sub">{group.name}</div>
+        </div>
+        {tontine && (
+          <span className={`chip ${STATUS_BADGE[tontine.status as Status].chip}`}>
+            {STATUS_BADGE[tontine.status as Status].label}
+          </span>
+        )}
       </div>
 
       {error && <div className="error">{error}</div>}
 
-      {/* ========== Pas de tontine encore ========== */}
+      {/* === Aucune tontine encore === */}
       {!tontine && !showCreate && (
-        <div className="card" style={{ textAlign: "center", padding: 40 }}>
-          <div style={{ fontSize: 60, marginBottom: 14 }}>🪙</div>
-          <h2 style={{ marginBottom: 10 }}>Aucune tontine pour ce groupe</h2>
-          <p style={{ color: "var(--cream-soft)", marginBottom: 24 }}>
-            Crée une tontine pour démarrer une épargne collective rotative entre
-            les <strong>{group.members.length} membres</strong> du groupe.
+        <div className="card text-center" style={{ padding: "30px 20px" }}>
+          <div style={{ fontSize: 48, marginBottom: 10 }}>🪙</div>
+          <h2 style={{ marginBottom: 8 }}>Pas encore de tontine</h2>
+          <p
+            className="muted"
+            style={{ fontSize: 13, marginBottom: 20, lineHeight: 1.5 }}
+          >
+            Crée une tontine pour démarrer une épargne collective rotative
+            entre les <strong>{group.members.length} membres</strong> du groupe.
           </p>
           <button
-            className="btn"
+            className="btn btn-block"
             onClick={() => setShowCreate(true)}
             disabled={group.members.length < 2}
           >
-            + Créer une tontine
+            ＋ Créer une tontine
           </button>
           {group.members.length < 2 && (
             <p
-              style={{
-                marginTop: 14,
-                fontSize: 12,
-                color: "var(--muted)",
-              }}
+              className="muted"
+              style={{ fontSize: 11, marginTop: 12 }}
             >
               Il faut au moins 2 membres dans le groupe.
             </p>
@@ -207,10 +229,19 @@ export default function TontinePage() {
         </div>
       )}
 
-      {/* ========== Form de création ========== */}
+      {/* === Form création === */}
       {!tontine && showCreate && (
         <div className="card">
-          <h2>Nouvelle tontine</h2>
+          <div className="card-head">
+            <h2>Nouvelle tontine</h2>
+            <button
+              className="btn-ghost btn-sm"
+              onClick={() => setShowCreate(false)}
+            >
+              ✕
+            </button>
+          </div>
+
           <div className="field">
             <label>Cotisation par membre ({group.defaultCurrency})</label>
             <input
@@ -220,6 +251,7 @@ export default function TontinePage() {
               placeholder="250.00"
             />
           </div>
+
           <div className="field">
             <label>Fréquence</label>
             <select
@@ -231,6 +263,7 @@ export default function TontinePage() {
               <option value="MONTHLY">Mensuelle</option>
             </select>
           </div>
+
           <div className="field">
             <label>Date du 1er tour</label>
             <input
@@ -239,61 +272,48 @@ export default function TontinePage() {
               onChange={(e) => setStartDate(e.target.value)}
             />
           </div>
+
           <div className="field">
             <label>Ordre des bénéficiaires</label>
-            <div style={{ display: "flex", gap: 8 }}>
-              <button
-                type="button"
-                onClick={() => setOrderMode("MANUAL")}
-                style={{
-                  flex: 1,
-                  padding: "10px 12px",
-                  borderRadius: 10,
-                  fontSize: 12,
-                  fontWeight: 600,
-                  border:
-                    orderMode === "MANUAL"
-                      ? "1px solid var(--saffron)"
-                      : "1px solid var(--line-soft)",
-                  background:
-                    orderMode === "MANUAL"
-                      ? "rgba(232,163,61,0.15)"
-                      : "rgba(255,255,255,0.04)",
-                  color:
-                    orderMode === "MANUAL"
-                      ? "var(--saffron)"
-                      : "var(--cream-soft)",
-                  cursor: "pointer",
-                }}
-              >
-                ✋ Manuel (je choisis)
-              </button>
-              <button
-                type="button"
-                onClick={() => setOrderMode("RANDOM")}
-                style={{
-                  flex: 1,
-                  padding: "10px 12px",
-                  borderRadius: 10,
-                  fontSize: 12,
-                  fontWeight: 600,
-                  border:
-                    orderMode === "RANDOM"
-                      ? "1px solid var(--saffron)"
-                      : "1px solid var(--line-soft)",
-                  background:
-                    orderMode === "RANDOM"
-                      ? "rgba(232,163,61,0.15)"
-                      : "rgba(255,255,255,0.04)",
-                  color:
-                    orderMode === "RANDOM"
-                      ? "var(--saffron)"
-                      : "var(--cream-soft)",
-                  cursor: "pointer",
-                }}
-              >
-                🎲 Tirage au sort
-              </button>
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "1fr 1fr",
+                gap: 6,
+              }}
+            >
+              {[
+                { v: "MANUAL", lbl: "✋ Je choisis" },
+                { v: "RANDOM", lbl: "🎲 Tirage au sort" },
+              ].map((opt) => (
+                <button
+                  key={opt.v}
+                  type="button"
+                  onClick={() => setOrderMode(opt.v as any)}
+                  style={{
+                    padding: "10px 8px",
+                    borderRadius: 10,
+                    fontSize: 13,
+                    fontWeight: 700,
+                    border:
+                      orderMode === opt.v
+                        ? "1px solid var(--saffron)"
+                        : "1px solid var(--line-soft)",
+                    background:
+                      orderMode === opt.v
+                        ? "rgba(232,163,61,0.16)"
+                        : "var(--overlay-2)",
+                    color:
+                      orderMode === opt.v
+                        ? "var(--saffron)"
+                        : "var(--cream-soft)",
+                    cursor: "pointer",
+                    minHeight: 44,
+                  }}
+                >
+                  {opt.lbl}
+                </button>
+              ))}
             </div>
           </div>
 
@@ -302,10 +322,10 @@ export default function TontinePage() {
               <label>Ordre des tours (1er en haut)</label>
               <div
                 style={{
-                  background: "rgba(255,255,255,0.025)",
+                  background: "var(--overlay)",
                   border: "1px solid var(--line-soft)",
-                  borderRadius: 10,
-                  padding: 8,
+                  borderRadius: 12,
+                  padding: 6,
                 }}
               >
                 {manualOrder.map((userId, i) => (
@@ -315,9 +335,9 @@ export default function TontinePage() {
                       display: "flex",
                       alignItems: "center",
                       gap: 10,
-                      padding: "8px 10px",
+                      padding: 8,
                       borderRadius: 8,
-                      background: "rgba(232,163,61,0.05)",
+                      background: "rgba(232,163,61,0.04)",
                       marginBottom: 4,
                     }}
                   >
@@ -333,26 +353,33 @@ export default function TontinePage() {
                         alignItems: "center",
                         justifyContent: "center",
                         fontWeight: 700,
-                        fontSize: 13,
+                        fontSize: 12,
+                        flexShrink: 0,
                       }}
                     >
                       {i + 1}
                     </div>
-                    <div style={{ flex: 1, fontSize: 13 }}>
+                    <div
+                      style={{
+                        flex: 1,
+                        fontSize: 13,
+                        color: "var(--cream)",
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap",
+                      }}
+                    >
                       {memberName(userId)}
                     </div>
                     <button
                       type="button"
                       onClick={() => moveOrder(i, -1)}
                       disabled={i === 0}
+                      className="btn-ghost btn-sm"
                       style={{
-                        background: "transparent",
-                        border: "1px solid var(--line-soft)",
-                        borderRadius: 6,
-                        color: "var(--cream-soft)",
                         padding: "4px 10px",
-                        cursor: i === 0 ? "not-allowed" : "pointer",
-                        opacity: i === 0 ? 0.4 : 1,
+                        opacity: i === 0 ? 0.3 : 1,
+                        minHeight: 32,
                       }}
                     >
                       ↑
@@ -361,17 +388,11 @@ export default function TontinePage() {
                       type="button"
                       onClick={() => moveOrder(i, 1)}
                       disabled={i === manualOrder.length - 1}
+                      className="btn-ghost btn-sm"
                       style={{
-                        background: "transparent",
-                        border: "1px solid var(--line-soft)",
-                        borderRadius: 6,
-                        color: "var(--cream-soft)",
                         padding: "4px 10px",
-                        cursor:
-                          i === manualOrder.length - 1
-                            ? "not-allowed"
-                            : "pointer",
-                        opacity: i === manualOrder.length - 1 ? 0.4 : 1,
+                        opacity: i === manualOrder.length - 1 ? 0.3 : 1,
+                        minHeight: 32,
                       }}
                     >
                       ↓
@@ -387,188 +408,88 @@ export default function TontinePage() {
             <input
               value={notes}
               onChange={(e) => setNotes(e.target.value)}
-              placeholder="Ex: tontine annuelle, paiements le 28 du mois…"
+              placeholder="Ex: tontine annuelle…"
             />
           </div>
 
-          <div
-            style={{
-              padding: "10px 14px",
-              borderRadius: 10,
-              fontSize: 12,
-              marginBottom: 12,
-              background: "rgba(63,125,92,0.12)",
-              border: "1px solid var(--emerald)",
-              color: "#7DC59E",
-            }}
-          >
-            ✓ Sera créée avec {group.members.length} tour(s) ·{" "}
-            {(parseFloat(contributionAmount || "0") *
-              (group.members.length - 1)).toFixed(2)}{" "}
+          <div className="info" style={{ fontSize: 12 }}>
+            ℹ️ {group.members.length} tour(s) ·{" "}
+            {(
+              parseFloat(contributionAmount || "0") *
+              (group.members.length - 1)
+            ).toFixed(2)}{" "}
             {group.defaultCurrency} par tour
           </div>
 
-          <div style={{ display: "flex", gap: 10 }}>
-            <button
-              className="btn-ghost"
-              onClick={() => setShowCreate(false)}
-              style={{ flex: 1 }}
-            >
-              Annuler
-            </button>
-            <button className="btn" onClick={createTontine} style={{ flex: 2 }}>
-              ✓ Créer & démarrer
-            </button>
-          </div>
+          <button className="btn btn-block" onClick={createTontine}>
+            ✓ Créer & démarrer
+          </button>
         </div>
       )}
 
-      {/* ========== Tontine existe : affichage ========== */}
+      {/* === Tontine existante === */}
       {tontine && (
         <>
-          <div className="card">
-            <div
-              style={{
-                display: "flex",
-                justifyContent: "space-between",
-                alignItems: "center",
-                flexWrap: "wrap",
-                gap: 10,
-              }}
-            >
-              <div>
-                <h2 style={{ marginBottom: 4 }}>
-                  {tontine.contributionAmount} {tontine.currency} par tour
-                </h2>
-                <div style={{ fontSize: 12, color: "var(--muted)" }}>
-                  {tontine.frequency === "WEEKLY"
-                    ? "Hebdomadaire"
-                    : tontine.frequency === "BIWEEKLY"
-                      ? "Bi-hebdomadaire"
-                      : "Mensuelle"}{" "}
-                  · démarrée le{" "}
-                  {new Date(tontine.startDate).toLocaleDateString("fr-FR")}
-                </div>
-              </div>
-              <div
-                style={{
-                  padding: "6px 14px",
-                  borderRadius: 99,
-                  fontSize: 11,
-                  fontWeight: 700,
-                  letterSpacing: 1.5,
-                  textTransform: "uppercase",
-                  background: "rgba(232,163,61,0.1)",
-                  color: statusBadge[tontine.status as Status].color,
-                  border: `1px solid ${statusBadge[tontine.status as Status].color}`,
-                }}
-              >
-                {statusBadge[tontine.status as Status].label}
-              </div>
+          {/* Hero card : montant principal */}
+          <div className="hero-card">
+            <div className="label">Cotisation par tour</div>
+            <div className="amount">
+              {parseFloat(tontine.contributionAmount).toFixed(2)}
+              <span className="unit">{tontine.currency}</span>
             </div>
-
+            <div className="row" style={{ color: "var(--cream-soft)" }}>
+              <span>
+                {tontine.frequency === "WEEKLY"
+                  ? "Hebdo"
+                  : tontine.frequency === "BIWEEKLY"
+                    ? "Bi-hebdo"
+                    : "Mensuelle"}
+              </span>
+              <span>·</span>
+              <span>
+                Démarrée le{" "}
+                {new Date(tontine.startDate).toLocaleDateString("fr-FR", {
+                  day: "numeric",
+                  month: "short",
+                  year: "2-digit",
+                })}
+              </span>
+            </div>
             {/* Stats */}
-            <div
-              style={{
-                display: "grid",
-                gridTemplateColumns: "repeat(4,1fr)",
-                gap: 10,
-                marginTop: 18,
-              }}
-            >
-              <div
-                style={{
-                  background: "rgba(255,255,255,0.04)",
-                  padding: 12,
-                  borderRadius: 10,
-                  textAlign: "center",
-                }}
-              >
-                <div
-                  style={{
-                    fontSize: 24,
-                    fontFamily: "Cormorant Garamond, serif",
-                    color: "var(--saffron)",
-                    fontWeight: 700,
-                  }}
-                >
+            <div className="stats">
+              <div className="stat">
+                <div className="v">
                   {tontine.stats.completedTurns}/{tontine.stats.totalTurns}
                 </div>
-                <div style={{ fontSize: 9, color: "var(--muted)" }}>
-                  TOURS DISTRIBUÉS
-                </div>
+                <div className="l">Tours</div>
               </div>
-              <div
-                style={{
-                  background: "rgba(255,255,255,0.04)",
-                  padding: 12,
-                  borderRadius: 10,
-                  textAlign: "center",
-                }}
-              >
+              <div className="stat">
                 <div
-                  style={{
-                    fontSize: 24,
-                    fontFamily: "Cormorant Garamond, serif",
-                    color: "#7DC59E",
-                    fontWeight: 700,
-                  }}
+                  className="v"
+                  style={{ color: "var(--emerald-soft)" }}
                 >
                   {tontine.stats.confirmedCount}
                 </div>
-                <div style={{ fontSize: 9, color: "var(--muted)" }}>
-                  CONFIRMÉES
-                </div>
+                <div className="l">Conf.</div>
               </div>
-              <div
-                style={{
-                  background: "rgba(255,255,255,0.04)",
-                  padding: 12,
-                  borderRadius: 10,
-                  textAlign: "center",
-                }}
-              >
-                <div
-                  style={{
-                    fontSize: 24,
-                    fontFamily: "Cormorant Garamond, serif",
-                    color: "var(--gold)",
-                    fontWeight: 700,
-                  }}
-                >
+              <div className="stat">
+                <div className="v" style={{ color: "var(--gold)" }}>
                   {tontine.stats.paidCount}
                 </div>
-                <div style={{ fontSize: 9, color: "var(--muted)" }}>PAYÉES</div>
+                <div className="l">Payées</div>
               </div>
-              <div
-                style={{
-                  background: "rgba(255,255,255,0.04)",
-                  padding: 12,
-                  borderRadius: 10,
-                  textAlign: "center",
-                }}
-              >
-                <div
-                  style={{
-                    fontSize: 24,
-                    fontFamily: "Cormorant Garamond, serif",
-                    color: "#D9714A",
-                    fontWeight: 700,
-                  }}
-                >
+              <div className="stat">
+                <div className="v" style={{ color: "var(--rose)" }}>
                   {tontine.stats.pendingCount}
                 </div>
-                <div style={{ fontSize: 9, color: "var(--muted)" }}>
-                  EN ATTENTE
-                </div>
+                <div className="l">Att.</div>
               </div>
             </div>
-
             {tontine.status === "ACTIVE" && (
               <button
-                className="btn-ghost"
+                className="btn-ghost btn-sm btn-block"
                 onClick={cancel}
-                style={{ marginTop: 14, width: "100%" }}
+                style={{ marginTop: 12 }}
               >
                 ✗ Annuler la tontine
               </button>
@@ -578,44 +499,39 @@ export default function TontinePage() {
           {/* Liste des tours */}
           {tontine.turns.map((turn: any) => (
             <div key={turn.id} className="card">
-              <div
-                style={{
-                  display: "flex",
-                  justifyContent: "space-between",
-                  alignItems: "center",
-                  marginBottom: 12,
-                }}
-              >
-                <h2 style={{ marginBottom: 0, fontSize: 20 }}>
+              <div className="card-head">
+                <h2>
                   Tour {turn.turnNumber}
                   {turn.status === "IN_PROGRESS" && (
                     <span
-                      style={{ marginLeft: 10, color: "var(--saffron)", fontSize: 12 }}
+                      className="chip chip-saffron"
+                      style={{ marginLeft: 8, fontSize: 9 }}
                     >
                       🔵 En cours
                     </span>
                   )}
                   {turn.status === "DISTRIBUTED" && (
                     <span
-                      style={{
-                        marginLeft: 10,
-                        color: "var(--emerald)",
-                        fontSize: 12,
-                      }}
+                      className="chip chip-emerald"
+                      style={{ marginLeft: 8, fontSize: 9 }}
                     >
                       ✓ Distribué
                     </span>
                   )}
                 </h2>
-                <div style={{ fontSize: 11, color: "var(--muted)" }}>
-                  Échéance : {new Date(turn.dueDate).toLocaleDateString("fr-FR")}
-                </div>
+                <span className="muted" style={{ fontSize: 11 }}>
+                  {new Date(turn.dueDate).toLocaleDateString("fr-FR", {
+                    day: "numeric",
+                    month: "short",
+                  })}
+                </span>
               </div>
 
+              {/* Bénéficiaire */}
               <div
                 style={{
                   background:
-                    "linear-gradient(135deg,rgba(232,163,61,0.1),rgba(181,70,46,0.05))",
+                    "linear-gradient(135deg,rgba(232,163,61,0.12),rgba(181,70,46,0.05))",
                   border: "1px solid var(--line)",
                   borderRadius: 12,
                   padding: 14,
@@ -625,41 +541,59 @@ export default function TontinePage() {
                   gap: 12,
                 }}
               >
-                <div style={{ fontSize: 32 }}>🎁</div>
-                <div style={{ flex: 1 }}>
+                <div
+                  style={{
+                    fontSize: 28,
+                    flexShrink: 0,
+                  }}
+                >
+                  🎁
+                </div>
+                <div style={{ flex: 1, minWidth: 0 }}>
                   <div
                     style={{
-                      fontSize: 11,
+                      fontSize: 10,
                       color: "var(--gold)",
-                      letterSpacing: 1.5,
+                      letterSpacing: 1.4,
                       fontWeight: 700,
+                      textTransform: "uppercase",
                     }}
                   >
-                    BÉNÉFICIAIRE DE CE TOUR
+                    Bénéficiaire
                   </div>
                   <div
                     style={{
-                      fontSize: 18,
+                      fontSize: 16,
                       fontFamily: "Cormorant Garamond, serif",
                       color: "var(--cream)",
                       fontWeight: 700,
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
                     }}
                   >
                     {turn.beneficiary.displayName}
                     {me?.id === turn.beneficiary.id && (
-                      <span style={{ color: "var(--saffron)", fontSize: 12 }}>
-                        {" "}
-                        (toi !)
+                      <span
+                        style={{
+                          color: "var(--saffron)",
+                          fontSize: 10,
+                          marginLeft: 6,
+                          letterSpacing: 1,
+                        }}
+                      >
+                        TOI
                       </span>
                     )}
                   </div>
                 </div>
                 <div
                   style={{
-                    fontSize: 24,
+                    fontSize: 18,
                     fontFamily: "Cormorant Garamond, serif",
                     color: "var(--saffron)",
                     fontWeight: 700,
+                    flexShrink: 0,
                   }}
                 >
                   {turn.contributions.length > 0
@@ -667,82 +601,99 @@ export default function TontinePage() {
                         parseFloat(turn.contributions[0].amount) *
                         turn.contributions.length
                       ).toFixed(2)
-                    : "0.00"}{" "}
+                    : "0"}{" "}
                   {tontine.currency}
                 </div>
               </div>
 
-              {/* Contributions */}
-              {turn.contributions.map((c: any) => {
-                const isMe = me?.id === c.contributor.id;
-                const canMarkPaid = isMe && c.status === "PENDING";
-                const canConfirm =
-                  c.status === "PAID" &&
-                  (me?.id === turn.beneficiary.id ||
-                    group.members.find((m: any) => m.user.id === me?.id)?.role ===
-                      "ADMIN");
+              {/* Cotisations */}
+              <div className="list">
+                {turn.contributions.map((c: any) => {
+                  const isMe = me?.id === c.contributor.id;
+                  const canMarkPaid = isMe && c.status === "PENDING";
+                  const canConfirm =
+                    c.status === "PAID" &&
+                    (me?.id === turn.beneficiary.id ||
+                      group.members.find(
+                        (m: any) => m.user.id === me?.id,
+                      )?.role === "ADMIN");
 
-                return (
-                  <div key={c.id} className="list-item">
-                    <div className="name">
-                      {c.contributor.displayName}
-                      {isMe && (
-                        <span
-                          style={{ color: "var(--saffron)", fontSize: 10, marginLeft: 6 }}
-                        >
-                          (toi)
-                        </span>
-                      )}
-                      <div style={{ fontSize: 10, color: "var(--muted)", marginTop: 2 }}>
-                        {c.status === "PENDING" && "⏳ En attente de paiement"}
-                        {c.status === "PAID" && (
-                          <>
-                            ✓ Payée · attente confirmation
-                            {c.paymentMethod && ` (${c.paymentMethod})`}
-                          </>
-                        )}
-                        {c.status === "CONFIRMED" && "✓✓ Confirmée"}
-                        {c.status === "MISSED" && "✗ Manquée"}
+                  return (
+                    <div key={c.id} className="list-item">
+                      <div className="icon">
+                        {c.contributor.displayName.charAt(0).toUpperCase()}
                       </div>
+                      <div className="text">
+                        <div className="name">
+                          {c.contributor.displayName}
+                          {isMe && (
+                            <span
+                              style={{
+                                color: "var(--saffron)",
+                                fontSize: 9,
+                                marginLeft: 6,
+                                letterSpacing: 1,
+                              }}
+                            >
+                              MOI
+                            </span>
+                          )}
+                        </div>
+                        <div className="meta">
+                          {c.status === "PENDING" && "⏳ En attente"}
+                          {c.status === "PAID" && (
+                            <>
+                              ✓ Payée
+                              {c.paymentMethod && ` · ${c.paymentMethod}`}
+                            </>
+                          )}
+                          {c.status === "CONFIRMED" && "✓✓ Confirmée"}
+                          {c.status === "MISSED" && "✗ Manquée"}
+                        </div>
+                      </div>
+                      {!canMarkPaid && !canConfirm && (
+                        <div
+                          className={`amount ${c.status === "CONFIRMED" ? "amount-pos" : ""}`}
+                          style={{ fontSize: 14 }}
+                        >
+                          {c.amount}
+                        </div>
+                      )}
+                      {canMarkPaid && (
+                        <button
+                          className="btn btn-sm"
+                          onClick={() => markPaid(c.id)}
+                        >
+                          💸 J'ai payé
+                        </button>
+                      )}
+                      {canConfirm && (
+                        <button
+                          className="btn btn-sm"
+                          onClick={() => confirm(c.id)}
+                          style={{
+                            background:
+                              "linear-gradient(135deg,var(--emerald),var(--indigo-2))",
+                          }}
+                        >
+                          ✓ Confirmer
+                        </button>
+                      )}
                     </div>
-                    <div className="amount" style={{ fontSize: 14 }}>
-                      {c.amount} {tontine.currency}
-                    </div>
-                    {canMarkPaid && (
-                      <button
-                        className="btn"
-                        onClick={() => markPaid(c.id)}
-                        style={{ padding: "6px 12px", fontSize: 11 }}
-                      >
-                        💸 J'ai payé
-                      </button>
-                    )}
-                    {canConfirm && (
-                      <button
-                        className="btn"
-                        onClick={() => confirm(c.id)}
-                        style={{
-                          padding: "6px 12px",
-                          fontSize: 11,
-                          background:
-                            "linear-gradient(135deg,#3F7D5C,#2A2244)",
-                        }}
-                      >
-                        ✓ Confirmer
-                      </button>
-                    )}
-                  </div>
-                );
-              })}
+                  );
+                })}
+              </div>
 
-              {/* Bouton distribuer le pot */}
+              {/* Distribution */}
               {turn.status === "IN_PROGRESS" &&
-                turn.contributions.every((c: any) => c.status === "CONFIRMED") &&
-                turn.contributions.length > 0 && (
+                turn.contributions.length > 0 &&
+                turn.contributions.every(
+                  (c: any) => c.status === "CONFIRMED",
+                ) && (
                   <button
-                    className="btn"
+                    className="btn btn-block"
                     onClick={() => distribute(turn.id)}
-                    style={{ width: "100%", marginTop: 10 }}
+                    style={{ marginTop: 10 }}
                   >
                     🎁 Distribuer le pot à {turn.beneficiary.displayName}
                   </button>

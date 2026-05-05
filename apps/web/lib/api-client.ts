@@ -109,6 +109,32 @@ export const api = {
 
   me: () => request<{ user: any }>("GET", "/auth/me"),
 
+  updateMe: (input: {
+    displayName?: string;
+    defaultCurrency?: string;
+    defaultLocale?: string;
+    avatar?: string | null;
+  }) => request<{ user: any }>("PATCH", "/auth/me", input),
+
+  addContact: (contactType: "PHONE" | "EMAIL", contactValue: string) =>
+    request<{ sent: true; expiresAt: string; message: string }>(
+      "POST",
+      "/auth/contacts/add",
+      { contactType, contactValue },
+    ),
+
+  verifyContact: (input: {
+    contactType: "PHONE" | "EMAIL";
+    contactValue: string;
+    code: string;
+  }) => request<{ contact: any }>("POST", "/auth/contacts/verify", input),
+
+  deleteContact: (contactId: string) =>
+    request<void>("DELETE", `/auth/contacts/${contactId}`),
+
+  setPrimaryContact: (contactId: string) =>
+    request<{ ok: true }>("PUT", `/auth/contacts/${contactId}/primary`),
+
   logout: () => request<void>("POST", "/auth/logout"),
 
   listGroups: () =>

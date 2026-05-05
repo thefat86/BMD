@@ -64,20 +64,25 @@ export default function GroupDetailPage() {
     confidence: number;
   } | null>(null);
 
+  // Split presets (M10)
+  const [presets, setPresets] = useState<any[]>([]);
+
   async function refresh() {
     try {
-      const [m, g, e, b, swaps] = await Promise.all([
+      const [m, g, e, b, swaps, ps] = await Promise.all([
         api.me(),
         api.getGroup(groupId),
         api.listExpenses(groupId),
         api.getBalance(groupId),
         api.listSwaps(groupId, false),
+        api.listPresets(groupId),
       ]);
       setMe(m.user);
       setGroup(g);
       setExpenses(e);
       setBalance(b);
       setActiveSwap(swaps[0] ?? null);
+      setPresets(ps);
     } catch (er) {
       if (isUnauthorized(er)) {
         clearToken();
@@ -183,6 +188,66 @@ export default function GroupDetailPage() {
         router.replace("/login");
         return;
       }
+      setError((e as Error).message);
+    }
+  }
+
+  function loadPreset(presetId: string) {
+    const preset = presets.find((p) => p.id === presetId);
+    if (!preset) return;
+    // Applique le mode + les participants + les parts du preset
+    setSplitMode(preset.splitMode);
+    const sel: Record<string, boolean> = {};
+    const sh: Record<string, string> = {};
+    for (const p of preset.config.participants) {
+      sel[p.userId] = true;
+      if (p.share !== undefined) sh[p.userId] = String(p.share);
+    }
+    setParticipants(sel);
+    setShares(sh);
+    if (preset.config.paidByUserId) {
+      setPaidByUserId(preset.config.paidByUserId);
+    }
+  }
+
+  async function savePreset() {
+    if (selectedIds.length === 0) {
+      setError("Sélectionne d'abord les participants");
+      return;
+    }
+    const name = window.prompt(
+      "Nom du modèle ? (ex: 'Couple seul', 'Comité salle', 'Famille 60% / amis 40%')",
+    );
+    if (!name?.trim()) return;
+    setError(null);
+    try {
+      const config = {
+        paidByUserId,
+        participants:
+          splitMode === "EQUAL"
+            ? selectedIds.map((id) => ({ userId: id }))
+            : selectedIds.map((id) => ({
+                userId: id,
+                share: parseFloat(shares[id] || "0"),
+              })),
+      };
+      await api.createPreset(groupId, {
+        name: name.trim(),
+        splitMode,
+        config,
+      });
+      void refresh();
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }
+
+  async function deletePreset(presetId: string) {
+    if (!window.confirm("Supprimer ce modèle de partage ?")) return;
+    try {
+      await api.deletePreset(presetId);
+      void refresh();
+    } catch (e) {
       setError((e as Error).message);
     }
   }
@@ -458,6 +523,35 @@ export default function GroupDetailPage() {
             </button>
           </div>
 
+          {/* Charger un preset (M10) */}
+          {presets.length > 0 && (
+            <div className="field">
+              <label>🔖 Charger un partage type</label>
+              <select
+                onChange={(e) => {
+                  if (e.target.value) loadPreset(e.target.value);
+                  e.target.value = "";
+                }}
+                defaultValue=""
+              >
+                <option value="" disabled>
+                  Choisis un modèle…
+                </option>
+                {presets.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name} ({p.config.participants.length}p ·{" "}
+                    {p.splitMode === "EQUAL"
+                      ? "égal"
+                      : p.splitMode === "PERCENTAGE"
+                        ? "%"
+                        : "parts"}
+                    )
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+
           {/* OCR scan */}
           <label
             style={{
@@ -702,15 +796,74 @@ export default function GroupDetailPage() {
                 );
               })}
             </div>
-            {splitMode !== "EQUAL" && selectedIds.length > 0 && (
-              <button
-                type="button"
-                onClick={autoFillShares}
-                className="btn-ghost btn-sm"
-                style={{ marginTop: 8, alignSelf: "flex-start" }}
-              >
-                ⚖ Auto · parts égales
-              </button>
+            <div
+              style={{
+                display: "flex",
+                gap: 6,
+                marginTop: 8,
+                flexWrap: "wrap",
+              }}
+            >
+              {splitMode !== "EQUAL" && selectedIds.length > 0 && (
+                <button
+                  type="button"
+                  onClick={autoFillShares}
+                  className="btn-ghost btn-sm"
+                >
+                  ⚖ Auto · parts égales
+                </button>
+              )}
+              {selectedIds.length > 0 && (
+                <button
+                  type="button"
+                  onClick={savePreset}
+                  className="btn-ghost btn-sm"
+                >
+                  💾 Sauver comme modèle
+                </button>
+              )}
+            </div>
+
+            {/* Mes presets existants — gérables depuis ici */}
+            {presets.length > 0 && (
+              <div style={{ marginTop: 10 }}>
+                <div
+                  style={{
+                    fontSize: 10,
+                    color: "var(--muted)",
+                    letterSpacing: 1.4,
+                    fontWeight: 700,
+                    textTransform: "uppercase",
+                    marginBottom: 6,
+                  }}
+                >
+                  🔖 Mes modèles ({presets.length})
+                </div>
+                <div
+                  style={{
+                    display: "flex",
+                    flexWrap: "wrap",
+                    gap: 6,
+                  }}
+                >
+                  {presets.map((p) => (
+                    <span
+                      key={p.id}
+                      className="chip chip-saffron"
+                      style={{
+                        cursor: "pointer",
+                        textTransform: "none",
+                        letterSpacing: 0.3,
+                      }}
+                      onClick={() => loadPreset(p.id)}
+                      onDoubleClick={() => deletePreset(p.id)}
+                      title="Clic pour charger · double-clic pour supprimer"
+                    >
+                      {p.name}
+                    </span>
+                  ))}
+                </div>
+              </div>
             )}
           </div>
 

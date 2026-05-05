@@ -95,13 +95,36 @@ export default function DashboardPage() {
         <div className="brand" style={{ marginBottom: 0 }}>
           BMD<span>·</span>
         </div>
-        <button
+        <Link
+          href="/dashboard/profile"
           className="btn-ghost btn-sm"
-          onClick={logout}
-          style={{ minHeight: 36 }}
+          style={{
+            minHeight: 36,
+            textDecoration: "none",
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 6,
+          }}
         >
-          ↩ Quitter
-        </button>
+          <span
+            style={{
+              width: 22,
+              height: 22,
+              borderRadius: "50%",
+              background:
+                "linear-gradient(135deg,var(--saffron),var(--terracotta))",
+              color: "#16111e",
+              display: "inline-flex",
+              alignItems: "center",
+              justifyContent: "center",
+              fontSize: 11,
+              fontWeight: 700,
+            }}
+          >
+            {me.displayName.charAt(0).toUpperCase()}
+          </span>
+          Profil
+        </Link>
       </div>
 
       {/* Salutation + nom utilisateur (page-header) */}

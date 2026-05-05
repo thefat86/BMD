@@ -196,16 +196,36 @@ export default function ProfilePage() {
         >
           ← Mes groupes
         </Link>
-        <span
+        <Link
+          href="/"
+          aria-label="Retour à l'accueil"
           style={{
-            fontFamily: "Cormorant Garamond, serif",
-            fontSize: 18,
-            color: "var(--cream)",
-            fontWeight: 700,
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 6,
+            textDecoration: "none",
+            color: "inherit",
           }}
         >
-          BMD<span style={{ color: "var(--saffron)" }}>·</span>
-        </span>
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src="/bmd-logo.svg"
+            alt=""
+            width={28}
+            height={28}
+            style={{ flexShrink: 0 }}
+          />
+          <span
+            style={{
+              fontFamily: "Cormorant Garamond, serif",
+              fontSize: 18,
+              color: "var(--cream)",
+              fontWeight: 700,
+            }}
+          >
+            BMD<span style={{ color: "var(--saffron)" }}>·</span>
+          </span>
+        </Link>
       </div>
 
       {/* Page header */}

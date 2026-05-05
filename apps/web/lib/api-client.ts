@@ -154,8 +154,42 @@ export const api = {
 
   getGroup: (id: string) => request<any>("GET", `/groups/${id}`),
 
-  inviteMember: (groupId: string, contactType: "PHONE" | "EMAIL", contactValue: string) =>
-    request<any>("POST", `/groups/${groupId}/members`, { contactType, contactValue }),
+  inviteMember: (
+    groupId: string,
+    contactType: "PHONE" | "EMAIL",
+    contactValue: string,
+    displayName?: string,
+  ) =>
+    request<any>("POST", `/groups/${groupId}/members`, {
+      contactType,
+      contactValue,
+      displayName,
+    }),
+
+  /**
+   * Invite plusieurs contacts d'un coup. Utilisé après le Contact Picker.
+   * Réponse : { added: [...], failed: [...{contactValue, reason}] }
+   */
+  batchInviteMembers: (
+    groupId: string,
+    invitations: Array<{
+      contactType: "PHONE" | "EMAIL";
+      contactValue: string;
+      displayName?: string;
+    }>,
+  ) =>
+    request<{
+      added: Array<{
+        contactValue: string;
+        memberId: string;
+        userId: string;
+        displayName: string;
+      }>;
+      failed: Array<{
+        contactValue: string;
+        reason: string;
+      }>;
+    }>("POST", `/groups/${groupId}/members/batch`, { invitations }),
 
   listExpenses: (groupId: string) =>
     request<any[]>("GET", `/groups/${groupId}/expenses`),

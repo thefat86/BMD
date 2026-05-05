@@ -175,13 +175,127 @@ export default function GroupDetailPage() {
     group,
   ]);
 
-  async function invite() {
+  // ============ INVITATIONS (Contact Picker + RGPD) ============
+
+  // File de contacts à inviter en batch
+  const [pendingInvites, setPendingInvites] = useState<
+    Array<{
+      contactType: "PHONE" | "EMAIL";
+      contactValue: string;
+      displayName?: string;
+      source: "manual" | "picker";
+    }>
+  >([]);
+  const [batchSubmitting, setBatchSubmitting] = useState(false);
+  const [batchResult, setBatchResult] = useState<{
+    added: number;
+    failed: { contactValue: string; reason: string }[];
+  } | null>(null);
+
+  // Détection support Contact Picker (Chrome Android uniquement)
+  const contactPickerSupported =
+    typeof window !== "undefined" &&
+    "contacts" in navigator &&
+    "ContactsManager" in window;
+
+  function addToQueue(
+    contactType: "PHONE" | "EMAIL",
+    contactValue: string,
+    displayName?: string,
+    source: "manual" | "picker" = "manual",
+  ) {
+    const value = contactValue.trim();
+    if (!value) return;
+    // Anti-doublon dans la file
+    if (pendingInvites.some((i) => i.contactValue === value)) return;
+    setPendingInvites((q) => [
+      ...q,
+      { contactType, contactValue: value, displayName, source },
+    ]);
+  }
+
+  function removeFromQueue(idx: number) {
+    setPendingInvites((q) => q.filter((_, i) => i !== idx));
+  }
+
+  function addManualToQueue() {
+    if (!contactValue.trim()) return;
+    addToQueue(contactType, contactValue, undefined, "manual");
+    setContactValue(contactType === "PHONE" ? "+33" : "");
+  }
+
+  /**
+   * Ouvre le Contact Picker système (Chrome Android uniquement).
+   * RGPD : l'utilisateur consent EXPLICITEMENT en touchant le bouton, et
+   * choisit MANUELLEMENT chaque contact dans le picker système. On ne lit
+   * jamais le carnet en bulk.
+   */
+  async function pickContactsFromDevice() {
     setError(null);
+    if (!contactPickerSupported) {
+      setError(
+        "Sélection depuis les contacts non supportée sur ce navigateur. Saisis manuellement.",
+      );
+      return;
+    }
     try {
-      await api.inviteMember(groupId, contactType, contactValue);
-      setOpenPanel("none");
-      setContactValue(contactType === "PHONE" ? "+33" : "");
-      void refresh();
+      // Cast en any car les types DOM ne couvrent pas encore Contacts API
+      const contacts = await (navigator as any).contacts.select(
+        ["name", "tel", "email"],
+        { multiple: true },
+      );
+      let addedCount = 0;
+      for (const c of contacts) {
+        const name: string | undefined = c.name?.[0];
+        // On préfère le téléphone, sinon l'email
+        const phone: string | undefined = c.tel?.[0];
+        const email: string | undefined = c.email?.[0];
+        if (phone) {
+          // Normaliser : garder + et chiffres uniquement
+          const cleaned = phone.replace(/[^\d+]/g, "");
+          if (cleaned.length >= 6) {
+            addToQueue("PHONE", cleaned, name, "picker");
+            addedCount++;
+          }
+        } else if (email) {
+          addToQueue("EMAIL", email, name, "picker");
+          addedCount++;
+        }
+      }
+      if (addedCount === 0) {
+        setError(
+          "Aucun contact valide sélectionné (besoin d'un numéro ou email).",
+        );
+      }
+    } catch (e) {
+      // L'utilisateur a annulé : pas une vraie erreur
+      const msg = (e as Error).message ?? "";
+      if (!msg.toLowerCase().includes("cancel")) {
+        setError(`Picker : ${msg}`);
+      }
+    }
+  }
+
+  async function submitBatch() {
+    if (pendingInvites.length === 0) return;
+    setError(null);
+    setBatchResult(null);
+    setBatchSubmitting(true);
+    try {
+      const result = await api.batchInviteMembers(
+        groupId,
+        pendingInvites.map((i) => ({
+          contactType: i.contactType,
+          contactValue: i.contactValue,
+          displayName: i.displayName,
+        })),
+      );
+      setBatchResult({
+        added: result.added.length,
+        failed: result.failed,
+      });
+      setPendingInvites([]);
+      await refresh();
     } catch (e) {
       if (isUnauthorized(e)) {
         clearToken();
@@ -189,6 +303,8 @@ export default function GroupDetailPage() {
         return;
       }
       setError((e as Error).message);
+    } finally {
+      setBatchSubmitting(false);
     }
   }
 
@@ -468,44 +584,254 @@ export default function GroupDetailPage() {
       {openPanel === "invite" && (
         <div className="card">
           <div className="card-head">
-            <h2>👤 Inviter un membre</h2>
+            <h2>👤 Inviter des membres</h2>
             <button
               className="btn-ghost btn-sm"
-              onClick={() => setOpenPanel("none")}
+              onClick={() => {
+                setOpenPanel("none");
+                setPendingInvites([]);
+                setBatchResult(null);
+              }}
             >
               ✕
             </button>
           </div>
-          <div className="field">
-            <label>Méthode</label>
-            <select
-              value={contactType}
-              onChange={(e) => {
-                const t = e.target.value as "PHONE" | "EMAIL";
-                setContactType(t);
-                setContactValue(t === "PHONE" ? "+33" : "");
+
+          {/* === Disclaimer RGPD === */}
+          <div
+            style={{
+              padding: "10px 12px",
+              borderRadius: 10,
+              fontSize: 11,
+              marginBottom: 12,
+              background: "rgba(232,163,61,0.06)",
+              border: "1px solid var(--line-soft)",
+              color: "var(--cream-soft)",
+              lineHeight: 1.5,
+            }}
+          >
+            🛡️ <strong>Vie privée :</strong> les contacts sélectionnés sont
+            utilisés <em>uniquement</em> pour générer leur invitation. Tant
+            qu'ils ne s'inscrivent pas, leurs données ne sont pas conservées
+            au-delà de cette demande.{" "}
+            <Link
+              href="/legal/privacy"
+              style={{
+                color: "var(--saffron)",
+                textDecoration: "underline",
               }}
             >
-              <option value="PHONE">📞 Téléphone</option>
-              <option value="EMAIL">✉️ Email</option>
-            </select>
+              En savoir plus
+            </Link>
           </div>
-          <div className="field">
-            <label>{contactType === "PHONE" ? "Numéro" : "Email"}</label>
-            <input
-              type={contactType === "EMAIL" ? "email" : "tel"}
-              inputMode={contactType === "EMAIL" ? "email" : "tel"}
-              value={contactValue}
-              onChange={(e) => setContactValue(e.target.value)}
-              placeholder={
-                contactType === "PHONE"
-                  ? "+33 6 12 34 56 78"
-                  : "ami@exemple.com"
-              }
-            />
+
+          {/* === Bouton Contact Picker (Android) === */}
+          {contactPickerSupported ? (
+            <button
+              type="button"
+              onClick={pickContactsFromDevice}
+              className="btn-ghost btn-block"
+              style={{
+                marginBottom: 12,
+                borderColor: "var(--saffron)",
+                color: "var(--saffron)",
+              }}
+            >
+              📇 Choisir dans mon répertoire
+            </button>
+          ) : (
+            <div
+              className="info"
+              style={{ fontSize: 11, lineHeight: 1.5 }}
+            >
+              ℹ️ La sélection depuis le carnet d'adresses est disponible
+              sur Chrome Android. Sur iPhone et autres navigateurs, saisis
+              manuellement les contacts ci-dessous.
+            </div>
+          )}
+
+          {/* === Saisie manuelle === */}
+          <div
+            style={{
+              padding: 10,
+              borderRadius: 10,
+              background: "var(--overlay)",
+              border: "1px solid var(--line-soft)",
+              marginBottom: 12,
+            }}
+          >
+            <div
+              style={{
+                fontSize: 10,
+                letterSpacing: 1.4,
+                color: "var(--muted)",
+                textTransform: "uppercase",
+                fontWeight: 700,
+                marginBottom: 8,
+              }}
+            >
+              ✍ Saisie manuelle
+            </div>
+            <div style={{ display: "flex", gap: 6, marginBottom: 8 }}>
+              <select
+                value={contactType}
+                onChange={(e) => {
+                  const t = e.target.value as "PHONE" | "EMAIL";
+                  setContactType(t);
+                  setContactValue(t === "PHONE" ? "+33" : "");
+                }}
+                style={{
+                  background: "var(--overlay-2)",
+                  border: "1px solid var(--line-soft)",
+                  borderRadius: 10,
+                  padding: "10px 8px",
+                  fontSize: 13,
+                  color: "var(--cream)",
+                  width: 80,
+                }}
+              >
+                <option value="PHONE">📞</option>
+                <option value="EMAIL">✉️</option>
+              </select>
+              <input
+                type={contactType === "EMAIL" ? "email" : "tel"}
+                inputMode={contactType === "EMAIL" ? "email" : "tel"}
+                value={contactValue}
+                onChange={(e) => setContactValue(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") addManualToQueue();
+                }}
+                placeholder={
+                  contactType === "PHONE"
+                    ? "+33 6 12 34 56 78"
+                    : "ami@exemple.com"
+                }
+                style={{
+                  flex: 1,
+                  background: "var(--overlay-2)",
+                  border: "1px solid var(--line-soft)",
+                  borderRadius: 10,
+                  padding: "10px 12px",
+                  fontSize: 16,
+                  color: "var(--cream)",
+                  minWidth: 0,
+                }}
+              />
+              <button
+                type="button"
+                onClick={addManualToQueue}
+                disabled={!contactValue.trim()}
+                className="btn-ghost btn-sm"
+                style={{
+                  flexShrink: 0,
+                  borderColor: "var(--saffron)",
+                  color: "var(--saffron)",
+                  opacity: contactValue.trim() ? 1 : 0.4,
+                }}
+              >
+                ＋ Ajouter
+              </button>
+            </div>
           </div>
-          <button className="btn btn-block" onClick={invite}>
-            ✓ Inviter
+
+          {/* === File d'invitations en attente === */}
+          {pendingInvites.length > 0 && (
+            <div style={{ marginBottom: 12 }}>
+              <div className="section-title">
+                <span>
+                  📋 À inviter ({pendingInvites.length})
+                </span>
+                <a
+                  onClick={() => setPendingInvites([])}
+                  style={{ cursor: "pointer" }}
+                >
+                  Tout vider
+                </a>
+              </div>
+              <div className="list">
+                {pendingInvites.map((inv, idx) => (
+                  <div key={idx} className="list-item">
+                    <div className="icon">
+                      {inv.contactType === "PHONE" ? "📞" : "✉️"}
+                    </div>
+                    <div className="text">
+                      <div className="name">
+                        {inv.displayName ?? inv.contactValue}
+                      </div>
+                      <div className="meta">
+                        {inv.displayName ? inv.contactValue : ""}
+                        {inv.source === "picker" && (
+                          <span
+                            style={{
+                              color: "var(--saffron)",
+                              marginLeft: 4,
+                            }}
+                          >
+                            · 📇 répertoire
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => removeFromQueue(idx)}
+                      className="btn-ghost btn-sm"
+                      style={{
+                        padding: "4px 10px",
+                        color: "var(--rose)",
+                        borderColor: "rgba(217,113,74,0.3)",
+                      }}
+                    >
+                      ✕
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* === Résultat du dernier batch === */}
+          {batchResult && (
+            <>
+              {batchResult.added > 0 && (
+                <div className="success" style={{ fontSize: 12 }}>
+                  ✓ {batchResult.added} invitation
+                  {batchResult.added > 1 ? "s" : ""} envoyée
+                  {batchResult.added > 1 ? "s" : ""}
+                </div>
+              )}
+              {batchResult.failed.length > 0 && (
+                <div className="error" style={{ fontSize: 12 }}>
+                  ✗ {batchResult.failed.length} échec
+                  {batchResult.failed.length > 1 ? "s" : ""} :
+                  <ul
+                    style={{
+                      marginTop: 4,
+                      marginLeft: 16,
+                      lineHeight: 1.4,
+                    }}
+                  >
+                    {batchResult.failed.map((f, i) => (
+                      <li key={i}>
+                        <strong>{f.contactValue}</strong> · {f.reason}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </>
+          )}
+
+          {/* === Action finale === */}
+          <button
+            className="btn btn-block"
+            onClick={submitBatch}
+            disabled={pendingInvites.length === 0 || batchSubmitting}
+          >
+            {batchSubmitting
+              ? "Envoi en cours…"
+              : pendingInvites.length === 0
+                ? "Ajoute au moins 1 contact"
+                : `✓ Inviter ${pendingInvites.length} personne${pendingInvites.length > 1 ? "s" : ""}`}
           </button>
         </div>
       )}

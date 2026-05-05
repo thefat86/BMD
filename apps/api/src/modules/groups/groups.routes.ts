@@ -3,6 +3,7 @@ import { z } from "zod";
 import { ContactType, GroupType, MemberRole } from "@prisma/client";
 import {
   addMemberByContact,
+  batchInviteMembers,
   createGroup,
   getGroupForMember,
   listGroupsForUser,
@@ -17,6 +18,21 @@ const createGroupSchema = z.object({
 const inviteSchema = z.object({
   contactType: z.nativeEnum(ContactType),
   contactValue: z.string().min(3),
+  displayName: z.string().min(1).max(80).optional(),
+  role: z.nativeEnum(MemberRole).optional(),
+});
+
+const batchInviteSchema = z.object({
+  invitations: z
+    .array(
+      z.object({
+        contactType: z.nativeEnum(ContactType),
+        contactValue: z.string().min(3),
+        displayName: z.string().min(1).max(80).optional(),
+      }),
+    )
+    .min(1)
+    .max(50),
   role: z.nativeEnum(MemberRole).optional(),
 });
 
@@ -86,6 +102,7 @@ export async function groupsRoutes(app: FastifyInstance): Promise<void> {
       invitedById: req.user.sub,
       contactType: body.contactType,
       contactValue: body.contactValue,
+      displayName: body.displayName,
       role: body.role,
     });
     return reply.code(201).send({
@@ -94,5 +111,23 @@ export async function groupsRoutes(app: FastifyInstance): Promise<void> {
       joinedAt: member.joinedAt.toISOString(),
       user: member.user,
     });
+  });
+
+  /**
+   * POST /groups/:id/members/batch
+   * Invite plusieurs contacts d'un coup (typiquement après un Contact Picker mobile).
+   * Continue même si certains échouent — retourne added[] et failed[].
+   * Limite : 50 contacts par requête.
+   */
+  app.post("/groups/:id/members/batch", async (req) => {
+    const params = z.object({ id: z.string().uuid() }).parse(req.params);
+    const body = batchInviteSchema.parse(req.body);
+    const result = await batchInviteMembers({
+      groupId: params.id,
+      invitedById: req.user.sub,
+      invitations: body.invitations,
+      role: body.role,
+    });
+    return result;
   });
 }

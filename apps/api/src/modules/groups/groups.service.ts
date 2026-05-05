@@ -77,6 +77,14 @@ export async function addMemberByContact(input: {
   contactType: "PHONE" | "EMAIL";
   contactValue: string;
   role?: MemberRole;
+  /**
+   * Optionnel : nom à afficher pour le shadow user (typiquement fourni par
+   * le Contact Picker du téléphone). Permet d'éviter "+33612345678" pour
+   * un contact qui s'appelle "Marie K.".
+   * Le contact reste un shadow user non vérifié — le nom est juste
+   * informatif jusqu'à sa première connexion.
+   */
+  displayName?: string;
 }) {
   await assertRole(input.groupId, input.invitedById, ["ADMIN", "TREASURER"]);
   const value = input.contactValue.trim();
@@ -90,11 +98,13 @@ export async function addMemberByContact(input: {
   if (contact) {
     userId = contact.userId;
   } else {
-    // Shadow user (no display name yet — the invitee will set it on first login)
+    // Shadow user. Le displayName fourni par l'invitant est utilisé s'il existe,
+    // sinon on tombe sur un nom dérivé du contact (e-mail prefix ou numéro).
     const shadowName =
-      input.contactType === "EMAIL"
+      input.displayName?.trim() ||
+      (input.contactType === "EMAIL"
         ? value.split("@")[0] ?? "Invité"
-        : `+${value.replace(/\D/g, "")}`;
+        : `+${value.replace(/\D/g, "")}`);
 
     const newUser = await prisma.user.create({
       data: {
@@ -133,4 +143,81 @@ export async function addMemberByContact(input: {
     }
     throw e;
   }
+}
+
+/**
+ * Invite plusieurs contacts d'un coup (depuis un Contact Picker mobile par ex).
+ * Continue même si certains échouent — retourne les détails par contact.
+ *
+ * RGPD : aucun contact non sélectionné n'est jamais touché. Aucune données
+ * additionnelle n'est lue depuis le téléphone (seulement nom + tel ou email).
+ * Les contacts qui ne s'inscrivent jamais restent des "shadow users" et peuvent
+ * être supprimés sur demande conformément au droit à l'oubli.
+ */
+export interface BatchInviteItem {
+  contactType: "PHONE" | "EMAIL";
+  contactValue: string;
+  displayName?: string;
+}
+
+export interface BatchInviteResult {
+  added: Array<{
+    contactValue: string;
+    memberId: string;
+    userId: string;
+    displayName: string;
+  }>;
+  failed: Array<{
+    contactValue: string;
+    reason: string;
+  }>;
+}
+
+export async function batchInviteMembers(input: {
+  groupId: string;
+  invitedById: string;
+  invitations: BatchInviteItem[];
+  role?: MemberRole;
+}): Promise<BatchInviteResult> {
+  if (input.invitations.length === 0) {
+    throw Errors.badRequest("Aucune invitation fournie");
+  }
+  if (input.invitations.length > 50) {
+    throw Errors.badRequest("Maximum 50 invitations par lot");
+  }
+
+  // Une seule vérif de rôle pour tout le batch (perf)
+  await assertRole(input.groupId, input.invitedById, ["ADMIN", "TREASURER"]);
+
+  const result: BatchInviteResult = { added: [], failed: [] };
+
+  for (const item of input.invitations) {
+    const value = item.contactValue.trim();
+    if (!value) {
+      result.failed.push({ contactValue: value, reason: "Vide" });
+      continue;
+    }
+    try {
+      const member = await addMemberByContact({
+        groupId: input.groupId,
+        invitedById: input.invitedById,
+        contactType: item.contactType,
+        contactValue: value,
+        displayName: item.displayName,
+        role: input.role,
+      });
+      result.added.push({
+        contactValue: value,
+        memberId: member.id,
+        userId: member.user.id,
+        displayName: member.user.displayName,
+      });
+    } catch (e) {
+      const reason =
+        e instanceof Error ? e.message : "Erreur inconnue";
+      result.failed.push({ contactValue: value, reason });
+    }
+  }
+
+  return result;
 }

@@ -557,7 +557,37 @@ export default function ProfilePage() {
           className="muted text-center"
           style={{ fontSize: 11, marginTop: 10 }}
         >
-          Pour supprimer ton compte, contacte le support.
+          Pour supprimer ton compte, écris à{" "}
+          <strong style={{ color: "var(--saffron)" }}>
+            privacy@bmd.app
+          </strong>
+        </p>
+      </div>
+
+      {/* === Légal === */}
+      <div className="card">
+        <div className="card-head">
+          <h2>📜 Légal & vie privée</h2>
+        </div>
+        <Link
+          href="/legal/privacy"
+          className="btn-ghost btn-block"
+          style={{
+            textDecoration: "none",
+            display: "inline-flex",
+            alignItems: "center",
+            justifyContent: "center",
+            gap: 6,
+          }}
+        >
+          🛡️ Politique de confidentialité
+        </Link>
+        <p
+          className="muted text-center"
+          style={{ fontSize: 11, marginTop: 10, lineHeight: 1.5 }}
+        >
+          BMD respecte le RGPD. Tes données ne sont ni vendues, ni
+          partagées. Tu peux les exporter ou les supprimer à tout moment.
         </p>
       </div>
     </div>

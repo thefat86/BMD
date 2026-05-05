@@ -18,6 +18,7 @@ import { attachmentsRoutes } from "./modules/attachments/attachments.routes.js";
 import { notificationsRoutes } from "./modules/notifications/notifications.routes.js";
 import { debtTransfersRoutes } from "./modules/debt-transfers/debt-transfers.routes.js";
 import { expenseItemsRoutes } from "./modules/expense-items/expense-items.routes.js";
+import { realtimeRoutes } from "./modules/realtime/realtime.routes.js";
 import { assertSessionActive, type JwtPayload } from "./modules/auth/jwt.service.js";
 
 declare module "fastify" {
@@ -121,6 +122,7 @@ export async function buildServer(): Promise<FastifyInstance> {
   await app.register(notificationsRoutes);
   await app.register(debtTransfersRoutes);
   await app.register(expenseItemsRoutes);
+  await app.register(realtimeRoutes);
 
   return app;
 }

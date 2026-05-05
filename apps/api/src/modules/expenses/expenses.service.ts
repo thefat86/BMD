@@ -4,6 +4,7 @@ import { prisma } from "../../lib/db.js";
 import { Errors } from "../../lib/errors.js";
 import { getGroupForMember } from "../groups/groups.service.js";
 import { notifyGroupMembers } from "../notifications/notifications.service.js";
+import { events } from "../../lib/event-stream.js";
 
 export interface CreateExpenseInput {
   groupId: string;
@@ -171,6 +172,9 @@ export async function createExpense(input: CreateExpenseInput) {
       },
     },
   });
+
+  // Diffusion temps réel à tous les clients connectés (SSE)
+  events.expenseCreated(input.groupId, created.id);
 
   // Notif aux membres du groupe (sauf le payeur lui-même)
   void notifyGroupMembers({

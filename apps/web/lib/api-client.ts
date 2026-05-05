@@ -199,7 +199,7 @@ export const api = {
     input: {
       description: string;
       amount: string;
-      splitMode: "EQUAL" | "UNEQUAL" | "PERCENTAGE";
+      splitMode: "EQUAL" | "UNEQUAL" | "PERCENTAGE" | "ITEMIZED";
       paidByUserId?: string;
       participants: Array<{ userId: string; share?: number }>;
     },
@@ -214,7 +214,7 @@ export const api = {
     input: {
       description?: string;
       amount?: string;
-      splitMode?: "EQUAL" | "UNEQUAL" | "PERCENTAGE";
+      splitMode?: "EQUAL" | "UNEQUAL" | "PERCENTAGE" | "ITEMIZED";
       paidByUserId?: string;
       participants?: Array<{ userId: string; share?: number }>;
     },
@@ -511,6 +511,75 @@ export const api = {
   cancelDebtTransfer: (id: string) =>
     request<any>("POST", `/debt-transfers/${id}/cancel`),
 
+  // ============ EXPENSE ITEMS (split par item) ============
+
+  /** Liste les items d'une dépense + claims des membres. */
+  listExpenseItems: (expenseId: string) =>
+    request<
+      Array<{
+        id: string;
+        position: number;
+        description: string;
+        quantity: string;
+        unitPrice: string;
+        totalPrice: string;
+        category: string | null;
+        claims: Array<{
+          id: string;
+          userId: string;
+          share: string;
+          user: { id: string; displayName: string; avatar: string | null };
+        }>;
+      }>
+    >("GET", `/expenses/${expenseId}/items`),
+
+  /**
+   * Remplace tous les items d'une dépense (utilisé après scan OCR
+   * ou édition manuelle). Réservé au payeur ou admin.
+   */
+  setExpenseItems: (
+    expenseId: string,
+    items: Array<{
+      description: string;
+      quantity?: number;
+      unitPrice: string;
+      totalPrice: string;
+      category?: string;
+    }>,
+  ) => request<any[]>("PUT", `/expenses/${expenseId}/items`, { items }),
+
+  /** Calcule combien chaque membre doit payer en mode ITEMIZED. */
+  getItemizedShares: (expenseId: string) =>
+    request<
+      Array<{
+        userId: string;
+        displayName: string;
+        amountOwed: string;
+        items: Array<{
+          itemId: string;
+          description: string;
+          itemTotal: string;
+          myShare: string;
+          myAmount: string;
+        }>;
+      }>
+    >("GET", `/expenses/${expenseId}/itemized-shares`),
+
+  /** Je revendique cet item (rééquilibrage automatique des shares). */
+  claimItem: (itemId: string, share?: number) =>
+    request<any>(
+      "POST",
+      `/expense-items/${itemId}/claim`,
+      share !== undefined ? { share } : {},
+    ),
+
+  /** Je retire mon claim sur cet item. */
+  unclaimItem: (itemId: string) =>
+    request<{ unclaimed: boolean }>(
+      "DELETE",
+      `/expense-items/${itemId}/claim`,
+    ),
+
   // ============ SPLIT PRESETS (M10) ============
 
   listPresets: (groupId: string) =>
@@ -518,7 +587,7 @@ export const api = {
       Array<{
         id: string;
         name: string;
-        splitMode: "EQUAL" | "UNEQUAL" | "PERCENTAGE";
+        splitMode: "EQUAL" | "UNEQUAL" | "PERCENTAGE" | "ITEMIZED";
         config: {
           participants: Array<{ userId: string; share?: number }>;
           paidByUserId?: string;
@@ -531,7 +600,7 @@ export const api = {
     groupId: string,
     input: {
       name: string;
-      splitMode: "EQUAL" | "UNEQUAL" | "PERCENTAGE";
+      splitMode: "EQUAL" | "UNEQUAL" | "PERCENTAGE" | "ITEMIZED";
       config: {
         participants: Array<{ userId: string; share?: number }>;
         paidByUserId?: string;
@@ -588,6 +657,13 @@ export const api = {
       category: string | null;
       confidence: number;
       rawText: string;
+      /** Items détectés (mode split par item — voir feature ITEMIZED) */
+      items: Array<{
+        description: string;
+        quantity: number;
+        unitPrice: string;
+        totalPrice: string;
+      }>;
     };
   },
 

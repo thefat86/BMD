@@ -94,11 +94,32 @@ export default function DashboardPage() {
 
   return (
     <div className="container">
-      {/* Top bar : brand + cloche + profil */}
+      {/* Top bar : brand (logo SVG + texte) + cloche + profil */}
       <div className="between" style={{ marginBottom: 18 }}>
-        <div className="brand" style={{ marginBottom: 0 }}>
-          BMD<span>·</span>
-        </div>
+        <Link
+          href="/"
+          aria-label="Retour à l'accueil"
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 10,
+            textDecoration: "none",
+            color: "inherit",
+          }}
+        >
+          {/* Logo BMD SVG (fichier public/bmd-logo.svg) */}
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src="/bmd-logo.svg"
+            alt=""
+            width={36}
+            height={36}
+            style={{ flexShrink: 0 }}
+          />
+          <div className="brand" style={{ marginBottom: 0, fontSize: 22 }}>
+            BMD<span>·</span>
+          </div>
+        </Link>
         <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
           <NotificationBell />
         <Link

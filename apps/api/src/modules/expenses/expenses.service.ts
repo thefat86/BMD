@@ -49,6 +49,30 @@ export function computeShares(
     return result;
   }
 
+  // ITEMIZED : à la création, on traite comme EQUAL temporaire (avec
+  // tous les participants à part égale). Les vraies parts seront recalculées
+  // dynamiquement depuis les ExpenseItem + claims via le endpoint
+  // /expenses/:id/itemized-shares. Cette stratégie évite d'avoir des shares
+  // incohérentes pendant que les utilisateurs claiment encore leurs items.
+  if (splitMode === "ITEMIZED") {
+    const each = amount
+      .dividedBy(participants.length)
+      .toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
+    const result = participants.map((p) => ({
+      userId: p.userId,
+      amountOwed: each,
+    }));
+    const sum = each.times(participants.length);
+    const diff = amount.minus(sum);
+    if (!diff.isZero()) {
+      result[result.length - 1] = {
+        userId: result[result.length - 1]!.userId,
+        amountOwed: result[result.length - 1]!.amountOwed.plus(diff),
+      };
+    }
+    return result;
+  }
+
   if (splitMode === "PERCENTAGE") {
     const totalPct = participants.reduce(
       (acc, p) => acc + (p.share ?? 0),

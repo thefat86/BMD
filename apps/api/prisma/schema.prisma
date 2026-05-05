@@ -44,6 +44,7 @@ model User {
   debtTransfersFrom      DebtTransfer[]         @relation("DebtTransferFrom")
   debtTransfersAssumer   DebtTransfer[]         @relation("DebtTransferAssumer")
   debtTransfersCreditor  DebtTransfer[]         @relation("DebtTransferCreditor")
+  expenseItemClaims      ExpenseItemClaim[]     @relation("ExpenseItemClaim")
 }
 
 enum ContactType {
@@ -154,6 +155,10 @@ enum SplitMode {
   EQUAL
   UNEQUAL
   PERCENTAGE
+  /// Chaque ligne du ticket est attribuée individuellement.
+  /// Le total à payer par membre = somme des items qu'il a réclamés
+  /// (avec partage possible si plusieurs réclament la même ligne).
+  ITEMIZED
 }
 
 model Expense {
@@ -172,8 +177,57 @@ model Expense {
 
   shares      ExpenseShare[]
   attachments ExpenseAttachment[]
+  items       ExpenseItem[]
 
   @@index([groupId, occurredAt])
+}
+
+/// Ligne d'un ticket : un item consommé (entrée, plat, boisson, etc.).
+/// Détecté par OCR ou saisi manuellement. Chaque membre peut "réclamer"
+/// les items qu'il a consommés via ExpenseItemClaim.
+///
+/// La somme des totalPrice DOIT correspondre au montant de la dépense
+/// (validation côté service). Sinon, on saisit l'écart en "frais partagés"
+/// (split equal entre tous).
+model ExpenseItem {
+  id          String   @id @default(uuid())
+  expenseId   String
+  expense     Expense  @relation(fields: [expenseId], references: [id], onDelete: Cascade)
+  /// Position dans le ticket (pour l'ordre d'affichage)
+  position    Int
+  description String
+  /// Quantité (par défaut 1 ; ex: "2 cafés")
+  quantity    Decimal  @default(1) @db.Decimal(8, 3)
+  /// Prix unitaire HT/TTC selon le ticket (le service est neutre, tout est traité comme TTC)
+  unitPrice   Decimal  @db.Decimal(14, 4)
+  /// Prix total ligne = quantity × unitPrice (stocké pour éviter drifts d'arrondi)
+  totalPrice  Decimal  @db.Decimal(14, 4)
+  /// Catégorie inférée par l'IA (boisson, plat, dessert…) pour stats
+  category    String?
+  createdAt   DateTime @default(now())
+
+  claims      ExpenseItemClaim[]
+
+  @@index([expenseId, position])
+}
+
+/// Réclamation d'une portion d'un item par un membre.
+/// share = 1.0 par défaut (tout l'item) ; si plusieurs membres réclament
+/// le même item, on divise (ex: 0.5 chacun pour partage à 2).
+/// La somme des shares d'un même item DOIT être = 1.0 (sinon on rembourse
+/// le reste équitablement entre tous les claimants — règle fail-safe).
+model ExpenseItemClaim {
+  id     String      @id @default(uuid())
+  itemId String
+  item   ExpenseItem @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  userId String
+  user   User        @relation("ExpenseItemClaim", fields: [userId], references: [id], onDelete: Cascade)
+  /// Fraction réclamée (0 < share <= 1.0).
+  share  Decimal     @default(1) @db.Decimal(5, 4)
+  createdAt DateTime @default(now())
+
+  @@unique([itemId, userId])
+  @@index([userId])
 }
 
 /// Pièce jointe à une dépense (justificatif).

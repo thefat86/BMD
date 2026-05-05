@@ -12,9 +12,13 @@ import { useToast } from "../../../../lib/ui/toast";
 import { NotificationBell } from "../../../../lib/ui/notification-bell";
 import { ExpenseAttachments } from "../../../../lib/ui/expense-attachments";
 import { DebtTransferPanel } from "../../../../lib/ui/debt-transfer-panel";
+import {
+  ItemizedClaimsView,
+  ItemizedEditor,
+} from "../../../../lib/ui/itemized-expense";
 import { validateContact } from "../../../../lib/validators";
 
-type SplitMode = "EQUAL" | "UNEQUAL" | "PERCENTAGE";
+type SplitMode = "EQUAL" | "UNEQUAL" | "PERCENTAGE" | "ITEMIZED";
 
 interface Member {
   id: string;
@@ -125,7 +129,18 @@ export default function GroupDetailPage() {
   const [scanResult, setScanResult] = useState<{
     merchant: string | null;
     confidence: number;
+    itemsFound?: number;
   } | null>(null);
+
+  // Items draft (mode ITEMIZED) — pré-rempli par OCR ou saisi manuel
+  const [draftItems, setDraftItems] = useState<
+    Array<{
+      description: string;
+      quantity: number;
+      unitPrice: string;
+      totalPrice: string;
+    }>
+  >([]);
 
   // Split presets (M10)
   const [presets, setPresets] = useState<any[]>([]);
@@ -239,12 +254,31 @@ export default function GroupDetailPage() {
         }
         setParticipants(sel);
         setShares(sh);
+        // Si la dépense est ITEMIZED, charger les items existants
+        if (exp.splitMode === "ITEMIZED") {
+          api
+            .listExpenseItems(exp.id)
+            .then((items) => {
+              setDraftItems(
+                items.map((it: any) => ({
+                  description: it.description,
+                  quantity: parseFloat(it.quantity),
+                  unitPrice: parseFloat(it.unitPrice).toFixed(2),
+                  totalPrice: parseFloat(it.totalPrice).toFixed(2),
+                })),
+              );
+            })
+            .catch(() => setDraftItems([]));
+        } else {
+          setDraftItems([]);
+        }
       } else {
         // === MODE CREATION : tout le monde sélectionné par défaut ===
         const all: Record<string, boolean> = {};
         group.members.forEach((m: Member) => (all[m.user.id] = true));
         setParticipants(all);
         setShares({});
+        setDraftItems([]);
         setDescription("");
         setAmount("");
         const meIsMember = group.members.some(
@@ -279,6 +313,30 @@ export default function GroupDetailPage() {
       return {
         ok: true,
         msg: `${each} ${group?.defaultCurrency ?? "€"} × ${selectedIds.length}`,
+      };
+    }
+    if (splitMode === "ITEMIZED") {
+      // Pour ITEMIZED on accepte sans items (ils peuvent être ajoutés après)
+      // mais on warne si la somme des items ne correspond pas au total
+      if (draftItems.length === 0) {
+        return {
+          ok: true,
+          msg: "Aucun article — les membres pourront en ajouter ensuite",
+        };
+      }
+      const sum = draftItems.reduce(
+        (s, it) => s + parseFloat(it.totalPrice || "0"),
+        0,
+      );
+      if (Math.abs(sum - amt) > 0.02) {
+        return {
+          ok: false,
+          msg: `Articles ${sum.toFixed(2)} ≠ total ${amt.toFixed(2)}`,
+        };
+      }
+      return {
+        ok: true,
+        msg: `${draftItems.length} article${draftItems.length > 1 ? "s" : ""} ✓ ${sum.toFixed(2)}`,
       };
     }
     if (splitMode === "UNEQUAL") {
@@ -606,13 +664,36 @@ export default function GroupDetailPage() {
                 share: parseFloat(shares[id] || "0"),
               })),
       };
+      let expenseId: string;
       if (editingExpenseId) {
         // === MODE EDITION ===
         await api.updateExpense(editingExpenseId, payload);
+        expenseId = editingExpenseId;
         toast.success(`Dépense « ${description} » mise à jour`);
       } else {
-        await api.createExpense(groupId, payload);
+        const created = await api.createExpense(groupId, payload);
+        expenseId = created.id;
         toast.success(`Dépense « ${description} » enregistrée`);
+      }
+      // Si on est en mode ITEMIZED, on attache les items à la dépense.
+      // Ils sont stockés séparément des shares (qui restent en mode equal
+      // initial) et serviront à calculer la vraie répartition via les claims.
+      if (splitMode === "ITEMIZED" && draftItems.length > 0) {
+        try {
+          await api.setExpenseItems(
+            expenseId,
+            draftItems.filter(
+              (it) =>
+                it.description.trim() &&
+                parseFloat(it.totalPrice || "0") > 0,
+            ),
+          );
+        } catch (itErr) {
+          // On a déjà créé la dépense ; on signale juste l'échec items
+          toast.error(
+            `Dépense créée mais articles non sauvegardés : ${(itErr as Error).message}`,
+          );
+        }
       }
       setOpenPanel("none");
       setEditingExpenseId(null);
@@ -620,6 +701,7 @@ export default function GroupDetailPage() {
       setAmount("");
       setShares({});
       setScanResult(null);
+      setDraftItems([]);
       void refresh();
     } catch (e) {
       if (isUnauthorized(e)) {
@@ -667,9 +749,24 @@ export default function GroupDetailPage() {
       if (result.amount) setAmount(result.amount);
       if (result.merchant) setDescription(result.merchant);
       else if (result.category) setDescription(result.category);
+      // Si l'OCR a détecté des items, on bascule auto en mode ITEMIZED
+      // et on pré-remplit l'éditeur. L'utilisateur peut toujours retirer
+      // ou rajouter des lignes avant de valider.
+      if (result.items && result.items.length > 0) {
+        setDraftItems(
+          result.items.map((it) => ({
+            description: it.description,
+            quantity: it.quantity,
+            unitPrice: it.unitPrice,
+            totalPrice: it.totalPrice,
+          })),
+        );
+        setSplitMode("ITEMIZED");
+      }
       setScanResult({
         merchant: result.merchant,
         confidence: result.confidence,
+        itemsFound: result.items?.length ?? 0,
       });
     } catch (e) {
       if (isUnauthorized(e)) {
@@ -748,16 +845,36 @@ export default function GroupDetailPage() {
         </Link>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           <NotificationBell />
-          <span
+          <Link
+            href="/"
+            aria-label="Retour à l'accueil"
             style={{
-              fontFamily: "Cormorant Garamond, serif",
-              fontSize: 18,
-              color: "var(--cream)",
-              fontWeight: 700,
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 6,
+              textDecoration: "none",
+              color: "inherit",
             }}
           >
-            BMD<span style={{ color: "var(--saffron)" }}>·</span>
-          </span>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src="/bmd-logo.svg"
+              alt=""
+              width={28}
+              height={28}
+              style={{ flexShrink: 0 }}
+            />
+            <span
+              style={{
+                fontFamily: "Cormorant Garamond, serif",
+                fontSize: 18,
+                color: "var(--cream)",
+                fontWeight: 700,
+              }}
+            >
+              BMD<span style={{ color: "var(--saffron)" }}>·</span>
+            </span>
+          </Link>
         </div>
       </div>
 
@@ -1208,6 +1325,17 @@ export default function GroupDetailPage() {
               style={{ fontSize: 12 }}
             >
               ✓ Lu · confiance {Math.round(scanResult.confidence * 100)} %
+              {scanResult.itemsFound !== undefined && scanResult.itemsFound > 0 && (
+                <>
+                  {" · "}
+                  <strong>
+                    {scanResult.itemsFound} article
+                    {scanResult.itemsFound > 1 ? "s" : ""} détecté
+                    {scanResult.itemsFound > 1 ? "s" : ""}
+                  </strong>{" "}
+                  · mode "Articles" activé
+                </>
+              )}
             </div>
           )}
 
@@ -1258,6 +1386,7 @@ export default function GroupDetailPage() {
                 { v: "EQUAL", lbl: "🟰 Égal" },
                 { v: "UNEQUAL", lbl: "✏️ Parts" },
                 { v: "PERCENTAGE", lbl: "% Pourc." },
+                { v: "ITEMIZED", lbl: "🧾 Articles" },
               ].map((opt) => (
                 <button
                   key={opt.v}
@@ -1292,6 +1421,31 @@ export default function GroupDetailPage() {
               ))}
             </div>
           </div>
+
+          {/* Mode ITEMIZED : éditeur des articles */}
+          {splitMode === "ITEMIZED" && (
+            <div className="field">
+              <label>
+                Articles du ticket
+                <span
+                  style={{
+                    fontSize: 10,
+                    color: "var(--muted)",
+                    marginLeft: 6,
+                    fontWeight: 400,
+                  }}
+                >
+                  · les membres réclameront ce qu'ils ont consommé après création
+                </span>
+              </label>
+              <ItemizedEditor
+                items={draftItems}
+                onChange={setDraftItems}
+                totalAmount={amount || "0"}
+                currency={group.defaultCurrency}
+              />
+            </div>
+          )}
 
           <div className="field">
             <label>
@@ -1903,7 +2057,7 @@ export default function GroupDetailPage() {
                       )}
                     </div>
                   </div>
-                  {/* Expansion : pièces jointes (visibles par tous) */}
+                  {/* Expansion : items (mode ITEMIZED) + pièces jointes */}
                   {isExpanded && (
                     <div
                       style={{
@@ -1911,8 +2065,20 @@ export default function GroupDetailPage() {
                         background: "var(--overlay, rgba(255,255,255,0.03))",
                         borderRadius: "0 0 10px 10px",
                         borderTop: "1px dashed var(--line-soft, #e5e7eb)",
+                        display: "flex",
+                        flexDirection: "column",
+                        gap: 14,
                       }}
                     >
+                      {e.splitMode === "ITEMIZED" && (
+                        <ItemizedClaimsView
+                          expenseId={e.id}
+                          meId={me?.id}
+                          currency={
+                            e.currency ?? group.defaultCurrency ?? "EUR"
+                          }
+                        />
+                      )}
                       <ExpenseAttachments
                         expenseId={e.id}
                         canManage={canEdit}

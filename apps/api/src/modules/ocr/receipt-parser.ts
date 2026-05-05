@@ -19,6 +19,15 @@ export interface ParsedReceipt {
   category: string | null;
   confidence: number; // 0-1, indique la fiabilité
   rawText: string;
+  /// Lignes d'items détectées (pour le mode ITEMIZED)
+  items: ParsedItem[];
+}
+
+export interface ParsedItem {
+  description: string;
+  quantity: number;
+  unitPrice: string; // "12.34"
+  totalPrice: string;
 }
 
 // ============================================================
@@ -328,6 +337,7 @@ export function parseReceipt(rawText: string): ParsedReceipt {
   const merchant = extractMerchant(cleaned);
   const date = extractDate(cleaned);
   const category = guessCategory(merchant, cleaned);
+  const items = extractItems(cleaned, currency, amount);
 
   // Confiance globale = moyenne pondérée (le montant compte le plus)
   let globalConfidence = confidence * 0.6;
@@ -343,5 +353,127 @@ export function parseReceipt(rawText: string): ParsedReceipt {
     category,
     confidence: Math.min(1, globalConfidence),
     rawText: cleaned,
+    items,
   };
+}
+
+/**
+ * Extrait les lignes d'items d'un ticket à partir du texte OCR.
+ *
+ * Heuristiques :
+ *  1. On scanne ligne par ligne du texte OCR
+ *  2. Une ligne d'item ressemble à : "<description...> <prix> [€/EUR/USD]"
+ *     ou "<qty> x <description> <prix>"
+ *     ou "<description> <prix>"
+ *  3. On exclut les lignes contenant TVA / TOTAL / SOUS-TOTAL / SUBTOTAL /
+ *     MERCI / THANK YOU / DATE / N° / TICKET / RECEIPT etc.
+ *  4. La somme totale des items détectés doit être cohérente avec amount
+ *     (à ±20% près) sinon on rejette les items (probablement des faux positifs)
+ *
+ * Cette fonction est volontairement conservative : il vaut mieux retourner
+ * 0 item qu'un mauvais item. L'utilisateur peut toujours saisir manuellement.
+ */
+export function extractItems(
+  text: string,
+  currency: string,
+  totalAmount: string | null,
+): ParsedItem[] {
+  const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+
+  // Mots-clés à exclure (insensibles à la casse) — ce ne sont pas des items
+  const EXCLUDE_PATTERNS = [
+    /\btva\b/i,
+    /\bvat\b/i,
+    /\btotal\b/i,
+    /\bsous[\s-]?total\b/i,
+    /\bsubtotal\b/i,
+    /\bmerci\b/i,
+    /\bthank\s*you\b/i,
+    /\bdate\b/i,
+    /\bn[°o]\s*\d/i,
+    /\bticket\b/i,
+    /\breceipt\b/i,
+    /\bcaisse\b/i,
+    /\bcashier\b/i,
+    /\bcb\b/i,
+    /\b(?:carte|card|espèces?|cash|cheque|check)\b/i,
+    /\bmonnaie\b/i,
+    /\bchange\b/i,
+    /\bremise\b/i,
+    /\bdiscount\b/i,
+    /\bservice\b/i,
+    /\bpourboire\b/i,
+    /\btip\b/i,
+    /^[-=*~_]{3,}$/,
+    /^\d+\s*[/-]\s*\d+/,
+    /^[\d:]+\s*$/,
+  ];
+
+  // Regex pour capturer prix en fin de ligne (avec ou sans symbole)
+  // Ex: "Café latte ........ 4,50 €" ou "Pizza Margherita 12.50"
+  const PRICE_AT_END = /(.+?)[\s.…_·-]{2,}([0-9]+[,.]\d{2})\s*[€$£¥]?\s*$/;
+  const PRICE_NO_DOTS = /^(.+?)\s+([0-9]+[,.]\d{2})\s*[€$£¥]?\s*$/;
+  // Quantité optionnelle au début : "2 x Coca 5.00" ou "2x Coca 5.00"
+  const QTY_PREFIX = /^(\d+)\s*[x×*]\s*(.+)$/i;
+
+  const items: ParsedItem[] = [];
+
+  for (const line of lines) {
+    if (line.length < 3 || line.length > 120) continue;
+    if (EXCLUDE_PATTERNS.some((p) => p.test(line))) continue;
+    // Si la ligne ne contient AUCUN chiffre, ce n'est pas un item
+    if (!/\d/.test(line)) continue;
+
+    let m = line.match(PRICE_AT_END);
+    if (!m) m = line.match(PRICE_NO_DOTS);
+    if (!m) continue;
+
+    let description = m[1].trim();
+    const priceStr = m[2].replace(",", ".");
+    const totalPrice = parseFloat(priceStr);
+    if (!Number.isFinite(totalPrice) || totalPrice <= 0 || totalPrice > 9999) {
+      continue;
+    }
+
+    // Détecter quantité en préfixe
+    let quantity = 1;
+    const qm = description.match(QTY_PREFIX);
+    if (qm) {
+      const q = parseInt(qm[1], 10);
+      if (q > 0 && q <= 99) {
+        quantity = q;
+        description = qm[2].trim();
+      }
+    }
+
+    // Description finale : on enlève les caractères de ponctuation finaux
+    description = description.replace(/[.…_·\-\s]+$/, "").trim();
+    if (!description || description.length < 2) continue;
+    // On évite que la description contienne juste des chiffres
+    if (/^\d+$/.test(description)) continue;
+
+    const unitPrice = (totalPrice / quantity).toFixed(2);
+    items.push({
+      description,
+      quantity,
+      unitPrice,
+      totalPrice: totalPrice.toFixed(2),
+    });
+  }
+
+  // Sanity check : si la somme des items détectés dépasse 200% du total
+  // ou est inférieure à 30% du total, on considère qu'on a trop de bruit
+  // et on retourne une liste vide (l'utilisateur saisira à la main).
+  if (totalAmount && items.length > 0) {
+    const total = parseFloat(totalAmount);
+    const itemsSum = items.reduce(
+      (s, it) => s + parseFloat(it.totalPrice),
+      0,
+    );
+    if (total > 0 && (itemsSum > total * 2 || itemsSum < total * 0.3)) {
+      return [];
+    }
+  }
+
+  return items;
 }

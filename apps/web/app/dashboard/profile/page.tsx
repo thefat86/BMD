@@ -9,6 +9,7 @@ import {
   isUnauthorized,
 } from "../../../lib/api-client";
 import { BottomNav } from "../../../lib/ui/bottom-nav";
+import { TwoFactorBlock } from "../../../lib/ui/two-factor-block";
 
 const CURRENCIES = [
   { v: "EUR", lbl: "EUR · Euro" },
@@ -612,6 +613,9 @@ export default function ProfilePage() {
           partagées. Tu peux les exporter ou les supprimer à tout moment.
         </p>
       </div>
+
+      {/* === 2FA TOTP (spec §7.5) === */}
+      <TwoFactorBlock />
 
       {/* === Sessions actives (spec §7.5) === */}
       <SessionsBlock />

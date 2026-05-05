@@ -7,6 +7,11 @@ import { verifyAndIssue } from "./auth.service.js";
 import { revokeSession } from "./jwt.service.js";
 import { Errors } from "../../lib/errors.js";
 import { validateContact } from "../../lib/validators.js";
+import {
+  buildOtpauthUri,
+  generateTotpSecret,
+  verifyTotpCode,
+} from "../../lib/totp.js";
 
 /**
  * Refine Zod : on appelle nos validators partagés (E.164, RFC 5322 simplifié)
@@ -438,6 +443,149 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
         });
       }
       return reply.code(204).send();
+    },
+  );
+
+  /* =================================================================
+   * 2FA TOTP (spec §7.5)
+   * =================================================================
+   * Workflow :
+   *  1. POST /auth/2fa/setup → génère un secret + URI otpauth, RENVOIE-LE
+   *     (mais ne l'enregistre pas tant que l'utilisateur n'a pas confirmé)
+   *  2. L'utilisateur scanne le QR avec son app TOTP (Google Auth, etc.)
+   *  3. POST /auth/2fa/enable {secret, code} → vérifie le code et active
+   *  4. POST /auth/2fa/disable {code} → désactive (requiert code)
+   *
+   * Une fois activée : à la connexion, après l'OTP, l'API renvoie
+   *   { needsTwoFactor: true, tempToken } et l'utilisateur doit
+   *   POST /auth/2fa/verify-login {tempToken, code} pour finaliser.
+   *
+   * Note : pour le MVP, on STOCKE le secret en clair dans la DB.
+   * En production, à chiffrer avec une clé KMS (variable env).
+   */
+
+  /**
+   * POST /auth/2fa/setup
+   * Génère un nouveau secret et retourne le QR (URI otpauth) à scanner.
+   * Le secret n'est PAS persisté tant que /enable n'est pas appelé.
+   */
+  app.post(
+    "/auth/2fa/setup",
+    { onRequest: [app.authenticate] },
+    async (req) => {
+      const user = await prisma.user.findUniqueOrThrow({
+        where: { id: req.user.sub },
+        select: {
+          displayName: true,
+          twoFactorEnabledAt: true,
+          contacts: {
+            where: { isPrimary: true },
+            select: { type: true, value: true },
+            take: 1,
+          },
+        },
+      });
+      if (user.twoFactorEnabledAt) {
+        throw Errors.badRequest(
+          "2FA déjà activée. Désactive-la d'abord pour générer un nouveau secret.",
+        );
+      }
+      const secret = generateTotpSecret();
+      // Le label est l'identifiant principal (téléphone ou email)
+      const label = user.contacts[0]?.value ?? user.displayName;
+      const uri = buildOtpauthUri({
+        label,
+        issuer: "BMD",
+        secret,
+      });
+      // On retourne le secret en clair pour que le frontend l'affiche
+      // en backup manuel + génère le QR. À NE JAMAIS faire fuiter en log.
+      return { secret, uri };
+    },
+  );
+
+  /**
+   * POST /auth/2fa/enable
+   * Body: { secret, code } — vérifie le code, active 2FA si OK.
+   */
+  app.post(
+    "/auth/2fa/enable",
+    { onRequest: [app.authenticate] },
+    async (req, reply) => {
+      const body = z
+        .object({
+          secret: z.string().min(16).max(64),
+          code: z.string().regex(/^\d{6}$/),
+        })
+        .parse(req.body);
+      if (!verifyTotpCode(body.secret, body.code)) {
+        return reply.code(400).send({
+          error: "invalid_code",
+          message: "Code TOTP invalide. Vérifie l'horloge de ton téléphone.",
+        });
+      }
+      await prisma.user.update({
+        where: { id: req.user.sub },
+        data: {
+          twoFactorSecret: body.secret,
+          twoFactorEnabledAt: new Date(),
+        },
+      });
+      return { enabled: true };
+    },
+  );
+
+  /**
+   * POST /auth/2fa/disable
+   * Body: { code } — désactive 2FA après vérification du code.
+   */
+  app.post(
+    "/auth/2fa/disable",
+    { onRequest: [app.authenticate] },
+    async (req, reply) => {
+      const body = z
+        .object({ code: z.string().regex(/^\d{6}$/) })
+        .parse(req.body);
+      const user = await prisma.user.findUniqueOrThrow({
+        where: { id: req.user.sub },
+        select: { twoFactorSecret: true },
+      });
+      if (!user.twoFactorSecret) {
+        throw Errors.badRequest("2FA non activée");
+      }
+      if (!verifyTotpCode(user.twoFactorSecret, body.code)) {
+        return reply.code(400).send({
+          error: "invalid_code",
+          message: "Code TOTP invalide",
+        });
+      }
+      await prisma.user.update({
+        where: { id: req.user.sub },
+        data: {
+          twoFactorSecret: null,
+          twoFactorEnabledAt: null,
+        },
+      });
+      return { disabled: true };
+    },
+  );
+
+  /**
+   * GET /auth/2fa/status
+   * Retourne si la 2FA est active pour l'utilisateur courant.
+   */
+  app.get(
+    "/auth/2fa/status",
+    { onRequest: [app.authenticate] },
+    async (req) => {
+      const user = await prisma.user.findUniqueOrThrow({
+        where: { id: req.user.sub },
+        select: { twoFactorEnabledAt: true },
+      });
+      return {
+        enabled: user.twoFactorEnabledAt !== null,
+        enabledAt: user.twoFactorEnabledAt?.toISOString() ?? null,
+      };
     },
   );
 }

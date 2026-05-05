@@ -17,7 +17,17 @@
  * traduire chaque chaîne, ajouter la clé dans `LOCALES`.
  */
 
-export const LOCALES = ["fr", "en", "es", "pt", "ar", "sw"] as const;
+export const LOCALES = [
+  "fr",
+  "en",
+  "es",
+  "pt",
+  "ar",
+  "sw",
+  "zh",
+  "wo",
+  "am",
+] as const;
 export type Locale = (typeof LOCALES)[number];
 
 export const LOCALE_NAMES: Record<Locale, string> = {
@@ -27,6 +37,9 @@ export const LOCALE_NAMES: Record<Locale, string> = {
   pt: "Português",
   ar: "العربية",
   sw: "Kiswahili",
+  zh: "中文",
+  wo: "Wolof",
+  am: "አማርኛ",
 };
 
 export const LOCALE_FLAGS: Record<Locale, string> = {
@@ -36,6 +49,9 @@ export const LOCALE_FLAGS: Record<Locale, string> = {
   pt: "🇵🇹",
   ar: "🇲🇦",
   sw: "🇰🇪",
+  zh: "🇨🇳",
+  wo: "🇸🇳",
+  am: "🇪🇹",
 };
 
 interface MarketingStrings {
@@ -864,6 +880,234 @@ export const T: Record<Locale, MarketingStrings> = {
       privacy: "Faragha",
       terms: "Masharti",
       contact: "Mawasiliano",
+    },
+  },
+  // 中文 — pour les diasporas chinoises (Hui / 標會)
+  zh: {
+    meta: {
+      title: "BMD · 共享金钱,无忧无虑",
+      description:
+        "BMD 帮助非洲和华人侨民管理标会、合租、旅行和团体活动 — 透明、公平、安心。",
+    },
+    nav: {
+      features: "功能",
+      howItWorks: "工作原理",
+      pricing: "价格",
+      login: "登录",
+      signUp: "注册",
+    },
+    hero: {
+      tagline: "Back Mes Do · 侨民",
+      headline: "共享金钱。守护友谊。",
+      subhead:
+        "标会、合租、旅行、婚礼、教区、俱乐部:BMD 计算、简化和追踪每一笔费用,让没有人感到吃亏。",
+      ctaPrimary: "免费开始",
+      ctaSecondary: "观看演示",
+    },
+    features: {
+      title: "你需要的一切,无多余",
+      items: [
+        { icon: "🪙", title: "完整的标会", body: "周期、受益人顺序、可调整日期、确认收据、多年历史。" },
+        { icon: "💸", title: "共享支出", body: "平均、定额或百分比。所有成员可见的照片/PDF 收据。" },
+        { icon: "↔", title: "债务交换", body: "在三方验证下抵消或转移债务。" },
+        { icon: "🔔", title: "完整通知", body: "每个相关事件都会触发通知。反垃圾邮件设计。" },
+        { icon: "📷", title: "收据 OCR", body: "扫描照片:金额、商家、日期自动检测。" },
+        { icon: "🛡", title: "GDPR 与隐私", body: "无批量地址簿读取。明确同意。" },
+      ],
+    },
+    howItWorks: {
+      title: "三步搞定",
+      steps: [
+        { num: "1", title: "创建你的群组", body: "标会、合租、旅行、婚礼…选择类型和默认货币。" },
+        { num: "2", title: "邀请你的圈子", body: "可分享链接、QR 码或电话联系人(经你同意)。" },
+        { num: "3", title: "安心生活", body: "添加费用、贡献、交换。BMD 计算余额并建议最优结算。" },
+      ],
+    },
+    pricing: {
+      title: "大多数人免费",
+      free: {
+        name: "免费",
+        price: "¥0",
+        features: ["最多 3 个活跃群组", "无限标会、费用、交换", "PDF/照片收据", "完整通知"],
+      },
+      pro: {
+        name: "Pro",
+        price: "¥29 / 月",
+        features: ["无限群组", "详细会计导出", "10 年历史", "优先支持"],
+        cta: "即将推出",
+      },
+    },
+    faq: {
+      title: "常见问题",
+      items: [
+        { q: "BMD 是银行吗?", a: "不是。BMD 是共享管理工具。付款通过你的常用渠道进行。" },
+        { q: "我的数据安全吗?", a: "是的。我们加密通信,不会未经明确同意读取你的地址簿。" },
+        { q: "BMD 标会如何运作?", a: "你创建群组,设置金额和频率。每一轮,受益人选择月内的具体日期,所有人确认。" },
+      ],
+    },
+    cta: {
+      headline: "立即开始",
+      body: "免费。无信用卡。一分钟内注册。",
+      button: "创建我的账户",
+    },
+    footer: {
+      tagline: "共享金钱。守护友谊。",
+      rights: "保留所有权利。",
+      privacy: "隐私",
+      terms: "条款",
+      contact: "联系",
+    },
+  },
+  // Wolof — pour la diaspora sénégalaise (UEMOA, Wave dominant)
+  wo: {
+    meta: {
+      title: "BMD · Xaalis bu nu bokk, doxalin",
+      description:
+        "BMD dafay dimbali xeet yi (diaspora yi) ngir téye seeni tontine, dëkkuwaay, tukki, tay ay xewe.",
+    },
+    nav: {
+      features: "Sàrta yi",
+      howItWorks: "Naka la liggéeyee",
+      pricing: "Njëg",
+      login: "Dugg",
+      signUp: "Bind sa kont",
+    },
+    hero: {
+      tagline: "Back Mes Do · Diaspora",
+      headline: "Xaalis bu nu bokk. Mbokk biñ aar.",
+      subhead:
+        "Tontine, dëkkuwaay, tukki, séyu, parouwas, klub : BMD lay nataal, taxawal, te di topp lépp ñu yor xaalis.",
+      ctaPrimary: "Tàmbali ci dara",
+      ctaSecondary: "Gis demo",
+    },
+    features: {
+      title: "Lépp loo soxla, lu doy rekk",
+      items: [
+        { icon: "🪙", title: "Tontine bu mat", body: "Yoonu jox, tànneef bu nu am, bés yi nu mën a soppi, ay tan." },
+        { icon: "💸", title: "Xaalis bu nu bokk", body: "Yamoo, way wala portion. Reseepi yi nit ñépp gis." },
+        { icon: "↔", title: "Bayyi/jox bor", body: "Ku am bor, mën nañ ko jox keneen, ñépp dañ koy nangu." },
+        { icon: "🔔", title: "Yónne yu mat", body: "Lu xew lépp lu la jëm, dañ la koy yónne. Yónne yu jaaxle." },
+        { icon: "📷", title: "OCR tikket", body: "Foto rek, BMD bind njëg, jëkkër, jamono." },
+        { icon: "🛡", title: "GDPR · Sutura", body: "Du jël sa list seetaay yi yepp." },
+      ],
+    },
+    howItWorks: {
+      title: "Ci ñetti taatu",
+      steps: [
+        { num: "1", title: "Sos sa kër", body: "Tontine, dëkkuwaay, tukki…tànn xeet bi ak xaalis bi." },
+        { num: "2", title: "Wokoo ay xarit", body: "Lien, QR wala numero — bu nu yónne." },
+        { num: "3", title: "Dund ci jàmm", body: "Bind sa joxe, BMD luy waññi te wax kii lay laaj." },
+      ],
+    },
+    pricing: {
+      title: "Lu ëpp neexal ci nit ñi",
+      free: {
+        name: "Free",
+        price: "0 F",
+        features: ["3 kër yu liggéey", "Tontine bu àpp", "Reseepi PDF/foto", "Yónne yu mat"],
+      },
+      pro: {
+        name: "Pro",
+        price: "1 950 F / weer",
+        features: ["Kër bu àpp", "Bind komptable", "10 at istoryaa", "Ndimbal jëkk"],
+        cta: "Bët",
+      },
+    },
+    faq: {
+      title: "Laaj yi ñu duggal",
+      items: [
+        { q: "Ndax BMD bànk lay?", a: "Déédéet. BMD jumtukaay la ngir doxal seeni xaalis. Fee fii nga jëfandikoo Wave wala Orange." },
+        { q: "Ndax sama mbind aar nañ?", a: "Waaw. Mbind yi nu yor sutura lañu am. Du jël sa jëfandiku bu la ko yónnewul." },
+        { q: "Naka tontine BMD doxe?", a: "Sos kër bi, defar njëg ak tànneef. Ci tan bu nekk, bu mu jox xaalis." },
+      ],
+    },
+    cta: {
+      headline: "Tàmbali fii",
+      body: "Du jëf dara. Bind sa kont ci ñaari simili.",
+      button: "Bind sama kont",
+    },
+    footer: {
+      tagline: "Xaalis bu nu bokk. Mbokk biñ aar.",
+      rights: "Yonn yi yepp dañ leen aar.",
+      privacy: "Sutura",
+      terms: "Sàrta yi",
+      contact: "Jokkoo",
+    },
+  },
+  // አማርኛ — pour la diaspora éthiopienne (TeleBirr, US/CA)
+  am: {
+    meta: {
+      title: "BMD · የተጋራ ገንዘብ ያለ ችግር",
+      description:
+        "BMD የአፍሪካ ስደተኞችን ቱንቲንስ፣ የጋራ ኑሮ፣ ጉዞ እና የቡድን ዝግጅቶችን እንዲያስተዳድሩ ይረዳል።",
+    },
+    nav: {
+      features: "ባህሪያት",
+      howItWorks: "እንዴት ይሰራል",
+      pricing: "ዋጋ",
+      login: "ግባ",
+      signUp: "ተመዝገብ",
+    },
+    hero: {
+      tagline: "Back Mes Do · ስደተኞች",
+      headline: "የተጋራ ገንዘብ። የተጠበቀ ጓደኝነት።",
+      subhead:
+        "ቱንቲንስ፣ የጋራ ቤት፣ ጉዞ፣ ሰርግ፣ ቤተ ክርስቲያን፣ ክለቦች፡ BMD ሁሉንም ወጪዎች ያሰላል፣ ያቃልላል እና ይከታተላል።",
+      ctaPrimary: "ነፃ ጀምር",
+      ctaSecondary: "ማሳያ ይመልከቱ",
+    },
+    features: {
+      title: "የሚያስፈልግዎት ሁሉ፣ ሌላ ነገር የለም",
+      items: [
+        { icon: "🪙", title: "ሙሉ ቱንቲንስ", body: "ዙር፣ የተጠቃሚዎች ቅደም ተከተል፣ ሊስተካከል የሚችል ቀኖች።" },
+        { icon: "💸", title: "የተጋሩ ወጪዎች", body: "እኩል፣ በከፊል ወይም በመቶኛ። ሁሉም አባላት የሚታዩ ደረሰኞች።" },
+        { icon: "↔", title: "የዕዳ መለዋወጥ", body: "በሶስቱ ወገኖች ማረጋገጫ ዕዳን ማቃለል ወይም ማስተላለፍ።" },
+        { icon: "🔔", title: "ሙሉ ማሳወቂያዎች", body: "የሚመለከትዎት ክስተት ሁሉ ማሳወቂያ ይፈጥራል።" },
+        { icon: "📷", title: "የደረሰኝ OCR", body: "ፎቶ ይቅረጹ፡ መጠን፣ ነጋዴ፣ ቀን በራስ-ሰር ይታወቃል።" },
+        { icon: "🛡", title: "GDPR እና ግላዊነት", body: "የአድራሻ ደብተር በብዛት አይነበብም። ግልጽ ስምምነት።" },
+      ],
+    },
+    howItWorks: {
+      title: "በሶስት ደረጃ",
+      steps: [
+        { num: "1", title: "ቡድንዎን ይፍጠሩ", body: "ቱንቲን፣ የጋራ ቤት፣ ጉዞ…ዓይነት እና ምንዛሬ ይምረጡ።" },
+        { num: "2", title: "ጓደኞችዎን ይጋብዙ", body: "ሊጋራ የሚችል አገናኝ፣ QR ኮድ ወይም የስልክ እውቂያዎች።" },
+        { num: "3", title: "በሰላም ይኑሩ", body: "ወጪዎችን፣ መዋጮዎችን ይጨምሩ። BMD ቀሪዎችን ያሰላል።" },
+      ],
+    },
+    pricing: {
+      title: "ለአብዛኛው ሰው ነፃ",
+      free: {
+        name: "ነፃ",
+        price: "$0",
+        features: ["እስከ 3 ንቁ ቡድኖች", "ያልተገደበ ቱንቲን፣ ወጪ", "PDF/ፎቶ ደረሰኞች", "ሙሉ ማሳወቂያዎች"],
+      },
+      pro: {
+        name: "Pro",
+        price: "$4.99 / ወር",
+        features: ["ያልተገደበ ቡድኖች", "ዝርዝር የሂሳብ ኤክስፖርት", "የ10 ዓመት ታሪክ", "የቅድሚያ ድጋፍ"],
+        cta: "በቅርብ",
+      },
+    },
+    faq: {
+      title: "ተደጋጋሚ ጥያቄዎች",
+      items: [
+        { q: "BMD ባንክ ነው?", a: "አይደለም። BMD የጋራ አስተዳደር መሳሪያ ነው። ክፍያዎች በመደበኛ መንገዶችዎ ይከናወናሉ።" },
+        { q: "የእኔ መረጃ ደህንነቱ የተጠበቀ ነው?", a: "አዎ። ግንኙነቶችን እናመስጥራለን፣ ያለ ግልጽ ስምምነት የአድራሻ ደብተርዎን አንደነግርም።" },
+        { q: "የBMD ቱንቲን እንዴት ይሰራል?", a: "ቡድኑን ይፍጠሩ፣ መጠን እና ድግግሞሽ ያዘጋጁ። በእያንዳንዱ ዙር፣ ተጠቃሚው ትክክለኛ ቀን ይመርጣል።" },
+      ],
+    },
+    cta: {
+      headline: "አሁን ይጀምሩ",
+      body: "ነፃ። ካርድ የለም። ከአንድ ደቂቃ ባነሰ ጊዜ ውስጥ ይመዝገቡ።",
+      button: "መለያዬን ፍጠር",
+    },
+    footer: {
+      tagline: "የተጋራ ገንዘብ። የተጠበቀ ጓደኝነት።",
+      rights: "ሁሉም መብቶች የተጠበቁ ናቸው።",
+      privacy: "ግላዊነት",
+      terms: "ውሎች",
+      contact: "አግኙን",
     },
   },
 };

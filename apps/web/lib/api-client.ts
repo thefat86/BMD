@@ -227,6 +227,29 @@ export const api = {
   revokeSession: (sessionId: string) =>
     request<void>("DELETE", `/auth/sessions/${sessionId}`),
 
+  // ============ 2FA TOTP (spec §7.5) ============
+
+  twoFactorStatus: () =>
+    request<{ enabled: boolean; enabledAt: string | null }>(
+      "GET",
+      "/auth/2fa/status",
+    ),
+
+  /** Génère un secret + URI otpauth (pas encore persisté). */
+  twoFactorSetup: () =>
+    request<{ secret: string; uri: string }>("POST", "/auth/2fa/setup"),
+
+  /** Vérifie le 1er code et active 2FA. */
+  twoFactorEnable: (secret: string, code: string) =>
+    request<{ enabled: boolean }>("POST", "/auth/2fa/enable", {
+      secret,
+      code,
+    }),
+
+  /** Désactive 2FA (requiert code TOTP). */
+  twoFactorDisable: (code: string) =>
+    request<{ disabled: boolean }>("POST", "/auth/2fa/disable", { code }),
+
   listGroups: () =>
     request<
       Array<{

@@ -49,6 +49,10 @@ model User {
   planCode               String                 @default("FREE")
   /// Tonalité des rappels (spec §3.8) : sympa | ferme | humour | pro
   reminderTone           String                 @default("sympa")
+  /// Secret TOTP base32 si 2FA activée (spec §7.5). Null si désactivée.
+  twoFactorSecret        String?
+  /// Date d'activation 2FA — null = pas activée
+  twoFactorEnabledAt     DateTime?
 }
 
 enum ContactType {

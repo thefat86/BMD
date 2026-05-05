@@ -1,6 +1,10 @@
 import { GroupType, MemberRole, Prisma } from "@prisma/client";
 import { prisma } from "../../lib/db.js";
 import { Errors } from "../../lib/errors.js";
+import {
+  notifyGroupMembers,
+  notifyOne,
+} from "../notifications/notifications.service.js";
 
 export interface CreateGroupInput {
   name: string;
@@ -124,7 +128,7 @@ export async function addMemberByContact(input: {
 
   // Idempotent : ne pas re-créer si déjà membre
   try {
-    return await prisma.groupMember.create({
+    const created = await prisma.groupMember.create({
       data: {
         groupId: input.groupId,
         userId,
@@ -134,6 +138,34 @@ export async function addMemberByContact(input: {
         user: { select: { id: true, displayName: true, avatar: true } },
       },
     });
+
+    // Notification au nouvel invité (s'il a déjà un compte vérifié)
+    const group = await prisma.group.findUnique({
+      where: { id: input.groupId },
+      select: { name: true },
+    });
+    if (group) {
+      void notifyOne(userId, {
+        kind: "GROUP_INVITED",
+        title: `Tu as été ajouté à ${group.name}`,
+        body: "Ouvre l'app pour voir les détails du groupe.",
+        link: `/dashboard/groups/${input.groupId}`,
+        payload: { groupId: input.groupId },
+      });
+      // Notification aux autres membres existants
+      void notifyGroupMembers({
+        groupId: input.groupId,
+        excludeUserId: userId, // n'inclus pas le nouveau
+        notification: {
+          kind: "MEMBER_JOINED",
+          title: `${created.user.displayName} a rejoint ${group.name}`,
+          link: `/dashboard/groups/${input.groupId}`,
+          payload: { groupId: input.groupId, memberId: created.id },
+        },
+      });
+    }
+
+    return created;
   } catch (e) {
     if (
       e instanceof Prisma.PrismaClientKnownRequestError &&
@@ -529,6 +561,31 @@ export async function joinGroupViaToken(input: {
     kind: "MEMBER_JOINED",
     payload: { via: "invite_link" },
   });
+
+  // Notif aux membres déjà présents du nouveau venu
+  const [actor, group] = await Promise.all([
+    prisma.user.findUnique({
+      where: { id: input.actorUserId },
+      select: { displayName: true },
+    }),
+    prisma.group.findUnique({
+      where: { id: t.groupId },
+      select: { name: true },
+    }),
+  ]);
+  if (actor && group) {
+    void notifyGroupMembers({
+      groupId: t.groupId,
+      excludeUserId: input.actorUserId,
+      notification: {
+        kind: "MEMBER_JOINED",
+        title: `${actor.displayName} a rejoint ${group.name}`,
+        body: "Via un lien d'invitation",
+        link: `/dashboard/groups/${t.groupId}`,
+        payload: { groupId: t.groupId },
+      },
+    });
+  }
 
   return { groupId: t.groupId, alreadyMember: false };
 }

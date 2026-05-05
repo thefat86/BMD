@@ -37,6 +37,8 @@ model User {
   debtSwapParticipations DebtSwapParticipant[]
   inviteTokensCreated    GroupInviteToken[]     @relation("InviteTokensCreatedBy")
   activitiesGenerated    ActivityLog[]          @relation("ActivityActor")
+  attachmentsUploaded    ExpenseAttachment[]    @relation("AttachmentUploader")
+  notifications          Notification[]
 }
 
 enum ContactType {
@@ -162,9 +164,35 @@ model Expense {
   occurredAt  DateTime  @default(now())
   createdAt   DateTime  @default(now())
 
-  shares ExpenseShare[]
+  shares      ExpenseShare[]
+  attachments ExpenseAttachment[]
 
   @@index([groupId, occurredAt])
+}
+
+/**
+ * Pièce jointe à une dépense (justificatif).
+ * Tous les membres du groupe peuvent VOIR et TÉLÉCHARGER les pièces jointes
+ * (transparence). Seul le payeur (créateur) ou un admin du groupe peut
+ * ajouter ou supprimer une pièce jointe.
+ *
+ * Le fichier physique est stocké en local sur le disque de l'API (champ
+ * storageKey = chemin relatif à apps/api/uploads/). En prod on pourra
+ * basculer vers S3/R2 sans changer le schéma.
+ */
+model ExpenseAttachment {
+  id           String   @id @default(uuid())
+  expenseId    String
+  expense      Expense  @relation(fields: [expenseId], references: [id], onDelete: Cascade)
+  uploadedById String
+  uploadedBy   User     @relation("AttachmentUploader", fields: [uploadedById], references: [id])
+  fileName     String   // nom original (pour l'affichage et le download)
+  mimeType     String
+  sizeBytes    Int
+  storageKey   String   // chemin relatif disque (uploads/<uuid>.<ext>)
+  createdAt    DateTime @default(now())
+
+  @@index([expenseId])
 }
 
 model ExpenseShare {
@@ -427,4 +455,60 @@ model ActivityLog {
   createdAt DateTime     @default(now())
 
   @@index([groupId, createdAt])
+}
+
+// ============================================================
+// NOTIFICATIONS — informer les membres des événements impactants
+// ============================================================
+//
+// Chaque membre d'un groupe reçoit des notifications in-app pour les
+// événements qui le concernent : invitation, dépense ajoutée, swap
+// proposé, tontine activée, etc.
+//
+// Stratégie anti-spam :
+//  - Une seule notification par événement (pas de doublons)
+//  - L'utilisateur ne reçoit pas de notif pour ses propres actions
+//  - Possibilité d'ignorer/marquer-lu en bulk
+//  - link = URL relative à ouvrir au clic ("/dashboard/groups/xyz")
+//
+
+enum NotificationKind {
+  GROUP_INVITED            // tu as été ajouté à un groupe
+  MEMBER_JOINED            // un nouveau membre a rejoint un groupe dont tu fais partie
+  EXPENSE_ADDED            // nouvelle dépense dans un groupe dont tu fais partie
+  EXPENSE_UPDATED          // une dépense où tu es participant a changé
+  EXPENSE_DELETED          // une dépense où tu étais participant a été supprimée
+  SETTLEMENT_PROPOSED      // un règlement t'est demandé
+  SETTLEMENT_CONFIRMED     // un règlement que tu as fait a été confirmé
+  TONTINE_CREATED          // une tontine a démarré dans un groupe
+  TONTINE_ACTIVATED        // l'ordre des bénéficiaires est validé
+  TONTINE_TURN_DUE         // c'est ton tour de cotiser
+  TONTINE_TURN_DISTRIBUTED // tu as reçu ton tour
+  TONTINE_DATE_CHANGED     // un membre a fixé sa date dans le mois
+  SWAP_PROPOSED            // un swap te concerne et attend ta validation
+  SWAP_ACCEPTED            // un swap auquel tu participais a été accepté par tous
+  SWAP_REJECTED            // un swap a été refusé
+  DEBT_TRANSFER_PROPOSED   // un transfert de dette bilateral t'attend
+  DEBT_TRANSFER_ACCEPTED   // un transfert de dette a été accepté
+  DEBT_TRANSFER_REJECTED   // un transfert de dette a été refusé
+  ROLE_CHANGED             // ton rôle dans un groupe a changé
+  GROUP_DELETED            // un groupe dont tu faisais partie a été supprimé
+  ATTACHMENT_ADDED         // une pièce jointe a été ajoutée à une dépense
+}
+
+model Notification {
+  id        String           @id @default(uuid())
+  userId    String
+  user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  kind      NotificationKind
+  title     String           // texte court visible dans la liste
+  body      String?          // texte plus long, affiché en expand
+  link      String?          // route relative à ouvrir au clic
+  /** Contexte structuré (ex: groupId, expenseId, actorName) pour rendu riche */
+  payload   Json?
+  readAt    DateTime?
+  createdAt DateTime         @default(now())
+
+  @@index([userId, readAt])
+  @@index([userId, createdAt])
 }

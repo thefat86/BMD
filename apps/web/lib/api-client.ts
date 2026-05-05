@@ -548,4 +548,131 @@ export const api = {
         id: string;
       }>
     >("GET", "/admin/activity"),
+
+  // ============ NOTIFICATIONS ============
+
+  /** Liste les notifications de l'utilisateur connecté. */
+  listNotifications: (unreadOnly = false, limit = 50) =>
+    request<
+      Array<{
+        id: string;
+        kind: string;
+        title: string;
+        body: string | null;
+        link: string | null;
+        payload: any;
+        readAt: string | null;
+        createdAt: string;
+      }>
+    >(
+      "GET",
+      `/notifications?${unreadOnly ? "unread=1&" : ""}limit=${limit}`,
+    ),
+
+  /** Compte des notifications non-lues (pour le badge). */
+  unreadNotificationsCount: () =>
+    request<{ count: number }>("GET", "/notifications/unread-count"),
+
+  markNotificationRead: (id: string) =>
+    request<{ updated: number }>("POST", `/notifications/${id}/read`),
+
+  markAllNotificationsRead: () =>
+    request<{ updated: number }>("POST", "/notifications/read-all"),
+
+  deleteNotification: (id: string) =>
+    request<void>("DELETE", `/notifications/${id}`),
+
+  // ============ EXPENSE ATTACHMENTS ============
+
+  /**
+   * Liste les pièces jointes d'une dépense (visibles par tous les membres).
+   */
+  listAttachments: (expenseId: string) =>
+    request<
+      Array<{
+        id: string;
+        fileName: string;
+        mimeType: string;
+        sizeBytes: number;
+        uploadedById: string;
+        uploadedBy: { id: string; displayName: string };
+        createdAt: string;
+      }>
+    >("GET", `/expenses/${expenseId}/attachments`),
+
+  /**
+   * Upload une pièce jointe (multipart). Le navigateur génère le boundary.
+   * Permission backend : payeur OU admin uniquement.
+   */
+  uploadAttachment: async (expenseId: string, file: File) => {
+    const token = getToken();
+    const formData = new FormData();
+    formData.append("file", file);
+    let r: Response;
+    try {
+      r = await fetch(`${getApiUrl()}/expenses/${expenseId}/attachments`, {
+        method: "POST",
+        headers: {
+          ...(token ? { authorization: `Bearer ${token}` } : {}),
+        },
+        body: formData,
+      });
+    } catch {
+      throw new ApiError(
+        0,
+        "network_error",
+        "Impossible d'envoyer le fichier",
+      );
+    }
+    if (!r.ok) {
+      const errBody = await r.json().catch(() => ({ message: r.statusText }));
+      throw new ApiError(
+        r.status,
+        errBody.error ?? "unknown",
+        errBody.message ?? `HTTP ${r.status}`,
+      );
+    }
+    return (await r.json()) as {
+      id: string;
+      fileName: string;
+      mimeType: string;
+      sizeBytes: number;
+      uploadedBy: { id: string; displayName: string };
+      createdAt: string;
+    };
+  },
+
+  /**
+   * Construit l'URL de téléchargement (à utiliser dans <a href> ou <img src>).
+   * Le token est passé en query-string car les <img> ne peuvent pas
+   * envoyer de header authorization (alternative : data URL côté client).
+   * On utilise plutôt fetch + blob pour les images dans l'UI.
+   */
+  attachmentDownloadUrl: (attachmentId: string) =>
+    `${getApiUrl()}/attachments/${attachmentId}/download`,
+
+  /**
+   * Récupère le binaire d'un attachment en blob (pour previews d'image).
+   * Authentifié via header (impossible avec <img src> direct).
+   */
+  fetchAttachmentBlob: async (attachmentId: string) => {
+    const token = getToken();
+    const r = await fetch(
+      `${getApiUrl()}/attachments/${attachmentId}/download`,
+      {
+        headers: token ? { authorization: `Bearer ${token}` } : undefined,
+      },
+    );
+    if (!r.ok) {
+      throw new ApiError(
+        r.status,
+        "fetch_failed",
+        `Impossible de charger la pièce jointe (${r.status})`,
+      );
+    }
+    return r.blob();
+  },
+
+  deleteAttachment: (attachmentId: string) =>
+    request<void>("DELETE", `/attachments/${attachmentId}`),
 };

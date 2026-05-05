@@ -3,6 +3,7 @@ import { Prisma, SplitMode } from "@prisma/client";
 import { prisma } from "../../lib/db.js";
 import { Errors } from "../../lib/errors.js";
 import { getGroupForMember } from "../groups/groups.service.js";
+import { notifyGroupMembers } from "../notifications/notifications.service.js";
 
 export interface CreateExpenseInput {
   groupId: string;
@@ -147,6 +148,24 @@ export async function createExpense(input: CreateExpenseInput) {
     },
   });
 
+  // Notif aux membres du groupe (sauf le payeur lui-même)
+  void notifyGroupMembers({
+    groupId: input.groupId,
+    excludeUserId: input.actorUserId,
+    notification: {
+      kind: "EXPENSE_ADDED",
+      title: `Nouvelle dépense dans ${group.name}`,
+      body: `${created.paidBy.displayName} a ajouté « ${created.description} » (${amount.toFixed(2)} ${created.currency})`,
+      link: `/dashboard/groups/${input.groupId}`,
+      payload: {
+        groupId: input.groupId,
+        expenseId: created.id,
+        amount: amount.toFixed(2),
+        currency: created.currency,
+      },
+    },
+  });
+
   return created;
 }
 
@@ -186,18 +205,19 @@ export async function updateExpense(input: {
   });
   if (!existing) throw Errors.notFound("Dépense introuvable");
 
-  // Permission : payeur OU admin/treasurer du groupe
+  // Permission : payeur (créateur de la dépense) OU admin du groupe uniquement.
+  // Les trésoriers et autres membres ne peuvent pas modifier une dépense
+  // qu'ils n'ont pas créée — règle décidée pour la traçabilité et la confiance
+  // entre amis (le payeur reste maître de son justificatif).
   const member = existing.group.members.find(
     (m) => m.userId === input.actorUserId,
   );
   if (!member) throw Errors.forbidden("Pas membre du groupe");
   const canEdit =
-    existing.paidById === input.actorUserId ||
-    member.role === "ADMIN" ||
-    member.role === "TREASURER";
+    existing.paidById === input.actorUserId || member.role === "ADMIN";
   if (!canEdit) {
     throw Errors.forbidden(
-      "Seul le payeur ou un admin/trésorier peut modifier cette dépense",
+      "Seul le payeur ou un admin du groupe peut modifier cette dépense",
     );
   }
 
@@ -264,7 +284,7 @@ export async function updateExpense(input: {
       };
     }
 
-    return tx.expense.update({
+    const updated = await tx.expense.update({
       where: { id: existing.id },
       data: updateData,
       include: {
@@ -276,6 +296,26 @@ export async function updateExpense(input: {
         },
       },
     });
+
+    // Notif aux membres (hors acteur) — fire-and-forget hors transaction
+    setImmediate(() => {
+      void notifyGroupMembers({
+        groupId: existing.groupId,
+        excludeUserId: input.actorUserId,
+        notification: {
+          kind: "EXPENSE_UPDATED",
+          title: `Dépense modifiée dans ${existing.group.name}`,
+          body: `« ${updated.description} » a été modifiée (${updated.amount.toString()} ${updated.currency})`,
+          link: `/dashboard/groups/${existing.groupId}`,
+          payload: {
+            groupId: existing.groupId,
+            expenseId: existing.id,
+          },
+        },
+      });
+    });
+
+    return updated;
   });
 }
 
@@ -297,16 +337,33 @@ export async function deleteExpense(input: {
     (m) => m.userId === input.actorUserId,
   );
   if (!member) throw Errors.forbidden("Pas membre du groupe");
+  // Même règle que pour update : payeur OU admin du groupe uniquement.
   const canDelete =
-    existing.paidById === input.actorUserId ||
-    member.role === "ADMIN" ||
-    member.role === "TREASURER";
+    existing.paidById === input.actorUserId || member.role === "ADMIN";
   if (!canDelete) {
     throw Errors.forbidden(
-      "Seul le payeur ou un admin/trésorier peut supprimer",
+      "Seul le payeur ou un admin du groupe peut supprimer cette dépense",
     );
   }
 
+  // Capture infos pour la notif AVANT delete
+  const desc = existing.description;
+  const groupId = existing.groupId;
+  const groupName = existing.group.name;
+
   await prisma.expense.delete({ where: { id: existing.id } });
+
+  void notifyGroupMembers({
+    groupId,
+    excludeUserId: input.actorUserId,
+    notification: {
+      kind: "EXPENSE_DELETED",
+      title: `Dépense supprimée dans ${groupName}`,
+      body: `« ${desc} » a été supprimée et les balances recalculées`,
+      link: `/dashboard/groups/${groupId}`,
+      payload: { groupId, expenseId: existing.id },
+    },
+  });
+
   return { deleted: true };
 }

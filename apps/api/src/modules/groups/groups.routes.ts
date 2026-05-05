@@ -18,6 +18,7 @@ import {
   revokeInviteToken,
   updateGroup,
 } from "./groups.service.js";
+import { validateContact } from "@bmd/shared-types";
 
 const createGroupSchema = z.object({
   name: z.string().min(1).max(120),
@@ -25,21 +26,51 @@ const createGroupSchema = z.object({
   defaultCurrency: z.string().length(3).optional(),
 });
 
-const inviteSchema = z.object({
-  contactType: z.nativeEnum(ContactType),
-  contactValue: z.string().min(3),
-  displayName: z.string().min(1).max(80).optional(),
-  role: z.nativeEnum(MemberRole).optional(),
-});
+/**
+ * Validation E.164/RFC 5322 sur chaque entrée. La valeur normalisée
+ * remplace la valeur saisie pour éviter les doublons (espaces, casse).
+ */
+const inviteSchema = z
+  .object({
+    contactType: z.nativeEnum(ContactType),
+    contactValue: z.string().min(3),
+    displayName: z.string().min(1).max(80).optional(),
+    role: z.nativeEnum(MemberRole).optional(),
+  })
+  .superRefine((data, ctx) => {
+    const r = validateContact(data.contactType, data.contactValue);
+    if (!r.ok) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["contactValue"],
+        message: r.message ?? "Contact invalide",
+      });
+    } else if (r.value) {
+      data.contactValue = r.value;
+    }
+  });
 
 const batchInviteSchema = z.object({
   invitations: z
     .array(
-      z.object({
-        contactType: z.nativeEnum(ContactType),
-        contactValue: z.string().min(3),
-        displayName: z.string().min(1).max(80).optional(),
-      }),
+      z
+        .object({
+          contactType: z.nativeEnum(ContactType),
+          contactValue: z.string().min(3),
+          displayName: z.string().min(1).max(80).optional(),
+        })
+        .superRefine((data, ctx) => {
+          const r = validateContact(data.contactType, data.contactValue);
+          if (!r.ok) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              path: ["contactValue"],
+              message: r.message ?? "Contact invalide",
+            });
+          } else if (r.value) {
+            data.contactValue = r.value;
+          }
+        }),
     )
     .min(1)
     .max(50),

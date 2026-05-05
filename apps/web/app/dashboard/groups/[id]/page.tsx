@@ -9,6 +9,7 @@ import {
   isUnauthorized,
 } from "../../../../lib/api-client";
 import { useToast } from "../../../../lib/ui/toast";
+import { validateContact } from "@bmd/shared-types";
 
 type SplitMode = "EQUAL" | "UNEQUAL" | "PERCENTAGE";
 
@@ -87,6 +88,12 @@ export default function GroupDetailPage() {
     expenseId: string;
     description: string;
   } | null>(null);
+
+  // Mode édition : si non-null, le panel "expense" est en mode update
+  // au lieu de create. Pré-rempli avec les valeurs existantes.
+  const [editingExpenseId, setEditingExpenseId] = useState<string | null>(
+    null,
+  );
 
   // Un seul panel ouvert à la fois (mobile-friendly)
   const [openPanel, setOpenPanel] = useState<"none" | "invite" | "expense">(
@@ -191,20 +198,54 @@ export default function GroupDetailPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [groupId]);
 
-  // Init form expense
+  // Init form expense (mode create OU edit)
   useEffect(() => {
     if (!group || !me) return;
     if (openPanel === "expense") {
-      const all: Record<string, boolean> = {};
-      group.members.forEach((m: Member) => (all[m.user.id] = true));
-      setParticipants(all);
-      setShares({});
-      const meIsMember = group.members.some(
-        (m: Member) => m.user.id === me.id,
-      );
-      setPaidByUserId(meIsMember ? me.id : group.members[0]?.user.id ?? "");
+      if (editingExpenseId) {
+        // === MODE EDITION : pré-remplir avec les valeurs existantes ===
+        const exp = expenses.find((e: any) => e.id === editingExpenseId);
+        if (!exp) {
+          // Dépense disparue, on annule l'édition
+          setEditingExpenseId(null);
+          return;
+        }
+        setDescription(exp.description ?? "");
+        setAmount(String(exp.amount ?? ""));
+        setPaidByUserId(exp.paidBy?.id ?? me.id);
+        setSplitMode(exp.splitMode ?? "EQUAL");
+        // Reconstruit participants/shares à partir des shares existantes
+        const sel: Record<string, boolean> = {};
+        const sh: Record<string, string> = {};
+        group.members.forEach((m: Member) => (sel[m.user.id] = false));
+        for (const s of exp.shares ?? []) {
+          sel[s.user?.id ?? s.userId] = true;
+          if (exp.splitMode === "PERCENTAGE") {
+            // Reconstruit le % à partir du montant divisé
+            const pct =
+              (parseFloat(s.amountOwed) / parseFloat(exp.amount)) * 100;
+            sh[s.user?.id ?? s.userId] = pct.toFixed(2);
+          } else if (exp.splitMode === "UNEQUAL") {
+            sh[s.user?.id ?? s.userId] = parseFloat(s.amountOwed).toFixed(2);
+          }
+        }
+        setParticipants(sel);
+        setShares(sh);
+      } else {
+        // === MODE CREATION : tout le monde sélectionné par défaut ===
+        const all: Record<string, boolean> = {};
+        group.members.forEach((m: Member) => (all[m.user.id] = true));
+        setParticipants(all);
+        setShares({});
+        setDescription("");
+        setAmount("");
+        const meIsMember = group.members.some(
+          (m: Member) => m.user.id === me.id,
+        );
+        setPaidByUserId(meIsMember ? me.id : group.members[0]?.user.id ?? "");
+      }
     }
-  }, [openPanel, group, me]);
+  }, [openPanel, group, me, editingExpenseId, expenses]);
 
   function toggleParticipant(userId: string) {
     setParticipants((p) => ({ ...p, [userId]: !p[userId] }));
@@ -377,9 +418,21 @@ export default function GroupDetailPage() {
 
   function addManualToQueue() {
     if (!contactValue.trim()) return;
-    addToQueue(contactType, contactValue, undefined, "manual");
+    // Validation E.164/RFC 5322 avant d'ajouter à la file
+    const r = validateContact(contactType, contactValue);
+    if (!r.ok) {
+      toast.error(r.message ?? "Contact invalide");
+      return;
+    }
+    addToQueue(contactType, r.value!, undefined, "manual");
     setContactValue(contactType === "PHONE" ? "+33" : "");
   }
+
+  // Validation en temps réel pour l'indicateur visuel sous l'input
+  const liveContactValidation = useMemo(() => {
+    if (!contactValue.trim() || contactValue === "+33") return null;
+    return validateContact(contactType, contactValue);
+  }, [contactType, contactValue]);
 
   /**
    * Ouvre le Contact Picker système (Chrome Android uniquement).
@@ -545,9 +598,16 @@ export default function GroupDetailPage() {
                 share: parseFloat(shares[id] || "0"),
               })),
       };
-      await api.createExpense(groupId, payload);
-      toast.success(`Dépense « ${description} » enregistrée`);
+      if (editingExpenseId) {
+        // === MODE EDITION ===
+        await api.updateExpense(editingExpenseId, payload);
+        toast.success(`Dépense « ${description} » mise à jour`);
+      } else {
+        await api.createExpense(groupId, payload);
+        toast.success(`Dépense « ${description} » enregistrée`);
+      }
       setOpenPanel("none");
+      setEditingExpenseId(null);
       setDescription("");
       setAmount("");
       setShares({});
@@ -562,6 +622,18 @@ export default function GroupDetailPage() {
       toast.error(e);
       setError((e as Error).message);
     }
+  }
+
+  /** Ouvre le panel en mode édition pour une dépense existante */
+  function openEditPanel(expenseId: string) {
+    setEditingExpenseId(expenseId);
+    setOpenPanel("expense");
+  }
+
+  /** Ferme/réinitialise le panel proprement */
+  function closeExpensePanel() {
+    setOpenPanel("none");
+    setEditingExpenseId(null);
   }
 
   function autoFillShares() {
@@ -725,9 +797,14 @@ export default function GroupDetailPage() {
         <button
           type="button"
           className="quick-card"
-          onClick={() =>
-            setOpenPanel(openPanel === "expense" ? "none" : "expense")
-          }
+          onClick={() => {
+            if (openPanel === "expense") {
+              closeExpensePanel();
+            } else {
+              setEditingExpenseId(null); // s'assurer d'être en mode create
+              setOpenPanel("expense");
+            }
+          }}
           style={{
             cursor: "pointer",
             ...(openPanel === "expense" && {
@@ -898,18 +975,41 @@ export default function GroupDetailPage() {
               <button
                 type="button"
                 onClick={addManualToQueue}
-                disabled={!contactValue.trim()}
+                disabled={
+                  !contactValue.trim() ||
+                  (liveContactValidation !== null && !liveContactValidation.ok)
+                }
                 className="btn-ghost btn-sm"
                 style={{
                   flexShrink: 0,
                   borderColor: "var(--saffron)",
                   color: "var(--saffron)",
-                  opacity: contactValue.trim() ? 1 : 0.4,
+                  opacity:
+                    contactValue.trim() &&
+                    (!liveContactValidation || liveContactValidation.ok)
+                      ? 1
+                      : 0.4,
                 }}
               >
                 ＋ Ajouter
               </button>
             </div>
+            {/* Feedback validation temps réel */}
+            {liveContactValidation && (
+              <div
+                style={{
+                  fontSize: 11,
+                  marginTop: 4,
+                  color: liveContactValidation.ok
+                    ? "var(--emerald, #10b981)"
+                    : "var(--rose, #ef4444)",
+                }}
+              >
+                {liveContactValidation.ok
+                  ? `✓ Format valide${liveContactValidation.value !== contactValue ? ` (sera normalisé en ${liveContactValidation.value})` : ""}`
+                  : `⚠ ${liveContactValidation.message}`}
+              </div>
+            )}
           </div>
 
           {/* === File d'invitations en attente === */}
@@ -1014,15 +1114,14 @@ export default function GroupDetailPage() {
         </div>
       )}
 
-      {/* === PANEL : Ajouter dépense === */}
+      {/* === PANEL : Ajouter / éditer dépense === */}
       {openPanel === "expense" && (
         <div className="card">
           <div className="card-head">
-            <h2>＋ Nouvelle dépense</h2>
-            <button
-              className="btn-ghost btn-sm"
-              onClick={() => setOpenPanel("none")}
-            >
+            <h2>
+              {editingExpenseId ? "✏️ Modifier la dépense" : "＋ Nouvelle dépense"}
+            </h2>
+            <button className="btn-ghost btn-sm" onClick={closeExpensePanel}>
               ✕
             </button>
           </div>
@@ -1384,7 +1483,7 @@ export default function GroupDetailPage() {
             onClick={addExpense}
             disabled={!validation.ok}
           >
-            ✓ Ajouter
+            {editingExpenseId ? "✓ Enregistrer les modifications" : "✓ Ajouter"}
           </button>
         </div>
       )}
@@ -1690,12 +1789,13 @@ export default function GroupDetailPage() {
         ) : (
           <div className="list">
             {filteredExpenses.map((e: any) => {
+              // Règle de permission : créateur (payeur) OU admin du groupe.
+              // Doit matcher exactement la règle backend dans expenses.service.
               const canEdit =
                 me?.id === e.paidBy?.id ||
                 group.members.some(
                   (m: Member) =>
-                    m.user.id === me?.id &&
-                    (m.role === "ADMIN" || m.role === "TREASURER"),
+                    m.user.id === me?.id && m.role === "ADMIN",
                 );
               return (
                 <div key={e.id} className="list-item">
@@ -1721,28 +1821,47 @@ export default function GroupDetailPage() {
                       {parseFloat(e.amount).toFixed(2)}
                     </div>
                     {canEdit && (
-                      <button
-                        onClick={() =>
-                          setConfirmDelete({
-                            expenseId: e.id,
-                            description: e.description,
-                          })
-                        }
-                        title="Supprimer cette dépense"
-                        aria-label="Supprimer la dépense"
-                        style={{
-                          background: "transparent",
-                          border: "none",
-                          color: "#ef4444",
-                          fontSize: 18,
-                          cursor: "pointer",
-                          padding: "4px 8px",
-                          minHeight: "32px",
-                          minWidth: "32px",
-                        }}
-                      >
-                        🗑
-                      </button>
+                      <>
+                        <button
+                          onClick={() => openEditPanel(e.id)}
+                          title="Modifier cette dépense"
+                          aria-label="Modifier la dépense"
+                          style={{
+                            background: "transparent",
+                            border: "none",
+                            color: "var(--saffron, #E8A33D)",
+                            fontSize: 16,
+                            cursor: "pointer",
+                            padding: "4px 8px",
+                            minHeight: "32px",
+                            minWidth: "32px",
+                          }}
+                        >
+                          ✏️
+                        </button>
+                        <button
+                          onClick={() =>
+                            setConfirmDelete({
+                              expenseId: e.id,
+                              description: e.description,
+                            })
+                          }
+                          title="Supprimer cette dépense"
+                          aria-label="Supprimer la dépense"
+                          style={{
+                            background: "transparent",
+                            border: "none",
+                            color: "#ef4444",
+                            fontSize: 18,
+                            cursor: "pointer",
+                            padding: "4px 8px",
+                            minHeight: "32px",
+                            minWidth: "32px",
+                          }}
+                        >
+                          🗑
+                        </button>
+                      </>
                     )}
                   </div>
                 </div>

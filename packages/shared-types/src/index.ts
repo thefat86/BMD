@@ -144,3 +144,6 @@ export interface ApiError {
   message: string;
   details?: unknown;
 }
+
+// === VALIDATORS ===
+export * from "./validators";

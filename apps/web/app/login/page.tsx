@@ -1,7 +1,8 @@
 "use client";
-import { Suspense, useState } from "react";
+import { Suspense, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { api, setToken } from "../../lib/api-client";
+import { validateContact } from "@bmd/shared-types";
 
 const PENDING_INVITE_KEY = "bmd_pending_invite_token";
 
@@ -25,11 +26,24 @@ function LoginPageInner() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
+  // Validation en temps réel pour l'indicateur visuel
+  const liveValidation = useMemo(() => {
+    if (!contactValue.trim() || contactValue === "+33") return null;
+    return validateContact(contactType, contactValue);
+  }, [contactType, contactValue]);
+
   async function requestOtp() {
     setError(null);
+    // Bloque côté client si la validation échoue
+    const r = validateContact(contactType, contactValue);
+    if (!r.ok) {
+      setError(r.message ?? "Contact invalide");
+      return;
+    }
     setLoading(true);
     try {
-      await api.requestOtp(contactType, contactValue);
+      // On envoie la valeur normalisée pour éviter les doublons côté serveur
+      await api.requestOtp(contactType, r.value!);
       setStep("code");
     } catch (e) {
       setError((e as Error).message);
@@ -150,10 +164,27 @@ function LoginPageInner() {
                 }
               />
             </div>
+            {liveValidation && (
+              <div
+                style={{
+                  fontSize: 12,
+                  marginTop: -8,
+                  marginBottom: 8,
+                  color: liveValidation.ok ? "var(--emerald, #10b981)" : "var(--rose, #ef4444)",
+                }}
+              >
+                {liveValidation.ok
+                  ? "✓ Format valide"
+                  : `⚠ ${liveValidation.message}`}
+              </div>
+            )}
             <button
               className="btn btn-block"
               onClick={requestOtp}
-              disabled={loading}
+              disabled={
+                loading ||
+                (liveValidation !== null && !liveValidation.ok)
+              }
               style={{ width: "100%" }}
             >
               {loading ? "Envoi…" : "Recevoir un code"}

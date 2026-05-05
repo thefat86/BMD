@@ -6,19 +6,49 @@ import { requestOtp, verifyOtp } from "./otp.service.js";
 import { verifyAndIssue } from "./auth.service.js";
 import { revokeSession } from "./jwt.service.js";
 import { Errors } from "../../lib/errors.js";
+import { validateContact } from "@bmd/shared-types";
 
-const requestOtpSchema = z.object({
-  contactType: z.nativeEnum(ContactType),
-  contactValue: z.string().min(3),
-  channel: z.enum(["SMS", "WHATSAPP", "EMAIL"]).optional(),
-});
+/**
+ * Refine Zod : on appelle nos validators partagés (E.164, RFC 5322 simplifié)
+ * et on stocke la valeur normalisée pour l'utiliser ensuite. Ainsi,
+ *   - "+33 6 12 34 56 78" → "+33612345678"
+ *   - "  Foo@Bar.COM " → "foo@bar.com"
+ * sont les seules valeurs qui atteignent la couche service.
+ */
+function refineContactValue(
+  schema: z.ZodObject<any>,
+): z.ZodEffects<typeof schema> {
+  return schema.superRefine((data, ctx) => {
+    const r = validateContact(data.contactType, data.contactValue);
+    if (!r.ok) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["contactValue"],
+        message: r.message ?? "Contact invalide",
+      });
+    } else if (r.value) {
+      // Mutation in-place de l'objet validé (Zod préserve les refs)
+      data.contactValue = r.value;
+    }
+  });
+}
 
-const verifyOtpSchema = z.object({
-  contactType: z.nativeEnum(ContactType),
-  contactValue: z.string().min(3),
-  code: z.string().regex(/^\d{4,8}$/),
-  displayName: z.string().min(1).max(80).optional(),
-});
+const requestOtpSchema = refineContactValue(
+  z.object({
+    contactType: z.nativeEnum(ContactType),
+    contactValue: z.string().min(3),
+    channel: z.enum(["SMS", "WHATSAPP", "EMAIL"]).optional(),
+  }),
+);
+
+const verifyOtpSchema = refineContactValue(
+  z.object({
+    contactType: z.nativeEnum(ContactType),
+    contactValue: z.string().min(3),
+    code: z.string().regex(/^\d{4,8}$/),
+    displayName: z.string().min(1).max(80).optional(),
+  }),
+);
 
 const updateMeSchema = z.object({
   displayName: z.string().min(1).max(80).optional(),
@@ -27,16 +57,20 @@ const updateMeSchema = z.object({
   avatar: z.string().url().nullable().optional(),
 });
 
-const addContactSchema = z.object({
-  contactType: z.nativeEnum(ContactType),
-  contactValue: z.string().min(3),
-});
+const addContactSchema = refineContactValue(
+  z.object({
+    contactType: z.nativeEnum(ContactType),
+    contactValue: z.string().min(3),
+  }),
+);
 
-const verifyContactSchema = z.object({
-  contactType: z.nativeEnum(ContactType),
-  contactValue: z.string().min(3),
-  code: z.string().regex(/^\d{4,8}$/),
-});
+const verifyContactSchema = refineContactValue(
+  z.object({
+    contactType: z.nativeEnum(ContactType),
+    contactValue: z.string().min(3),
+    code: z.string().regex(/^\d{4,8}$/),
+  }),
+);
 
 export async function authRoutes(app: FastifyInstance): Promise<void> {
   /**

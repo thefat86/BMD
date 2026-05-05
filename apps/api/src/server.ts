@@ -14,6 +14,8 @@ import { debtSwapsRoutes } from "./modules/debt-swaps/debt-swaps.routes.js";
 import { splitPresetsRoutes } from "./modules/split-presets/split-presets.routes.js";
 import { ocrRoutes } from "./modules/ocr/ocr.routes.js";
 import { adminRoutes } from "./modules/admin/admin.routes.js";
+import { attachmentsRoutes } from "./modules/attachments/attachments.routes.js";
+import { notificationsRoutes } from "./modules/notifications/notifications.routes.js";
 import { assertSessionActive, type JwtPayload } from "./modules/auth/jwt.service.js";
 
 declare module "fastify" {
@@ -113,6 +115,8 @@ export async function buildServer(): Promise<FastifyInstance> {
   await app.register(splitPresetsRoutes);
   await app.register(ocrRoutes);
   await app.register(adminRoutes);
+  await app.register(attachmentsRoutes);
+  await app.register(notificationsRoutes);
 
   return app;
 }

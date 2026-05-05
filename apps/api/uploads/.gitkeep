@@ -1,0 +1,2 @@
+# Dossier de stockage des pièces jointes (créé automatiquement par le backend).
+# En production, basculer vers S3/R2 sans changer le schéma DB.

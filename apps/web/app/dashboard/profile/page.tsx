@@ -8,6 +8,7 @@ import {
   getToken,
   isUnauthorized,
 } from "../../../lib/api-client";
+import { BottomNav } from "../../../lib/ui/bottom-nav";
 
 const CURRENCIES = [
   { v: "EUR", lbl: "EUR · Euro" },
@@ -611,6 +612,9 @@ export default function ProfilePage() {
           partagées. Tu peux les exporter ou les supprimer à tout moment.
         </p>
       </div>
+
+      {/* Bottom-nav mobile (visible uniquement < 768px) */}
+      <BottomNav active="profile" hideFab />
     </div>
   );
 }

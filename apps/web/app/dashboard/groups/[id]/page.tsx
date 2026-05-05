@@ -16,6 +16,7 @@ import {
   ItemizedClaimsView,
   ItemizedEditor,
 } from "../../../../lib/ui/itemized-expense";
+import { BottomNav } from "../../../../lib/ui/bottom-nav";
 import { validateContact } from "../../../../lib/validators";
 
 type SplitMode = "EQUAL" | "UNEQUAL" | "PERCENTAGE" | "ITEMIZED";
@@ -2218,6 +2219,15 @@ export default function GroupDetailPage() {
           </div>
         </div>
       )}
+
+      {/* Bottom-nav mobile (visible uniquement < 768px) */}
+      <BottomNav
+        active="groups"
+        onCreate={() => {
+          setEditingExpenseId(null);
+          setOpenPanel("expense");
+        }}
+      />
     </div>
   );
 }

@@ -35,11 +35,30 @@ export default function MarketingPage() {
   const [mounted, setMounted] = useState(false);
   const [showLangMenu, setShowLangMenu] = useState(false);
   const [isLogged, setIsLogged] = useState(false);
+  /**
+   * Mode "mobile/app" :
+   *  - Viewport < 768px (téléphone)
+   *  - OU app installée en PWA standalone (display-mode: standalone)
+   * → on affiche un écran d'accueil "vraie app" (logo + CTA), pas le site vitrine.
+   */
+  const [isMobile, setIsMobile] = useState(false);
 
   useEffect(() => {
     setIsLogged(!!getToken());
     setLoc(detectLocale());
+
+    function checkMobile() {
+      const narrow = window.innerWidth < 768;
+      const standalone =
+        window.matchMedia?.("(display-mode: standalone)").matches ||
+        // iOS PWA installée
+        (window.navigator as any).standalone === true;
+      setIsMobile(narrow || standalone);
+    }
+    checkMobile();
+    window.addEventListener("resize", checkMobile);
     setMounted(true);
+    return () => window.removeEventListener("resize", checkMobile);
   }, []);
 
   function changeLocale(l: Locale) {
@@ -66,6 +85,22 @@ export default function MarketingPage() {
 
   const t = T[locale];
   const rtl = isRtl(locale);
+
+  // ===== Sur téléphone / PWA installée : ÉCRAN D'ACCUEIL APP =====
+  // (pas le site vitrine — c'est dédié au desktop/tablette)
+  if (isMobile) {
+    return (
+      <MobileWelcome
+        t={t}
+        locale={locale}
+        rtl={rtl}
+        isLogged={isLogged}
+        showLangMenu={showLangMenu}
+        setShowLangMenu={setShowLangMenu}
+        onChangeLocale={changeLocale}
+      />
+    );
+  }
 
   return (
     <>
@@ -1459,4 +1494,280 @@ function emphasizeLast(text: string): string {
   if (parts.length < 2) return text;
   const last = parts.pop()!;
   return `${parts.join(" ")} <em>${last}</em>`;
+}
+
+/* =================================================================
+ * MOBILE WELCOME — écran d'accueil de l'app sur téléphone / PWA
+ * =================================================================
+ * Inspiré directement de la maquette BMD_maquettes.html :
+ *  - Fond night avec halos radiaux saffron/terracotta
+ *  - Logo BMD médaillon centré (gradient + cercle pointillé)
+ *  - Titre Cormorant Garamond avec dernier mot en italique saffron
+ *  - Tagline en gold/letterspacing
+ *  - 2 CTA empilés : "Se connecter" (saffron) + "Découvrir BMD" (lien vers le site)
+ *  - Sélecteur de langue discret en haut à droite
+ *
+ * Pas de site vitrine sur mobile — c'est une expérience "app native".
+ * L'utilisateur peut quand même cliquer "Découvrir BMD" pour accéder à la
+ * version site complète si besoin (forçage via param ?site=1).
+ */
+function MobileWelcome({
+  t,
+  locale,
+  rtl,
+  isLogged,
+  showLangMenu,
+  setShowLangMenu,
+  onChangeLocale,
+}: {
+  t: any;
+  locale: Locale;
+  rtl: boolean;
+  isLogged: boolean;
+  showLangMenu: boolean;
+  setShowLangMenu: (v: boolean) => void;
+  onChangeLocale: (l: Locale) => void;
+}): JSX.Element {
+  return (
+    <div
+      dir={rtl ? "rtl" : "ltr"}
+      style={{
+        // 100dvh = viewport dynamique (gère barre d'adresse mobile);
+        // 100vh en fallback CSS via la classe ci-dessous si le navigateur
+        // ne supporte pas dvh. On préfère dvh pour iOS Safari.
+        minHeight: "100dvh",
+        background:
+          "radial-gradient(900px 600px at 10% -10%, rgba(232,163,61,0.12), transparent 60%), " +
+          "radial-gradient(900px 600px at 110% 10%, rgba(181,70,46,0.1), transparent 60%), " +
+          "radial-gradient(1200px 800px at 50% 120%, rgba(63,125,92,0.06), transparent 60%), " +
+          "linear-gradient(180deg, #0E0B14 0%, #1F1429 100%)",
+        color: "#F4E4C1",
+        fontFamily:
+          "'Inter', system-ui, -apple-system, BlinkMacSystemFont, sans-serif",
+        display: "flex",
+        flexDirection: "column",
+        position: "relative",
+        // Safe-area iOS (notch / home indicator)
+        paddingTop: "calc(env(safe-area-inset-top, 0px) + 16px)",
+        paddingBottom: "calc(env(safe-area-inset-bottom, 0px) + 24px)",
+        paddingLeft: "calc(env(safe-area-inset-left, 0px) + 24px)",
+        paddingRight: "calc(env(safe-area-inset-right, 0px) + 24px)",
+      }}
+    >
+      {/* Bandeau bogolan décoratif (style maquette) */}
+      <div
+        aria-hidden="true"
+        style={{
+          position: "absolute",
+          inset: 0,
+          backgroundImage:
+            "repeating-linear-gradient(45deg, rgba(232,163,61,0.025) 0 2px, transparent 2px 22px)",
+          pointerEvents: "none",
+        }}
+      />
+
+      {/* Top : sélecteur de langue à droite (RTL flippe à gauche) */}
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "flex-end",
+          position: "relative",
+          zIndex: 2,
+        }}
+      >
+        <LangPicker
+          locale={locale}
+          rtl={rtl}
+          show={showLangMenu}
+          setShow={setShowLangMenu}
+          onChange={onChangeLocale}
+        />
+      </div>
+
+      {/* Bloc central : logo + titre + tagline */}
+      <div
+        style={{
+          flex: 1,
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "center",
+          justifyContent: "center",
+          textAlign: "center",
+          gap: 24,
+          padding: "32px 8px",
+          position: "relative",
+          zIndex: 1,
+        }}
+      >
+        {/* Logo médaillon (style maquette mobile : cercle sombre + halo) */}
+        <div
+          style={{
+            width: 220,
+            height: 220,
+            borderRadius: "50%",
+            background:
+              "radial-gradient(circle at 30% 30%, #2A2244, #16111E 70%)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            boxShadow:
+              "0 30px 80px rgba(0,0,0,0.6), inset 0 0 0 1px rgba(232,163,61,0.3)",
+            position: "relative",
+            // Cercle pointillé interne
+            outline: "1px dashed rgba(232,163,61,0.35)",
+            outlineOffset: -14,
+          }}
+        >
+          <BmdLogo size={170} />
+        </div>
+
+        <div>
+          <div
+            style={{
+              fontSize: 11,
+              letterSpacing: 4,
+              color: "#C9A24A",
+              textTransform: "uppercase",
+              fontWeight: 700,
+              marginBottom: 12,
+            }}
+          >
+            Back · Mes · Do
+          </div>
+          <h1
+            style={{
+              fontFamily: "'Cormorant Garamond', Georgia, serif",
+              fontSize: "clamp(28px, 8vw, 38px)",
+              fontWeight: 600,
+              lineHeight: 1.15,
+              margin: 0,
+              color: "#F4E4C1",
+            }}
+            dangerouslySetInnerHTML={{
+              __html: emphasizeLast(t.hero.headline),
+            }}
+          />
+          <p
+            style={{
+              fontSize: 14,
+              lineHeight: 1.6,
+              color: "#E8D5B7",
+              marginTop: 16,
+              maxWidth: 340,
+            }}
+          >
+            {locale === "fr"
+              ? "Tontines, colocs, voyages… BMD calcule, simplifie et trace chaque dépense pour que personne ne se sente lésé."
+              : t.hero.subhead}
+          </p>
+        </div>
+      </div>
+
+      {/* CTAs en bas (style "vraie app") */}
+      <div
+        style={{
+          display: "flex",
+          flexDirection: "column",
+          gap: 10,
+          position: "relative",
+          zIndex: 1,
+        }}
+      >
+        {isLogged ? (
+          <Link
+            href="/dashboard"
+            style={{
+              background: "linear-gradient(135deg, #E8A33D, #B5462E)",
+              color: "#16111E",
+              padding: "16px 24px",
+              borderRadius: 14,
+              textDecoration: "none",
+              fontSize: 16,
+              fontWeight: 700,
+              textAlign: "center",
+              minHeight: 52,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              boxShadow: "0 12px 32px rgba(232,163,61,0.3)",
+              letterSpacing: 0.3,
+            }}
+          >
+            {locale === "fr"
+              ? "Ouvrir mon espace →"
+              : `${t.nav.login} →`}
+          </Link>
+        ) : (
+          <>
+            <Link
+              href="/login"
+              style={{
+                background: "linear-gradient(135deg, #E8A33D, #B5462E)",
+                color: "#16111E",
+                padding: "16px 24px",
+                borderRadius: 14,
+                textDecoration: "none",
+                fontSize: 16,
+                fontWeight: 700,
+                textAlign: "center",
+                minHeight: 52,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                boxShadow: "0 12px 32px rgba(232,163,61,0.3)",
+                letterSpacing: 0.3,
+              }}
+            >
+              {t.nav.login} →
+            </Link>
+            <Link
+              href="/login"
+              style={{
+                background: "rgba(255,255,255,0.04)",
+                color: "#F4E4C1",
+                padding: "14px 24px",
+                borderRadius: 14,
+                textDecoration: "none",
+                fontSize: 14,
+                fontWeight: 600,
+                textAlign: "center",
+                minHeight: 48,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                border: "1px solid rgba(244,228,193,0.08)",
+              }}
+            >
+              ＋ {t.nav.signUp}
+            </Link>
+          </>
+        )}
+
+        {/* Petite mention CGU/Privacy en pied (style mobile) */}
+        <div
+          style={{
+            fontSize: 11,
+            color: "#8A7B6B",
+            textAlign: "center",
+            marginTop: 8,
+            lineHeight: 1.5,
+          }}
+        >
+          {locale === "fr"
+            ? "En continuant tu acceptes notre "
+            : "By continuing you agree to our "}
+          <Link
+            href="/legal/privacy"
+            style={{
+              color: "#E8A33D",
+              textDecoration: "none",
+            }}
+          >
+            {t.footer.privacy.toLowerCase()}
+          </Link>
+          .
+        </div>
+      </div>
+    </div>
+  );
 }

@@ -10,6 +10,7 @@ import {
 } from "../../lib/api-client";
 import { NotificationBell } from "../../lib/ui/notification-bell";
 import { BarChart } from "../../lib/ui/charts";
+import { BottomNav } from "../../lib/ui/bottom-nav";
 
 const TYPES = [
   { value: "TONTINE", label: "🪙 Tontine" },
@@ -488,6 +489,9 @@ export default function DashboardPage() {
           ))}
         </div>
       )}
+
+      {/* Bottom-nav mobile (fixe en bas, visible uniquement < 768px) */}
+      <BottomNav active="home" onCreate={() => setShowCreate(true)} />
     </div>
   );
 }

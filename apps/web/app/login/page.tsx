@@ -1,11 +1,44 @@
 "use client";
-import { Suspense, useMemo, useState } from "react";
+import { Suspense, useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { api, setToken } from "../../lib/api-client";
 import { validateContact } from "../../lib/validators";
 
 const PENDING_INVITE_KEY = "bmd_pending_invite_token";
+
+/// Stocke le dernier contact utilisé (type + value) pour pré-remplir
+/// la prochaine connexion. Évite à l'utilisateur de retaper son numéro
+/// ou son email à chaque retour. Ne stocke JAMAIS le code OTP (sensible).
+const LAST_CONTACT_KEY = "bmd_last_contact_v1";
+
+interface SavedContact {
+  type: "PHONE" | "EMAIL";
+  value: string;
+  displayName?: string;
+  /** ISO date du dernier login réussi */
+  lastUsedAt: string;
+}
+
+function loadLastContact(): SavedContact | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = localStorage.getItem(LAST_CONTACT_KEY);
+    if (!raw) return null;
+    return JSON.parse(raw) as SavedContact;
+  } catch {
+    return null;
+  }
+}
+
+function saveLastContact(c: SavedContact): void {
+  if (typeof window === "undefined") return;
+  try {
+    localStorage.setItem(LAST_CONTACT_KEY, JSON.stringify(c));
+  } catch {
+    /* ignore */
+  }
+}
 
 // Wrap dans Suspense car useSearchParams() le requiert (Next 15)
 export default function LoginPage() {
@@ -26,6 +59,26 @@ function LoginPageInner() {
   const [displayName, setDisplayName] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  /** Dernier contact connu — utilisé pour le mode "se reconnecter en 1 clic" */
+  const [savedContact, setSavedContact] = useState<SavedContact | null>(null);
+
+  // Au mount : pré-remplir le form avec le dernier contact connu
+  useEffect(() => {
+    const saved = loadLastContact();
+    if (saved) {
+      setSavedContact(saved);
+      setContactType(saved.type);
+      setContactValue(saved.value);
+    }
+  }, []);
+
+  /** "Utiliser un autre compte" : reset complet */
+  function useAnotherAccount() {
+    setSavedContact(null);
+    setContactType("PHONE");
+    setContactValue("+33");
+    setCode("");
+  }
 
   // Validation en temps réel pour l'indicateur visuel
   const liveValidation = useMemo(() => {
@@ -64,6 +117,14 @@ function LoginPageInner() {
         displayName: displayName || undefined,
       });
       setToken(r.token);
+
+      // Sauvegarde le contact pour la prochaine connexion (UX fluide)
+      saveLastContact({
+        type: contactType,
+        value: contactValue,
+        displayName: r.user.displayName,
+        lastUsedAt: new Date().toISOString(),
+      });
 
       // Si l'utilisateur arrive ici via un lien d'invitation,
       // on le redirige vers la page /join/[token] pour finir le flow.
@@ -144,8 +205,78 @@ function LoginPageInner() {
 
       <div className="card">
         <h2 style={{ marginBottom: 14 }}>
-          {step === "contact" ? "Te connecter" : "Saisir le code"}
+          {step === "contact"
+            ? savedContact && step === "contact"
+              ? "Te reconnecter"
+              : "Te connecter"
+            : "Saisir le code"}
         </h2>
+
+        {/* Bandeau "Reconnecter en 1 clic" — affiché si dernier contact connu */}
+        {step === "contact" && savedContact && (
+          <div
+            style={{
+              background:
+                "linear-gradient(135deg, rgba(232,163,61,0.12), rgba(63,125,92,0.08))",
+              border: "1px solid var(--line, rgba(232,163,61,0.18))",
+              borderRadius: 12,
+              padding: 12,
+              marginBottom: 14,
+              display: "flex",
+              alignItems: "center",
+              gap: 10,
+              flexWrap: "wrap",
+            }}
+          >
+            <div
+              style={{
+                width: 36,
+                height: 36,
+                borderRadius: "50%",
+                background:
+                  "linear-gradient(135deg, var(--saffron, #E8A33D), var(--terracotta, #B5462E))",
+                color: "#16111E",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                fontWeight: 700,
+                flexShrink: 0,
+              }}
+            >
+              {(savedContact.displayName ?? savedContact.value)
+                .charAt(0)
+                .toUpperCase()}
+            </div>
+            <div style={{ flex: 1, minWidth: 120 }}>
+              <div
+                style={{ fontSize: 13, fontWeight: 700, color: "var(--cream)" }}
+              >
+                Bienvenue
+                {savedContact.displayName ? `, ${savedContact.displayName}` : ""}
+                {" "}👋
+              </div>
+              <div style={{ fontSize: 11, color: "var(--cream-soft)" }}>
+                Reconnecte-toi avec{" "}
+                <strong>
+                  {savedContact.type === "PHONE" ? "📞" : "✉️"}{" "}
+                  {savedContact.value}
+                </strong>
+              </div>
+            </div>
+            <button
+              onClick={useAnotherAccount}
+              type="button"
+              className="btn-ghost btn-sm"
+              style={{
+                fontSize: 11,
+                padding: "6px 10px",
+                minHeight: 30,
+              }}
+            >
+              Autre compte
+            </button>
+          </div>
+        )}
 
         {error && <div className="error">{error}</div>}
 

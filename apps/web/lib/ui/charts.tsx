@@ -33,16 +33,19 @@ interface BarChartProps {
 }
 
 /**
- * Diagramme en barres responsive (largeur 100% du conteneur).
- * Les valeurs négatives sont dessinées en miroir vers le bas.
+ * Diagramme en barres horizontales — lisible partout, mobile et desktop.
+ *
+ * Plutôt que des barres verticales qui s'écrasent quand il y a beaucoup
+ * de données ou peu de largeur, on utilise des barres horizontales :
+ * chaque valeur a sa ligne avec label à gauche, barre proportionnelle
+ * au milieu, valeur à droite. Ça scale parfaitement de 320px à 1200px.
  */
 export function BarChart({
   data,
-  height = 200,
+  height,
   valueFormat = (n) => n.toFixed(0),
   unit = "",
 }: BarChartProps): JSX.Element {
-  const id = useId();
   if (data.length === 0) {
     return (
       <p
@@ -58,75 +61,93 @@ export function BarChart({
     );
   }
   const max = Math.max(...data.map((d) => Math.abs(d.value)), 1);
-  const barWidth = 100 / data.length;
   return (
-    <svg
-      width="100%"
-      height={height}
-      viewBox={`0 0 100 ${height}`}
-      preserveAspectRatio="none"
+    <div
       role="img"
-      aria-label={`Graphique en barres : ${data.length} valeurs ${unit}`}
-      style={{ overflow: "visible" }}
+      aria-label={`Données : ${data.length} valeurs ${unit}`}
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        gap: 6,
+        // height utilisé en hauteur min pour préserver l'API existante
+        ...(height && { minHeight: height }),
+      }}
     >
-      {/* Ligne de base */}
-      <line
-        x1={0}
-        y1={height - 30}
-        x2={100}
-        y2={height - 30}
-        stroke="rgba(255,255,255,0.1)"
-        strokeWidth={0.2}
-      />
-
       {data.map((d, i) => {
-        const x = i * barWidth + barWidth * 0.1;
-        const w = barWidth * 0.8;
-        const barH = (Math.abs(d.value) / max) * (height - 60);
-        const y = height - 30 - (d.value >= 0 ? barH : 0);
+        const pct = (Math.abs(d.value) / max) * 100;
         const color = d.color ?? "var(--saffron, #E8A33D)";
+        const isNegative = d.value < 0;
         return (
-          <g key={`${id}-${i}`}>
-            {/* Valeur au-dessus */}
-            <text
-              x={x + w / 2}
-              y={y - 4}
-              fontSize={6}
-              textAnchor="middle"
-              fill="var(--cream, #f0e6d8)"
-              style={{ fontFamily: "system-ui" }}
+          <div
+            key={i}
+            style={{
+              display: "grid",
+              gridTemplateColumns: "minmax(60px, 100px) 1fr auto",
+              gap: 8,
+              alignItems: "center",
+              fontSize: 12,
+            }}
+          >
+            <span
+              style={{
+                color: "var(--cream-soft, #E8D5B7)",
+                whiteSpace: "nowrap",
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+              }}
+              title={d.label}
+            >
+              {d.label}
+            </span>
+            <div
+              style={{
+                height: 14,
+                background: "rgba(255,255,255,0.04)",
+                borderRadius: 7,
+                overflow: "hidden",
+                position: "relative",
+              }}
+            >
+              <div
+                style={{
+                  height: "100%",
+                  width: `${Math.max(2, pct)}%`,
+                  background: isNegative
+                    ? "linear-gradient(90deg, #B5462E, #D9714A)"
+                    : `linear-gradient(90deg, ${color}, var(--terracotta, #B5462E))`,
+                  borderRadius: 7,
+                  transition: "width 0.4s ease-out",
+                }}
+              />
+            </div>
+            <span
+              style={{
+                fontFamily: "'Cormorant Garamond', serif",
+                fontWeight: 700,
+                color: "var(--cream, #F4E4C1)",
+                fontSize: 14,
+                whiteSpace: "nowrap",
+                minWidth: 50,
+                textAlign: "right",
+              }}
             >
               {valueFormat(d.value)}
-            </text>
-            {/* Barre */}
-            <rect
-              x={x}
-              y={y}
-              width={w}
-              height={barH}
-              fill={color}
-              rx={1}
-              opacity={0.85}
-            >
-              <title>
-                {d.label} : {valueFormat(d.value)} {unit}
-              </title>
-            </rect>
-            {/* Label en bas */}
-            <text
-              x={x + w / 2}
-              y={height - 18}
-              fontSize={5}
-              textAnchor="middle"
-              fill="var(--cream-soft, #c9bfae)"
-              style={{ fontFamily: "system-ui" }}
-            >
-              {d.label.length > 10 ? d.label.slice(0, 10) + "…" : d.label}
-            </text>
-          </g>
+              {unit && (
+                <span
+                  style={{
+                    fontSize: 10,
+                    color: "var(--saffron, #E8A33D)",
+                    marginLeft: 2,
+                  }}
+                >
+                  {unit}
+                </span>
+              )}
+            </span>
+          </div>
         );
       })}
-    </svg>
+    </div>
   );
 }
 

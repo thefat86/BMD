@@ -404,32 +404,99 @@ export default function DashboardPage() {
         </div>
       ) : (
         <div className="list">
-          {groups.map((g) => (
-            <Link
-              key={g.id}
-              href={`/dashboard/groups/${g.id}`}
-              className="list-item"
-              style={{ textDecoration: "none", color: "inherit" }}
-            >
-              <div className="icon">{TYPE_ICONS[g.type] ?? "📁"}</div>
-              <div className="text">
-                <div className="name">{g.name}</div>
-                <div className="meta">
-                  {g.membersCount} membre{g.membersCount > 1 ? "s" : ""} ·{" "}
-                  {g.defaultCurrency} · {g.type.toLowerCase()}
-                </div>
-              </div>
-              <div
+          {groups.map((g) => {
+            const myNet = parseFloat(g.myNet ?? "0");
+            const totalSpent = parseFloat(g.totalSpent ?? "0");
+            return (
+              <Link
+                key={g.id}
+                href={`/dashboard/groups/${g.id}`}
+                className="list-item"
                 style={{
-                  color: "var(--saffron)",
-                  fontSize: 18,
-                  flexShrink: 0,
+                  textDecoration: "none",
+                  color: "inherit",
+                  alignItems: "center",
                 }}
               >
-                ›
-              </div>
-            </Link>
-          ))}
+                {/* Icône type avec fond saffron tinté (style maquette) */}
+                <div
+                  className="icon"
+                  style={{
+                    width: 44,
+                    height: 44,
+                    borderRadius: 12,
+                    background: "rgba(232,163,61,0.15)",
+                    color: "var(--saffron)",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    fontSize: 18,
+                    flexShrink: 0,
+                  }}
+                >
+                  {TYPE_ICONS[g.type] ?? "📁"}
+                </div>
+                <div className="text" style={{ flex: 1, minWidth: 0 }}>
+                  {/* Nom du groupe en Cormorant Garamond, fin & lisible */}
+                  <div
+                    className="name"
+                    style={{
+                      fontSize: 14,
+                      fontWeight: 600,
+                      color: "var(--cream)",
+                      whiteSpace: "nowrap",
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                    }}
+                  >
+                    {g.name}
+                  </div>
+                  {/* Méta : type · N membres · total dépensé */}
+                  <div
+                    className="meta"
+                    style={{
+                      fontSize: 11,
+                      color: "var(--muted)",
+                      marginTop: 2,
+                    }}
+                  >
+                    {g.type === "TONTINE"
+                      ? "Tontine"
+                      : g.type === "COLOC"
+                        ? "Coloc"
+                        : g.type === "TRAVEL"
+                          ? "Voyage"
+                          : g.type === "EVENT"
+                            ? "Événement"
+                            : g.type === "CLUB"
+                              ? "Club"
+                              : g.type === "PARISH"
+                                ? "Paroisse"
+                                : "Autre"}{" "}
+                    · {g.membersCount} membre{g.membersCount > 1 ? "s" : ""} ·{" "}
+                    {totalSpent.toFixed(0)} {g.defaultCurrency}
+                  </div>
+                </div>
+                {/* Mon solde net en saffron (positif vert, négatif rouge) */}
+                <div
+                  style={{
+                    fontSize: 13,
+                    fontWeight: 700,
+                    flexShrink: 0,
+                    color:
+                      myNet > 0
+                        ? "var(--emerald, #3F7D5C)"
+                        : myNet < 0
+                          ? "#D9714A"
+                          : "var(--saffron)",
+                  }}
+                >
+                  {myNet > 0 ? "+" : ""}
+                  {myNet.toFixed(0)} {g.defaultCurrency}
+                </div>
+              </Link>
+            );
+          })}
         </div>
       )}
 

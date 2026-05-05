@@ -92,6 +92,8 @@ export async function groupsRoutes(app: FastifyInstance): Promise<void> {
       defaultCurrency: g.defaultCurrency,
       createdAt: g.createdAt.toISOString(),
       membersCount: g._count.members,
+      totalSpent: g.totalSpent,
+      myNet: g.myNet,
     }));
   });
 

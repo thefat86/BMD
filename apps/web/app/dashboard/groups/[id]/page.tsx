@@ -197,9 +197,11 @@ export default function GroupDetailPage() {
   }, [groupId]);
 
   /**
-   * Auto-refresh polling : recharge toutes les 15s tant que l'onglet est
+   * Auto-refresh polling : recharge toutes les 30s tant que l'onglet est
    * visible. Si l'utilisateur passe sur un autre onglet on suspend pour
    * économiser les requêtes (et la batterie sur mobile).
+   * (Augmenté de 15s → 30s pour réduire la charge réseau, en attendant
+   * un vrai canal temps réel WebSocket spec §8.2)
    */
   const pollingRef = useRef<number | null>(null);
   useEffect(() => {
@@ -208,7 +210,7 @@ export default function GroupDetailPage() {
       if (pollingRef.current != null) return;
       pollingRef.current = window.setInterval(
         () => void refresh(true),
-        15_000,
+        30_000,
       );
     }
     function stop() {
@@ -827,9 +829,37 @@ export default function GroupDetailPage() {
   }
 
   if (!group) {
+    // Skeleton pendant le chargement initial — beaucoup plus rassurant qu'un texte vide
     return (
-      <div className="container">
-        <p className="muted">Chargement…</p>
+      <div className="container" aria-busy="true">
+        <div className="between" style={{ marginBottom: 14 }}>
+          <Link
+            href="/dashboard"
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 4,
+              fontSize: 13,
+              color: "var(--cream-soft)",
+            }}
+          >
+            ← Mes groupes
+          </Link>
+        </div>
+        <div className="page-header">
+          <div className="titles">
+            <SkelLine width="60%" height={28} />
+            <SkelLine width="40%" height={14} />
+          </div>
+        </div>
+        <div className="quick-row" style={{ marginBottom: 14 }}>
+          {[0, 1, 2].map((i) => (
+            <SkelBox key={i} height={64} />
+          ))}
+        </div>
+        <SkelBox height={120} />
+        <div style={{ height: 12 }} />
+        <SkelBox height={180} />
       </div>
     );
   }
@@ -2554,5 +2584,57 @@ function GroupStatsBlock({
         </>
       )}
     </div>
+  );
+}
+
+/**
+ * Petits composants skeleton (chargement) — affichés instantanément
+ * pendant que les requêtes initiales se chargent. Évite la sensation de
+ * "page vide qui mouline" sur la première navigation.
+ */
+function SkelLine({
+  width = "100%",
+  height = 16,
+}: {
+  width?: number | string;
+  height?: number;
+}) {
+  return (
+    <div
+      style={{
+        width,
+        height,
+        background:
+          "linear-gradient(90deg, rgba(255,255,255,0.04), rgba(255,255,255,0.08), rgba(255,255,255,0.04))",
+        backgroundSize: "200% 100%",
+        animation: "bmd-skel 1.4s ease-in-out infinite",
+        borderRadius: 6,
+        marginBottom: 8,
+      }}
+    />
+  );
+}
+function SkelBox({ height = 80 }: { height?: number }) {
+  return (
+    <>
+      <div
+        style={{
+          width: "100%",
+          height,
+          background:
+            "linear-gradient(90deg, rgba(255,255,255,0.04), rgba(255,255,255,0.08), rgba(255,255,255,0.04))",
+          backgroundSize: "200% 100%",
+          animation: "bmd-skel 1.4s ease-in-out infinite",
+          borderRadius: 14,
+          marginBottom: 6,
+        }}
+      />
+      <style jsx global>{`
+        @keyframes bmd-skel {
+          0% { background-position: 200% 0; }
+          100% { background-position: -200% 0; }
+        }
+      `}</style>
+    </>
   );
 }

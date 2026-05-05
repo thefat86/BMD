@@ -280,6 +280,62 @@ export default function MarketingPage() {
               </div>
             </div>
           </Link>
+
+          {/* Onglets de navigation centraux (fidèle BMD_site_web.html) */}
+          {/* Cachés sur mobile (< 760px) — l'utilisateur a la nav scrolling */}
+          <div
+            className="bmd-nav-links"
+            style={{
+              display: "flex",
+              gap: 28,
+              fontSize: 14,
+              fontWeight: 500,
+              flex: 1,
+              justifyContent: "center",
+            }}
+          >
+            <a
+              href="#features"
+              style={{ color: "var(--cream-soft)", textDecoration: "none" }}
+            >
+              {t.nav.features}
+            </a>
+            <a
+              href="#communities"
+              style={{ color: "var(--cream-soft)", textDecoration: "none" }}
+            >
+              {locale === "fr" ? "Communautés" : "Communities"}
+            </a>
+            <a
+              href="#how-it-works"
+              style={{ color: "var(--cream-soft)", textDecoration: "none" }}
+            >
+              {t.nav.howItWorks}
+            </a>
+            <a
+              href="#pricing"
+              style={{ color: "var(--cream-soft)", textDecoration: "none" }}
+            >
+              {t.nav.pricing}
+            </a>
+            <a
+              href="#faq"
+              style={{ color: "var(--cream-soft)", textDecoration: "none" }}
+            >
+              FAQ
+            </a>
+          </div>
+          <style jsx>{`
+            @media (max-width: 900px) {
+              :global(.bmd-nav-links) {
+                display: none !important;
+              }
+            }
+            :global(.bmd-nav-links a:hover) {
+              color: var(--saffron) !important;
+            }
+          `}</style>
+
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
             <LangPicker
               locale={locale}
@@ -537,6 +593,7 @@ export default function MarketingPage() {
 
         {/* ======== TRUST BAR (fidèle BMD_site_web.html) ======== */}
         <div
+          id="communities"
           style={{
             padding: "24px 24px",
             borderTop: "1px solid rgba(244,228,193,0.08)",
@@ -781,6 +838,7 @@ export default function MarketingPage() {
           title={t.faq.title}
         />
         <section
+          id="faq"
           style={{
             maxWidth: 800,
             margin: "0 auto",

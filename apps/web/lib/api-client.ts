@@ -99,6 +99,21 @@ async function request<T>(
   return (await r.json()) as T;
 }
 
+/**
+ * Cache mémoire pour les requêtes peu changeantes (perf).
+ * Le cache de `me()` réduit le nombre de fetch lors des navigations.
+ */
+const meCache = {
+  value: null as { user: any } | null,
+  loadedAt: 0,
+};
+const ME_CACHE_TTL_MS = 60_000; // 1 minute
+
+export function invalidateMeCache(): void {
+  meCache.value = null;
+  meCache.loadedAt = 0;
+}
+
 export const api = {
   requestOtp: (contactType: "PHONE" | "EMAIL", contactValue: string) =>
     request<{ sent: true; expiresAt: string }>("POST", "/auth/otp/request", {
@@ -130,16 +145,35 @@ export const api = {
       user: { id: string; displayName: string };
     }>("POST", "/auth/otp/verify", input),
 
-  me: () => request<{ user: any }>("GET", "/auth/me"),
+  /**
+   * Récupère le profil utilisateur courant.
+   * Mémoïsé en mémoire 60s pour économiser les requêtes lors des navigations
+   * (la plupart des pages appellent me() au mount). Bypass via clearMeCache().
+   */
+  me: async (): Promise<{ user: any }> => {
+    const now = Date.now();
+    if (meCache.value && now - meCache.loadedAt < ME_CACHE_TTL_MS) {
+      return meCache.value;
+    }
+    const r = await request<{ user: any }>("GET", "/auth/me");
+    meCache.value = r;
+    meCache.loadedAt = now;
+    return r;
+  },
 
-  updateMe: (input: {
+  updateMe: async (input: {
     displayName?: string;
     defaultCurrency?: string;
     defaultLocale?: string;
     avatar?: string | null;
     /** Tonalité des rappels (spec §3.8) : sympa | ferme | humour | pro */
     reminderTone?: "sympa" | "ferme" | "humour" | "pro";
-  }) => request<{ user: any }>("PATCH", "/auth/me", input),
+  }) => {
+    const r = await request<{ user: any }>("PATCH", "/auth/me", input);
+    // Invalide le cache pour que la prochaine lecture reflète la modif
+    invalidateMeCache();
+    return r;
+  },
 
   /**
    * Toggle "Ne pas déranger" sur un groupe (spec §3.12).
@@ -172,7 +206,10 @@ export const api = {
   setPrimaryContact: (contactId: string) =>
     request<{ ok: true }>("PUT", `/auth/contacts/${contactId}/primary`),
 
-  logout: () => request<void>("POST", "/auth/logout"),
+  logout: async () => {
+    invalidateMeCache();
+    return request<void>("POST", "/auth/logout");
+  },
 
   /** Liste les sessions actives de l'utilisateur (spec §7.5). */
   listSessions: () =>
@@ -199,6 +236,10 @@ export const api = {
         defaultCurrency: string;
         membersCount: number;
         createdAt: string;
+        /** Total des dépenses du groupe (string décimal) */
+        totalSpent: string;
+        /** Mon solde net dans ce groupe (positif = on me doit, négatif = je dois) */
+        myNet: string;
       }>
     >("GET", "/groups"),
 

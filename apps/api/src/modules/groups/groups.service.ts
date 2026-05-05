@@ -39,11 +39,53 @@ export async function createGroup(input: CreateGroupInput) {
 }
 
 export async function listGroupsForUser(userId: string) {
-  return prisma.group.findMany({
+  // 1. Récupère les groupes + compteur membres
+  const groups = await prisma.group.findMany({
     where: { members: { some: { userId } } },
-    include: { _count: { select: { members: true } } },
+    include: {
+      _count: { select: { members: true, expenses: true } },
+    },
     orderBy: { createdAt: "desc" },
   });
+
+  // 2. Pour chaque groupe : total des dépenses + mon solde net
+  // Une seule requête agregée pour le total, puis une autre pour mon owe.
+  // C'est O(1) requêtes par groupe — acceptable pour le dashboard.
+  const enriched = await Promise.all(
+    groups.map(async (g) => {
+      const [totalAgg, myShareAgg, paidByMeAgg] = await Promise.all([
+        prisma.expense.aggregate({
+          where: { groupId: g.id },
+          _sum: { amount: true },
+        }),
+        prisma.expenseShare.aggregate({
+          where: { userId, expense: { groupId: g.id } },
+          _sum: { amountOwed: true },
+        }),
+        prisma.expense.aggregate({
+          where: { groupId: g.id, paidById: userId },
+          _sum: { amount: true },
+        }),
+      ]);
+      const totalSpent = parseFloat(
+        totalAgg._sum.amount?.toString() ?? "0",
+      );
+      const myShare = parseFloat(
+        myShareAgg._sum.amountOwed?.toString() ?? "0",
+      );
+      const paidByMe = parseFloat(
+        paidByMeAgg._sum.amount?.toString() ?? "0",
+      );
+      // Solde net = ce que j'ai payé - ce que je dois (positif = on me doit)
+      const myNet = paidByMe - myShare;
+      return {
+        ...g,
+        totalSpent: totalSpent.toFixed(2),
+        myNet: myNet.toFixed(2),
+      };
+    }),
+  );
+  return enriched;
 }
 
 export async function getGroupForMember(groupId: string, userId: string) {

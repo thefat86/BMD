@@ -18,6 +18,7 @@ import {
 } from "../../../../lib/ui/itemized-expense";
 import { BottomNav } from "../../../../lib/ui/bottom-nav";
 import { ScanReceiptModal } from "../../../../lib/ui/scan-receipt-modal";
+import { BarChart, DonutChart } from "../../../../lib/ui/charts";
 import { validateContact } from "../../../../lib/validators";
 
 type SplitMode = "EQUAL" | "UNEQUAL" | "PERCENTAGE" | "ITEMIZED";
@@ -1418,6 +1419,60 @@ export default function GroupDetailPage() {
             </div>
           </div>
 
+          {/* Raccourci "Couple 50/50" — visible pour type EVENT (mariages) */}
+          {/* Spec §3.7 : "Couple uniquement (50/50 par défaut, ajustable)" */}
+          {group.type === "EVENT" && (
+            <div className="field">
+              <button
+                type="button"
+                onClick={() => {
+                  // Sélectionne uniquement moi + le payeur (s'il diffère),
+                  // sinon les 2 premiers membres ; passe en UNEQUAL avec 50/50.
+                  const meId = me?.id;
+                  const others = group.members
+                    .map((m: Member) => m.user.id)
+                    .filter((id: string) => id !== meId);
+                  const partner = paidByUserId !== meId
+                    ? paidByUserId
+                    : others[0] ?? meId;
+                  const sel: Record<string, boolean> = {};
+                  group.members.forEach(
+                    (m: Member) => (sel[m.user.id] = false),
+                  );
+                  if (meId) sel[meId] = true;
+                  if (partner && partner !== meId) sel[partner] = true;
+                  setParticipants(sel);
+                  setSplitMode("UNEQUAL");
+                  // 50/50 sera appliqué via autoFillShares mais on calcule direct
+                  const amt = parseFloat(amount) || 0;
+                  if (amt > 0) {
+                    const half = (amt / 2).toFixed(2);
+                    const sh: Record<string, string> = {};
+                    if (meId) sh[meId] = half;
+                    if (partner && partner !== meId) sh[partner] = half;
+                    setShares(sh);
+                  }
+                }}
+                style={{
+                  width: "100%",
+                  padding: "10px 12px",
+                  background:
+                    "linear-gradient(135deg, rgba(232,163,61,0.08), rgba(181,70,46,0.04))",
+                  border: "1px dashed var(--saffron, #E8A33D)",
+                  borderRadius: 10,
+                  color: "var(--saffron, #E8A33D)",
+                  fontSize: 13,
+                  fontWeight: 600,
+                  cursor: "pointer",
+                  fontFamily: "inherit",
+                  minHeight: 42,
+                }}
+              >
+                💍 Couple uniquement (50/50)
+              </button>
+            </div>
+          )}
+
           {/* Mode ITEMIZED : éditeur des articles */}
           {splitMode === "ITEMIZED" && (
             <div className="field">
@@ -1713,6 +1768,79 @@ export default function GroupDetailPage() {
             })}
           </div>
 
+          {/* Détection auto des dettes croisées (spec §3.6) */}
+          {/* Si ≥ 3 règlements et qu'il existe un cycle (A→B et B→C par ex), */}
+          {/* on suggère un swap pour réduire le nombre de transactions. */}
+          {balance.suggestions.length >= 3 && !activeSwap && (() => {
+            // Détection cycle : un user qui apparaît à la fois comme from et to
+            const fromIds = new Set(
+              balance.suggestions.map((s: any) => s.fromUserId),
+            );
+            const toIds = new Set(
+              balance.suggestions.map((s: any) => s.toUserId),
+            );
+            const intermediaries = [...fromIds].filter((id) => toIds.has(id));
+            if (intermediaries.length === 0) return null;
+            return (
+              <div
+                style={{
+                  background:
+                    "linear-gradient(135deg, rgba(232,163,61,0.12), rgba(181,70,46,0.06))",
+                  border: "1px solid var(--saffron, #E8A33D)",
+                  borderRadius: 12,
+                  padding: 14,
+                  marginTop: 14,
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 12,
+                  flexWrap: "wrap",
+                }}
+              >
+                <div
+                  style={{
+                    fontSize: 24,
+                    width: 40,
+                    height: 40,
+                    flexShrink: 0,
+                    background: "rgba(232,163,61,0.15)",
+                    borderRadius: 10,
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                  }}
+                >
+                  ⬡
+                </div>
+                <div style={{ flex: 1, minWidth: 180 }}>
+                  <div
+                    style={{
+                      fontSize: 11,
+                      letterSpacing: 1.5,
+                      color: "var(--saffron, #E8A33D)",
+                      textTransform: "uppercase",
+                      fontWeight: 700,
+                      marginBottom: 2,
+                    }}
+                  >
+                    Optimisation possible
+                  </div>
+                  <div style={{ fontSize: 13, color: "var(--cream, #F4E4C1)", lineHeight: 1.4 }}>
+                    {balance.suggestions.length} règlements actuels — un{" "}
+                    <strong>swap de dettes</strong> peut réduire le nombre de
+                    transactions à effectuer.
+                  </div>
+                </div>
+                <button
+                  onClick={proposeSwap}
+                  className="btn btn-sm"
+                  style={{ flexShrink: 0 }}
+                >
+                  ⬡ Proposer
+                </button>
+              </div>
+            );
+          })()}
+
           {balance.suggestions.length > 0 && (
             <>
               <div className="section-title">↔ Règlements suggérés</div>
@@ -1902,6 +2030,9 @@ export default function GroupDetailPage() {
           ))}
         </div>
       </div>
+
+      {/* === STATISTIQUES (spec §3.11) === */}
+      <GroupStatsBlock expenses={expenses} currency={group.defaultCurrency} />
 
       {/* === DÉPENSES === */}
       <div className="card">
@@ -2257,6 +2388,122 @@ export default function GroupDetailPage() {
           }
         }}
       />
+    </div>
+  );
+}
+
+/**
+ * Bloc statistiques d'un groupe (spec §3.11).
+ *  - Donut : répartition par catégorie (Restaurant, Courses, Transport...)
+ *  - BarChart : évolution mensuelle (6 derniers mois)
+ *
+ * Calculs côté client à partir de la liste d'expenses déjà chargée — pas
+ * de requête supplémentaire. Si le groupe a < 3 dépenses on n'affiche rien
+ * (graphiques inutiles avec si peu de données).
+ */
+function GroupStatsBlock({
+  expenses,
+  currency,
+}: {
+  expenses: any[];
+  currency: string;
+}) {
+  const [show, setShow] = useState(false);
+
+  const categoryData = useMemo(() => {
+    const map: Record<string, number> = {};
+    for (const e of expenses) {
+      const cat = e.category ?? "Autres";
+      map[cat] = (map[cat] ?? 0) + parseFloat(e.amount);
+    }
+    return Object.entries(map)
+      .map(([label, value]) => ({ label, value: Math.round(value) }))
+      .sort((a, b) => b.value - a.value)
+      .slice(0, 7);
+  }, [expenses]);
+
+  const monthlyData = useMemo(() => {
+    // 6 derniers mois
+    const map: Record<string, number> = {};
+    const now = new Date();
+    for (let i = 5; i >= 0; i--) {
+      const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+      map[key] = 0;
+    }
+    for (const e of expenses) {
+      const d = new Date(e.occurredAt);
+      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+      if (key in map) {
+        map[key] += parseFloat(e.amount);
+      }
+    }
+    const monthLabels = ["Jan", "Fév", "Mar", "Avr", "Mai", "Juin", "Juil", "Aoû", "Sep", "Oct", "Nov", "Déc"];
+    return Object.entries(map).map(([key, value]) => {
+      const m = parseInt(key.split("-")[1]) - 1;
+      return { label: monthLabels[m] ?? key, value: Math.round(value) };
+    });
+  }, [expenses]);
+
+  if (expenses.length < 3) return null;
+
+  const totalAmount = expenses.reduce(
+    (s, e) => s + parseFloat(e.amount),
+    0,
+  );
+
+  return (
+    <div className="card">
+      <div className="card-head">
+        <h2>📊 Statistiques</h2>
+        <button
+          onClick={() => setShow((v) => !v)}
+          className="btn-ghost btn-sm"
+          style={{ padding: "6px 12px" }}
+        >
+          {show ? "Masquer" : `${totalAmount.toFixed(0)} ${currency} ▾`}
+        </button>
+      </div>
+      {show && (
+        <>
+          <div
+            style={{
+              fontSize: 11,
+              letterSpacing: 1.5,
+              color: "var(--gold, #C9A24A)",
+              textTransform: "uppercase",
+              fontWeight: 700,
+              margin: "8px 0",
+            }}
+          >
+            Évolution sur 6 mois
+          </div>
+          <BarChart
+            data={monthlyData}
+            height={160}
+            valueFormat={(n) => n.toFixed(0)}
+            unit={currency}
+          />
+
+          {categoryData.length > 0 && (
+            <>
+              <div
+                style={{
+                  fontSize: 11,
+                  letterSpacing: 1.5,
+                  color: "var(--gold, #C9A24A)",
+                  textTransform: "uppercase",
+                  fontWeight: 700,
+                  margin: "20px 0 8px",
+                }}
+              >
+                Top catégories
+              </div>
+              <DonutChart data={categoryData} unit={currency} size={170} />
+            </>
+          )}
+        </>
+      )}
     </div>
   );
 }

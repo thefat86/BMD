@@ -11,6 +11,10 @@ import {
 import { NotificationBell } from "../../lib/ui/notification-bell";
 import { BarChart } from "../../lib/ui/charts";
 import { BottomNav } from "../../lib/ui/bottom-nav";
+import {
+  OnboardingModal,
+  shouldShowOnboarding,
+} from "../../lib/ui/onboarding-modal";
 
 const TYPES = [
   { value: "TONTINE", label: "🪙 Tontine" },
@@ -40,6 +44,9 @@ export default function DashboardPage() {
   const [name, setName] = useState("");
   const [type, setType] = useState("TONTINE");
   const [error, setError] = useState<string | null>(null);
+  // Onboarding contextuel : "tu es ici pour quoi ?" affiché si 0 groupe
+  // et flag localStorage pas encore positionné.
+  const [showOnboarding, setShowOnboarding] = useState(false);
 
   useEffect(() => {
     if (!getToken()) {
@@ -50,6 +57,10 @@ export default function DashboardPage() {
       .then(([m, g]) => {
         setMe(m.user);
         setGroups(g);
+        // Décide si on déclenche l'onboarding (uniquement si aucun groupe)
+        if (shouldShowOnboarding(g.length > 0)) {
+          setShowOnboarding(true);
+        }
       })
       .catch((e) => {
         if (isUnauthorized(e)) {
@@ -492,6 +503,18 @@ export default function DashboardPage() {
 
       {/* Bottom-nav mobile (fixe en bas, visible uniquement < 768px) */}
       <BottomNav active="home" onCreate={() => setShowCreate(true)} />
+
+      {/* Onboarding contextuel "tu es ici pour quoi ?" — voir spec §3.1 */}
+      <OnboardingModal
+        open={showOnboarding}
+        userName={me.displayName}
+        onClose={() => setShowOnboarding(false)}
+        onChoose={(groupType) => {
+          setType(groupType);
+          setShowCreate(true);
+          setShowOnboarding(false);
+        }}
+      />
     </div>
   );
 }

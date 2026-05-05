@@ -17,6 +17,7 @@ import {
   ItemizedEditor,
 } from "../../../../lib/ui/itemized-expense";
 import { BottomNav } from "../../../../lib/ui/bottom-nav";
+import { ScanReceiptModal } from "../../../../lib/ui/scan-receipt-modal";
 import { validateContact } from "../../../../lib/validators";
 
 type SplitMode = "EQUAL" | "UNEQUAL" | "PERCENTAGE" | "ITEMIZED";
@@ -125,13 +126,15 @@ export default function GroupDetailPage() {
   const [participants, setParticipants] = useState<Record<string, boolean>>({});
   const [shares, setShares] = useState<Record<string, string>>({});
 
-  // OCR
-  const [scanning, setScanning] = useState(false);
+  // OCR — ouverture du modal de scan IA (style maquette)
+  const [scanModalOpen, setScanModalOpen] = useState(false);
   const [scanResult, setScanResult] = useState<{
     merchant: string | null;
     confidence: number;
     itemsFound?: number;
   } | null>(null);
+  // Conservé pour le loader inline du bouton (au cas où on scanne hors modal)
+  const [scanning, setScanning] = useState(false);
 
   // Items draft (mode ITEMIZED) — pré-rempli par OCR ou saisi manuel
   const [draftItems, setDraftItems] = useState<
@@ -1284,8 +1287,10 @@ export default function GroupDetailPage() {
             </div>
           )}
 
-          {/* OCR scan */}
-          <label
+          {/* OCR scan : ouvre le modal IA fullscreen (style maquette) */}
+          <button
+            type="button"
+            onClick={() => setScanModalOpen(true)}
             style={{
               display: "flex",
               alignItems: "center",
@@ -1296,29 +1301,19 @@ export default function GroupDetailPage() {
               border: "1.5px dashed var(--saffron)",
               background:
                 "linear-gradient(135deg,rgba(232,163,61,0.08),rgba(181,70,46,0.04))",
-              cursor: scanning ? "wait" : "pointer",
+              cursor: "pointer",
               fontSize: 13,
               fontWeight: 700,
-              color: scanning ? "var(--cream-soft)" : "var(--saffron)",
+              color: "var(--saffron)",
               marginBottom: 14,
               minHeight: 50,
-              opacity: scanning ? 0.7 : 1,
               transition: "all 0.15s",
+              fontFamily: "inherit",
+              width: "100%",
             }}
           >
-            {scanning ? "⏳ Analyse en cours…" : "📷 Scanner ticket ou PDF"}
-            <input
-              type="file"
-              accept="image/*,application/pdf,.pdf"
-              disabled={scanning}
-              onChange={(e) => {
-                const f = e.target.files?.[0];
-                if (f) void scanTicket(f);
-                e.target.value = "";
-              }}
-              style={{ display: "none" }}
-            />
-          </label>
+            📷 Scanner ticket ou PDF · IA
+          </button>
 
           {scanResult && !scanning && (
             <div
@@ -2226,6 +2221,40 @@ export default function GroupDetailPage() {
         onCreate={() => {
           setEditingExpenseId(null);
           setOpenPanel("expense");
+        }}
+      />
+
+      {/* Modal de scan IA — UI fullscreen avec animation, bulle IA, lignes */}
+      <ScanReceiptModal
+        open={scanModalOpen}
+        onClose={() => setScanModalOpen(false)}
+        scanFn={api.scanReceipt}
+        onConfirm={(result) => {
+          // Applique les résultats au formulaire de dépense
+          if (result.amount) setAmount(result.amount);
+          if (result.merchant) setDescription(result.merchant);
+          else if (result.category) setDescription(result.category);
+          if (result.items && result.items.length > 0) {
+            setDraftItems(
+              result.items.map((it) => ({
+                description: it.description,
+                quantity: it.quantity,
+                unitPrice: it.unitPrice,
+                totalPrice: it.totalPrice,
+              })),
+            );
+            setSplitMode("ITEMIZED");
+          }
+          setScanResult({
+            merchant: result.merchant,
+            confidence: result.confidence,
+            itemsFound: result.items?.length ?? 0,
+          });
+          // S'assure que le panel "expense" est ouvert pour voir les résultats
+          if (openPanel !== "expense") {
+            setEditingExpenseId(null);
+            setOpenPanel("expense");
+          }
         }}
       />
     </div>

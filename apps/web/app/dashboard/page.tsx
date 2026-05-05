@@ -2,7 +2,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { api, clearToken, getToken } from "../../lib/api-client";
+import { api, clearToken, getToken, isUnauthorized } from "../../lib/api-client";
 
 const TYPES = [
   { value: "TONTINE", label: "🪙 Tontine" },
@@ -34,11 +34,13 @@ export default function DashboardPage() {
         setGroups(g);
       })
       .catch((e) => {
-        setError((e as Error).message);
-        if ((e as Error).message.includes("unauthorized")) {
+        if (isUnauthorized(e)) {
+          // Session invalide / révoquée → redirect silencieux vers login
           clearToken();
           router.replace("/login");
+          return;
         }
+        setError((e as Error).message);
       });
   }, [router]);
 
@@ -56,10 +58,14 @@ export default function DashboardPage() {
   }
 
   function logout() {
-    void api.logout().finally(() => {
-      clearToken();
-      router.push("/login");
+    // On efface la session locale IMMÉDIATEMENT pour éviter tout appel API en parallèle
+    // qui se ferait avec un token déjà invalide.
+    clearToken();
+    // Best effort : informer le backend (pas grave si ça échoue).
+    api.logout().catch(() => {
+      /* session déjà révoquée ou DB reset, on s'en fiche */
     });
+    router.replace("/login");
   }
 
   if (!me) {

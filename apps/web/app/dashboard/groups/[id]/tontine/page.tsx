@@ -2,7 +2,12 @@
 import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
-import { api, getToken } from "../../../../../lib/api-client";
+import {
+  api,
+  clearToken,
+  getToken,
+  isUnauthorized,
+} from "../../../../../lib/api-client";
 
 type Status = "DRAFT" | "ACTIVE" | "COMPLETED" | "CANCELLED";
 
@@ -40,6 +45,11 @@ export default function TontinePage() {
         setManualOrder(g.members.map((mem: any) => mem.user.id));
       }
     } catch (e) {
+      if (isUnauthorized(e)) {
+        clearToken();
+        router.replace("/login");
+        return;
+      }
       setError((e as Error).message);
     }
   }

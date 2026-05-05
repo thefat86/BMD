@@ -18,23 +18,59 @@ export function clearToken(): void {
   window.localStorage.removeItem(TOKEN_KEY);
 }
 
+/**
+ * Erreur typée renvoyée par notre wrapper fetch.
+ * Permet aux composants de réagir au statut HTTP (ex: redirect sur 401).
+ */
+export class ApiError extends Error {
+  constructor(
+    public readonly status: number,
+    public readonly code: string,
+    message: string,
+    public readonly details?: unknown,
+  ) {
+    super(message);
+    this.name = "ApiError";
+  }
+}
+
+export function isUnauthorized(e: unknown): boolean {
+  return e instanceof ApiError && e.status === 401;
+}
+
 async function request<T>(
   method: string,
   path: string,
   body?: unknown,
 ): Promise<T> {
   const token = getToken();
-  const r = await fetch(`${API_URL}${path}`, {
-    method,
-    headers: {
-      "content-type": "application/json",
-      ...(token ? { authorization: `Bearer ${token}` } : {}),
-    },
-    body: body ? JSON.stringify(body) : undefined,
-  });
+  let r: Response;
+  try {
+    r = await fetch(`${API_URL}${path}`, {
+      method,
+      headers: {
+        "content-type": "application/json",
+        ...(token ? { authorization: `Bearer ${token}` } : {}),
+      },
+      body: body ? JSON.stringify(body) : undefined,
+    });
+  } catch (networkErr) {
+    throw new ApiError(
+      0,
+      "network_error",
+      "Impossible de contacter le serveur. Vérifie ta connexion.",
+    );
+  }
   if (!r.ok) {
-    const err = await r.json().catch(() => ({ message: r.statusText }));
-    throw new Error(err.message ?? `HTTP ${r.status}`);
+    const errBody = await r
+      .json()
+      .catch(() => ({ message: r.statusText, error: "unknown" }));
+    throw new ApiError(
+      r.status,
+      errBody.error ?? "unknown",
+      errBody.message ?? `HTTP ${r.status}`,
+      errBody.details,
+    );
   }
   if (r.status === 204) return undefined as T;
   return (await r.json()) as T;

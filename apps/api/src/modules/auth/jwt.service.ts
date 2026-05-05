@@ -49,8 +49,10 @@ export async function issueToken(
 }
 
 export async function revokeSession(sessionId: string): Promise<void> {
-  await prisma.session.update({
-    where: { id: sessionId },
+  // updateMany ne plante pas si l'enregistrement n'existe pas (vs update qui throw P2025).
+  // Important pour la robustesse du logout après un reset de DB ou une session orpheline.
+  await prisma.session.updateMany({
+    where: { id: sessionId, revokedAt: null },
     data: { revokedAt: new Date() },
   });
 }

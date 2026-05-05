@@ -2,7 +2,12 @@
 import { useEffect, useMemo, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
-import { api, getToken } from "../../../../lib/api-client";
+import {
+  api,
+  clearToken,
+  getToken,
+  isUnauthorized,
+} from "../../../../lib/api-client";
 
 type SplitMode = "EQUAL" | "UNEQUAL" | "PERCENTAGE";
 
@@ -57,6 +62,11 @@ export default function GroupDetailPage() {
       setBalance(b);
       setActiveSwap(swaps[0] ?? null); // au plus 1 swap actif à la fois
     } catch (er) {
+      if (isUnauthorized(er)) {
+        clearToken();
+        router.replace("/login");
+        return;
+      }
       setError((er as Error).message);
     }
   }

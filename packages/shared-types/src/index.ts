@@ -146,4 +146,4 @@ export interface ApiError {
 }
 
 // === VALIDATORS ===
-export * from "./validators";
+export * from "./validators.js";

@@ -524,6 +524,27 @@ export default function ProfilePage() {
         )}
       </div>
 
+      {/* === Console admin (visible uniquement si super admin) === */}
+      {user.isSuperAdmin && (
+        <div className="card">
+          <div className="card-head">
+            <h2>⚙ Console admin</h2>
+            <span className="chip chip-saffron">Super admin</span>
+          </div>
+          <p className="muted" style={{ fontSize: 12, marginBottom: 12 }}>
+            Tu es super admin de cette instance BMD. Accès à la console de
+            pilotage : stats, utilisateurs, groupes, activité.
+          </p>
+          <Link
+            href="/admin"
+            className="btn btn-block"
+            style={{ textDecoration: "none" }}
+          >
+            ⚙ Ouvrir la console admin →
+          </Link>
+        </div>
+      )}
+
       {/* === Sécurité === */}
       <div className="card">
         <div className="card-head">

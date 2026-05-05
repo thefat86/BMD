@@ -20,6 +20,8 @@ model User {
   avatar          String?
   defaultCurrency String   @default("EUR")
   defaultLocale   String   @default("fr")
+  isSuperAdmin    Boolean  @default(false)
+  suspendedAt     DateTime?
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 

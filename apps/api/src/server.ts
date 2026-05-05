@@ -13,6 +13,7 @@ import { tontinesRoutes } from "./modules/tontines/tontines.routes.js";
 import { debtSwapsRoutes } from "./modules/debt-swaps/debt-swaps.routes.js";
 import { splitPresetsRoutes } from "./modules/split-presets/split-presets.routes.js";
 import { ocrRoutes } from "./modules/ocr/ocr.routes.js";
+import { adminRoutes } from "./modules/admin/admin.routes.js";
 import { assertSessionActive, type JwtPayload } from "./modules/auth/jwt.service.js";
 
 declare module "fastify" {
@@ -109,6 +110,7 @@ export async function buildServer(): Promise<FastifyInstance> {
   await app.register(debtSwapsRoutes);
   await app.register(splitPresetsRoutes);
   await app.register(ocrRoutes);
+  await app.register(adminRoutes);
 
   return app;
 }

@@ -346,4 +346,59 @@ export const api = {
       rawText: string;
     };
   },
+
+  // ============ ADMIN (D) ============
+
+  adminStats: () => request<any>("GET", "/admin/stats"),
+
+  adminListUsers: (query?: string, limit = 50, offset = 0) =>
+    request<{
+      items: any[];
+      total: number;
+      limit: number;
+      offset: number;
+    }>(
+      "GET",
+      `/admin/users?${new URLSearchParams({
+        ...(query && { query }),
+        limit: String(limit),
+        offset: String(offset),
+      }).toString()}`,
+    ),
+
+  adminGetUser: (id: string) =>
+    request<any>("GET", `/admin/users/${id}`),
+
+  adminSuspendUser: (id: string) =>
+    request<{ suspended: boolean }>(
+      "POST",
+      `/admin/users/${id}/suspend`,
+    ),
+
+  adminUnsuspendUser: (id: string) =>
+    request<{ suspended: boolean }>(
+      "POST",
+      `/admin/users/${id}/unsuspend`,
+    ),
+
+  adminListGroups: (limit = 50, offset = 0) =>
+    request<{
+      items: any[];
+      total: number;
+      limit: number;
+      offset: number;
+    }>(
+      "GET",
+      `/admin/groups?limit=${limit}&offset=${offset}`,
+    ),
+
+  adminActivity: () =>
+    request<
+      Array<{
+        kind: "user_signup" | "expense" | "swap";
+        at: string;
+        label: string;
+        id: string;
+      }>
+    >("GET", "/admin/activity"),
 };

@@ -15,7 +15,8 @@
     "typecheck": "tsc --noEmit",
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate dev",
-    "db:reset": "prisma migrate reset --force"
+    "db:reset": "prisma migrate reset --force",
+    "make-admin": "tsx scripts/make-admin.ts"
   },
   "dependencies": {
     "@bmd/shared-types": "*",

@@ -8,15 +8,19 @@ import {
   acknowledgeTurn,
   activateTontine,
   cancelTontine,
+  closeBidding,
   confirmContribution,
   createTontine,
   distributeTurn,
   getTontineByGroup,
   getTontineHistory,
   getTontineStats,
+  listBids,
   listTurnAcks,
   markContributionPaid,
+  placeBid,
   scheduleTurn,
+  withdrawBid,
 } from "./tontines.service.js";
 
 const createSchema = z.object({
@@ -282,5 +286,68 @@ export async function tontinesRoutes(app: FastifyInstance): Promise<void> {
     });
 
     return { id: updated.id, status: updated.status };
+  });
+
+  /* ===== Hui / Enchères (spec §3.4) ===== */
+
+  /**
+   * GET /tontine-turns/:turnId/bids
+   * Liste les enchères d'un tour (visible par tous les membres).
+   */
+  app.get("/tontine-turns/:turnId/bids", async (req) => {
+    const { turnId } = z
+      .object({ turnId: z.string().uuid() })
+      .parse(req.params);
+    return listBids({
+      turnId,
+      actorUserId: req.user.sub,
+    });
+  });
+
+  /**
+   * POST /tontine-turns/:turnId/bids
+   * Pose ou met à jour son enchère.
+   * Body: { amount: string }
+   */
+  app.post("/tontine-turns/:turnId/bids", async (req) => {
+    const { turnId } = z
+      .object({ turnId: z.string().uuid() })
+      .parse(req.params);
+    const body = z
+      .object({ amount: z.string().regex(/^\d+(\.\d{1,4})?$/) })
+      .parse(req.body);
+    return placeBid({
+      turnId,
+      actorUserId: req.user.sub,
+      amount: body.amount,
+    });
+  });
+
+  /**
+   * DELETE /tontine-turns/:turnId/bids
+   * Retire son enchère.
+   */
+  app.delete("/tontine-turns/:turnId/bids", async (req) => {
+    const { turnId } = z
+      .object({ turnId: z.string().uuid() })
+      .parse(req.params);
+    return withdrawBid({
+      turnId,
+      actorUserId: req.user.sub,
+    });
+  });
+
+  /**
+   * POST /tontine-turns/:turnId/bids/close
+   * Clôture les enchères, déclare le gagnant. Admin uniquement.
+   */
+  app.post("/tontine-turns/:turnId/bids/close", async (req) => {
+    const { turnId } = z
+      .object({ turnId: z.string().uuid() })
+      .parse(req.params);
+    return closeBidding({
+      turnId,
+      actorUserId: req.user.sub,
+    });
   });
 }

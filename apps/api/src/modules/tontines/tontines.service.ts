@@ -713,3 +713,198 @@ export async function getTontineHistory(input: {
     ],
   };
 }
+
+/* =================================================================
+ * HUI / ENCHÈRES (spec §3.4)
+ * =================================================================
+ * Mode AUCTION : pour chaque tour, les membres posent une enchère.
+ * Le plus offrant gagne le pot (et son enchère est répartie en
+ * "intérêts" entre les autres). C'est le système Hui asiatique.
+ */
+
+/**
+ * Pose ou met à jour une enchère sur un tour de tontine.
+ * Conditions :
+ *  - Le tour doit être en mode AUCTION (orderMode de la tontine)
+ *  - Le tour doit être PENDING (pas encore distribué)
+ *  - Le membre doit être membre du groupe
+ *  - L'enchère doit être > 0
+ *
+ * Si une enchère existe déjà pour ce membre, elle est remplacée.
+ */
+export async function placeBid(input: {
+  turnId: string;
+  actorUserId: string;
+  amount: string;
+}) {
+  const turn = await prisma.tontineTurn.findUnique({
+    where: { id: input.turnId },
+    include: {
+      tontine: {
+        include: {
+          group: { include: { members: { select: { userId: true } } } },
+        },
+      },
+    },
+  });
+  if (!turn) throw Errors.notFound("Tour introuvable");
+  if (turn.tontine.orderMode !== "AUCTION") {
+    throw Errors.badRequest(
+      "Ce tour n'est pas en mode enchères (Hui)",
+    );
+  }
+  if (turn.status !== "PENDING") {
+    throw Errors.badRequest(
+      "Le tour est clôturé — impossible de modifier les enchères",
+    );
+  }
+  const isMember = turn.tontine.group.members.some(
+    (m) => m.userId === input.actorUserId,
+  );
+  if (!isMember) throw Errors.forbidden("Pas membre du groupe");
+
+  const amount = parseFloat(input.amount);
+  if (!Number.isFinite(amount) || amount <= 0) {
+    throw Errors.badRequest("L'enchère doit être positive");
+  }
+
+  return prisma.tontineBid.upsert({
+    where: {
+      turnId_bidderId: {
+        turnId: input.turnId,
+        bidderId: input.actorUserId,
+      },
+    },
+    create: {
+      turnId: input.turnId,
+      bidderId: input.actorUserId,
+      amount: amount as any,
+    },
+    update: {
+      amount: amount as any,
+    },
+  });
+}
+
+/**
+ * Retire son enchère sur un tour.
+ */
+export async function withdrawBid(input: {
+  turnId: string;
+  actorUserId: string;
+}) {
+  await prisma.tontineBid.deleteMany({
+    where: {
+      turnId: input.turnId,
+      bidderId: input.actorUserId,
+    },
+  });
+  return { withdrawn: true };
+}
+
+/**
+ * Liste les enchères d'un tour (visible par tous les membres pour
+ * la transparence — c'est le principe de Hui).
+ */
+export async function listBids(input: {
+  turnId: string;
+  actorUserId: string;
+}) {
+  const turn = await prisma.tontineTurn.findUnique({
+    where: { id: input.turnId },
+    include: {
+      tontine: {
+        include: {
+          group: { include: { members: { select: { userId: true } } } },
+        },
+      },
+    },
+  });
+  if (!turn) throw Errors.notFound("Tour introuvable");
+  const isMember = turn.tontine.group.members.some(
+    (m) => m.userId === input.actorUserId,
+  );
+  if (!isMember) throw Errors.forbidden("Pas membre du groupe");
+
+  return prisma.tontineBid.findMany({
+    where: { turnId: input.turnId },
+    orderBy: { amount: "desc" },
+    include: {
+      bidder: {
+        select: { id: true, displayName: true, avatar: true },
+      },
+    },
+  });
+}
+
+/**
+ * Clôture les enchères : déclare le gagnant, met à jour le bénéficiaire
+ * du tour, et passe le tour en IN_PROGRESS pour cotisations.
+ *
+ * Réservé à un admin du groupe.
+ */
+export async function closeBidding(input: {
+  turnId: string;
+  actorUserId: string;
+}) {
+  const turn = await prisma.tontineTurn.findUnique({
+    where: { id: input.turnId },
+    include: {
+      tontine: {
+        include: {
+          group: {
+            include: { members: { select: { userId: true, role: true } } },
+          },
+        },
+      },
+    },
+  });
+  if (!turn) throw Errors.notFound("Tour introuvable");
+  if (turn.tontine.orderMode !== "AUCTION") {
+    throw Errors.badRequest("Ce tour n'est pas en mode enchères");
+  }
+  if (turn.status !== "PENDING") {
+    throw Errors.badRequest("Tour déjà clôturé");
+  }
+  const member = turn.tontine.group.members.find(
+    (m) => m.userId === input.actorUserId,
+  );
+  if (!member || member.role !== "ADMIN") {
+    throw Errors.forbidden("Seul un admin peut clôturer une enchère");
+  }
+
+  // Trouve la mise la plus haute
+  const top = await prisma.tontineBid.findFirst({
+    where: { turnId: input.turnId },
+    orderBy: { amount: "desc" },
+  });
+  if (!top) {
+    throw Errors.badRequest(
+      "Aucune enchère posée — impossible de clôturer",
+    );
+  }
+
+  // Marque le gagnant + override le bénéficiaire du tour
+  await prisma.$transaction([
+    prisma.tontineBid.updateMany({
+      where: { turnId: input.turnId },
+      data: { won: false },
+    }),
+    prisma.tontineBid.update({
+      where: { id: top.id },
+      data: { won: true },
+    }),
+    prisma.tontineTurn.update({
+      where: { id: input.turnId },
+      data: {
+        beneficiaryUserId: top.bidderId,
+        status: "IN_PROGRESS",
+      },
+    }),
+  ]);
+
+  return {
+    winnerUserId: top.bidderId,
+    winningBid: top.amount.toString(),
+  };
+}

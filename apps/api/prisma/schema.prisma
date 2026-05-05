@@ -57,6 +57,8 @@ model User {
   /// Code du rôle admin custom (spec §6.10) — null = pas de rôle particulier.
   /// Si défini, donne des permissions spécifiques en plus de isSuperAdmin.
   adminRoleCode          String?
+  tontineBids            TontineBid[]           @relation("BidderUser")
+  paymentTokensCreated   SettlementPaymentToken[] @relation("PaymentTokenCreator")
 }
 
 /**
@@ -80,6 +82,65 @@ model AdminRole {
   permissions Json
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
+}
+
+/**
+ * Token public d'un Settlement permettant de confirmer un paiement sans
+ * créer de compte (mode invité — spec §3.2 §7.6).
+ *
+ * Workflow :
+ *  1. L'admin du groupe génère un token pour un Settlement existant
+ *  2. L'admin partage le lien /pay/<token> via WhatsApp/SMS
+ *  3. L'invité clique, voit le détail (montant, à qui), confirme par OTP de son numéro
+ *  4. À confirmation, le Settlement passe en PAID puis CONFIRMED
+ *
+ * Sécurité : token URL-safe 24 octets random, TTL 14 jours, usage unique.
+ */
+model SettlementPaymentToken {
+  id            String     @id @default(uuid())
+  /// Token URL-safe (24 bytes random base64url)
+  token         String     @unique
+  settlementId  String
+  settlement    Settlement @relation(fields: [settlementId], references: [id], onDelete: Cascade)
+  /// Créateur du lien (admin du groupe)
+  createdById   String
+  createdBy     User       @relation("PaymentTokenCreator", fields: [createdById], references: [id])
+  expiresAt     DateTime
+  usedAt        DateTime?
+  createdAt     DateTime   @default(now())
+
+  @@index([token])
+  @@index([settlementId])
+}
+
+/**
+ * Enchère pour un tour de tontine (Hui / 標會 — spec §3.4).
+ *
+ * Workflow :
+ *  1. Le tour est ouvert à enchères (status PENDING) — chaque membre peut faire une mise
+ *  2. La mise = somme acceptée d'être perdue si on gagne le pot ce mois-ci
+ *     Plus la mise est haute, plus on s'engage à donner aux autres en "intérêts"
+ *  3. À la clôture : le plus offrant gagne le tour, sa mise est répartie entre les autres
+ *  4. Le bénéficiaire effectif du tour devient le gagnant (override beneficiaryUserId du turn)
+ *
+ * Une seule enchère par membre par tour (clé unique). On peut updater son enchère
+ * tant que le tour est en PENDING.
+ */
+model TontineBid {
+  id          String      @id @default(uuid())
+  turnId      String
+  turn        TontineTurn @relation("TurnBids", fields: [turnId], references: [id], onDelete: Cascade)
+  bidderId    String
+  bidder      User        @relation("BidderUser", fields: [bidderId], references: [id], onDelete: Cascade)
+  /// Montant de la mise en devise du tour. > 0
+  amount      Decimal     @db.Decimal(14, 4)
+  /// Si true : ce bid a remporté l'enchère du tour (un seul gagnant par tour)
+  won         Boolean     @default(false)
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  @@unique([turnId, bidderId])
+  @@index([turnId, amount])
 }
 
 /**
@@ -380,6 +441,7 @@ model Settlement {
   proposedAt         DateTime         @default(now())
   confirmedByPayerAt DateTime?
   confirmedByPayeeAt DateTime?
+  paymentTokens      SettlementPaymentToken[]
 }
 
 // ============================================================
@@ -451,6 +513,8 @@ model TontineTurn {
   contributions     TontineContribution[]
   /// Accusés de réception des autres membres après que le bénéficiaire a fixé sa date
   acknowledgments   TontineTurnAck[]
+  /// Enchères posées par les membres pour ce tour (mode AUCTION — Hui)
+  bids              TontineBid[]   @relation("TurnBids")
 
   @@unique([tontineId, turnNumber])
   @@index([beneficiaryUserId])

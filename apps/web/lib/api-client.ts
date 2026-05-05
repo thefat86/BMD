@@ -616,6 +616,82 @@ export const api = {
       }>;
     }>("GET", `/tontine-turns/${turnId}/acks`),
 
+  // ============ Hui / Enchères (spec §3.4) ============
+
+  /** Liste les enchères d'un tour (mode AUCTION). */
+  listTurnBids: (turnId: string) =>
+    request<
+      Array<{
+        id: string;
+        bidderId: string;
+        amount: string;
+        won: boolean;
+        createdAt: string;
+        bidder: { id: string; displayName: string; avatar: string | null };
+      }>
+    >("GET", `/tontine-turns/${turnId}/bids`),
+
+  /** Pose ou met à jour son enchère. */
+  placeBid: (turnId: string, amount: string) =>
+    request<{ id: string; amount: string }>(
+      "POST",
+      `/tontine-turns/${turnId}/bids`,
+      { amount },
+    ),
+
+  /** Retire son enchère. */
+  withdrawBid: (turnId: string) =>
+    request<{ withdrawn: boolean }>(
+      "DELETE",
+      `/tontine-turns/${turnId}/bids`,
+    ),
+
+  /** Clôture les enchères et déclare le gagnant (admin). */
+  closeBidding: (turnId: string) =>
+    request<{ winnerUserId: string; winningBid: string }>(
+      "POST",
+      `/tontine-turns/${turnId}/bids/close`,
+    ),
+
+  // ============ Settlements + mode invité (spec §3.5, §7.6) ============
+
+  /** Crée un règlement explicite. */
+  createSettlement: (
+    groupId: string,
+    body: {
+      fromUserId: string;
+      toUserId: string;
+      amount: string;
+      currency?: string;
+    },
+  ) => request<any>("POST", `/groups/${groupId}/settlements`, body),
+
+  /** Génère un lien public de paiement pour mode invité. */
+  createPaymentToken: (settlementId: string) =>
+    request<{
+      token: string;
+      expiresAt: string;
+    }>("POST", `/settlements/${settlementId}/payment-tokens`),
+
+  /** Le créancier confirme avoir reçu le paiement. */
+  confirmSettlement: (settlementId: string) =>
+    request<any>("POST", `/settlements/${settlementId}/confirm`),
+
+  /** Récupère les infos publiques d'un token de paiement (no auth). */
+  getPayInfo: (token: string) =>
+    request<{
+      groupName: string;
+      from: string;
+      to: string;
+      amount: string;
+      currency: string;
+      status: string;
+    }>("GET", `/pay-info/${token}`),
+
+  /** Confirme le paiement via token (no auth — mode invité). */
+  confirmPayment: (token: string) =>
+    request<{ confirmed: boolean }>("POST", `/pay-confirm/${token}`),
+
   /**
    * Solde global de l'utilisateur sur tous ses groupes.
    * Affiché en haut du dashboard (style maquette BMD_site_web.html).

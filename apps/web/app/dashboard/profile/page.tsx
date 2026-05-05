@@ -168,7 +168,8 @@ export default function ProfilePage() {
   function logout() {
     clearToken();
     api.logout().catch(() => {});
-    router.replace("/login");
+    // Retour à la page d'accueil (vitrine) après déconnexion volontaire
+    router.replace("/");
   }
 
   if (!user) {

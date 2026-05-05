@@ -1,6 +1,7 @@
 "use client";
 import { Suspense, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
+import Link from "next/link";
 import { api, setToken } from "../../lib/api-client";
 import { validateContact } from "../../lib/validators";
 
@@ -85,11 +86,34 @@ function LoginPageInner() {
 
   return (
     <div className="container" style={{ maxWidth: 440 }}>
-      <div
+      {/* Lien retour vers la page d'accueil — toujours accessible */}
+      <div style={{ marginTop: 16, marginBottom: 8 }}>
+        <Link
+          href="/"
+          aria-label="Retour à l'accueil"
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 6,
+            color: "var(--cream-soft, #E8D5B7)",
+            textDecoration: "none",
+            fontSize: 13,
+            padding: "8px 4px",
+            minHeight: 36,
+          }}
+        >
+          ← Accueil
+        </Link>
+      </div>
+      <Link
+        href="/"
         className="text-center"
         style={{
-          marginTop: 28,
+          display: "block",
+          marginTop: 12,
           marginBottom: 28,
+          textDecoration: "none",
+          color: "inherit",
         }}
       >
         <div
@@ -116,7 +140,7 @@ function LoginPageInner() {
         >
           Back · Mes · Do
         </div>
-      </div>
+      </Link>
 
       <div className="card">
         <h2 style={{ marginBottom: 14 }}>

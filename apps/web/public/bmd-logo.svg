@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 400" width="400" height="400">
+  <defs>
+    <linearGradient id="goldGrad" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#F4E4C1"/>
+      <stop offset="40%" stop-color="#E8A33D"/>
+      <stop offset="100%" stop-color="#B5462E"/>
+    </linearGradient>
+    <linearGradient id="goldGrad2" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#E8A33D"/>
+      <stop offset="100%" stop-color="#8E5A3B"/>
+    </linearGradient>
+    <radialGradient id="bgGrad" cx="0.3" cy="0.3" r="0.9">
+      <stop offset="0%" stop-color="#2A2244"/>
+      <stop offset="100%" stop-color="#0E0B14"/>
+    </radialGradient>
+  </defs>
+
+  <!-- Outer dark medallion -->
+  <circle cx="200" cy="200" r="195" fill="url(#bgGrad)"/>
+  <circle cx="200" cy="200" r="195" fill="none" stroke="url(#goldGrad)" stroke-width="2.5"/>
+
+  <!-- Decorative dashed inner ring -->
+  <circle cx="200" cy="200" r="178" fill="none" stroke="#E8A33D" stroke-width="0.8" stroke-dasharray="3 4" opacity="0.5"/>
+
+  <!-- Bogolan-inspired geometric points -->
+  <g opacity="0.5" stroke="#E8A33D" stroke-width="1" fill="none">
+    <polygon points="200,40 215,80 200,120 185,80"/>
+    <polygon points="200,280 215,320 200,360 185,320"/>
+    <polygon points="40,200 80,215 120,200 80,185"/>
+    <polygon points="280,200 320,215 360,200 320,185"/>
+    <polygon points="80,80 95,90 90,108 75,98" stroke-width="0.7"/>
+    <polygon points="320,80 305,90 310,108 325,98" stroke-width="0.7"/>
+    <polygon points="80,320 95,310 90,292 75,302" stroke-width="0.7"/>
+    <polygon points="320,320 305,310 310,292 325,302" stroke-width="0.7"/>
+  </g>
+
+  <!-- Hexagonal tribal frame -->
+  <polygon points="200,75 304,135 304,265 200,325 96,265 96,135"
+           fill="none" stroke="url(#goldGrad)" stroke-width="3.5"/>
+
+  <!-- Inner crest -->
+  <polygon points="200,103 280,150 280,250 200,297 120,250 120,150"
+           fill="#0E0B14" opacity="0.85"
+           stroke="#E8A33D" stroke-width="0.8" stroke-dasharray="2 2"/>
+
+  <!-- Letters BMD -->
+  <text x="200" y="225" text-anchor="middle"
+        font-family="Cormorant Garamond, Georgia, serif"
+        font-size="78" font-weight="700"
+        fill="url(#goldGrad)" letter-spacing="2">BMD</text>
+
+  <!-- Baseline -->
+  <text x="200" y="258" text-anchor="middle"
+        font-family="Inter, Helvetica, sans-serif"
+        font-size="11" letter-spacing="6"
+        fill="#E8A33D" opacity="0.85">BACK · MES · DO</text>
+
+  <!-- Decorative cowries on the sides -->
+  <ellipse cx="80" cy="200" rx="6" ry="10" fill="url(#goldGrad2)"/>
+  <ellipse cx="320" cy="200" rx="6" ry="10" fill="url(#goldGrad2)"/>
+  <line x1="80" y1="194" x2="80" y2="206" stroke="#0E0B14" stroke-width="1.2"/>
+  <line x1="320" y1="194" x2="320" y2="206" stroke="#0E0B14" stroke-width="1.2"/>
+
+  <!-- Top star -->
+  <polygon points="200,52 204,64 217,64 207,72 211,84 200,77 189,84 193,72 183,64 196,64"
+           fill="#E8A33D"/>
+</svg>

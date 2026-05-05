@@ -76,7 +76,9 @@ export default function DashboardPage() {
   function logout() {
     clearToken();
     api.logout().catch(() => {});
-    router.replace("/login");
+    // Après déconnexion : retour à la page d'accueil (vitrine), pas /login.
+    // L'utilisateur peut alors se reconnecter ou explorer le site.
+    router.replace("/");
   }
 
   if (!me) {

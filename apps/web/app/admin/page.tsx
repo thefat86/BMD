@@ -9,6 +9,7 @@ import {
   isUnauthorized,
 } from "../../lib/api-client";
 import { AdminPlansEditor } from "../../lib/ui/admin-plans-editor";
+import { AdminAdsBlock } from "../../lib/ui/admin-ads-block";
 
 type Tab = "stats" | "users" | "groups" | "activity";
 
@@ -620,6 +621,9 @@ export default function AdminPage() {
       {/* === PLANS TARIFAIRES (spec §6.3) === Hors conditional stats : */}
       {/* visible même si stats échoue, pour pouvoir gérer les plans en debug */}
       <AdminPlansEditor />
+
+      {/* === Module Publicités (spec §6.4) === */}
+      <AdminAdsBlock />
     </div>
   );
 }

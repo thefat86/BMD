@@ -82,6 +82,32 @@ model AdminRole {
   updatedAt   DateTime @updatedAt
 }
 
+/**
+ * Configuration centrale des publicités (spec §6.4).
+ * Singleton (une seule ligne avec id="default").
+ *
+ * Toutes les pubs s'affichent SEULEMENT pour les utilisateurs sur plan
+ * FREE. Premium et Communauté n'en voient jamais (limites.adsEnabled=false).
+ */
+model AdsConfig {
+  id              String   @id @default("default")
+  /// Master switch global — si false, aucune pub n'est diffusée même en FREE
+  enabled         Boolean  @default(false)
+  /// Régies activées : ex ["admob", "meta_audience", "diaspora_partners"]
+  enabledNetworks Json     @default("[]")
+  /// Catégories autorisées : ex ["voyage", "mode", "telcos", "banques"]
+  allowedCategories Json   @default("[]")
+  /// Catégories bloquées (toujours, même si autorisées par défaut)
+  blockedCategories Json   @default("[\"crypto\",\"gambling\",\"predatory_credit\",\"alcohol\"]")
+  /// Plafond quotidien par utilisateur (3 = max 3 pubs/jour vues)
+  maxPerUserPerDay Int     @default(3)
+  /// Frequency cap interstitiel (ex: une fois toutes les 5 sessions)
+  interstitialEverySessions Int @default(5)
+  /// Formats activés : ["banner","interstitial","video","native"]
+  enabledFormats  Json     @default("[\"banner\"]")
+  updatedAt       DateTime @updatedAt
+}
+
 /// Connexion par scan QR depuis le mobile (spec §8.5).
 /// Le desktop crée une demande, le mobile scanne et approuve, le
 /// desktop échange contre un JWT. TTL 90s pour limiter les risques.

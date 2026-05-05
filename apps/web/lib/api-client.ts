@@ -1022,6 +1022,31 @@ export const api = {
       adminRoleCode: string | null;
     }>("POST", `/admin/users/${userId}/admin-role`, { roleCode }),
 
+  // ============ Module Publicités (spec §6.4) ============
+
+  adminGetAdsConfig: () =>
+    request<{
+      id: string;
+      enabled: boolean;
+      enabledNetworks: string[];
+      allowedCategories: string[];
+      blockedCategories: string[];
+      maxPerUserPerDay: number;
+      interstitialEverySessions: number;
+      enabledFormats: string[];
+      updatedAt: string;
+    }>("GET", "/admin/ads-config"),
+
+  adminUpdateAdsConfig: (body: {
+    enabled?: boolean;
+    enabledNetworks?: string[];
+    allowedCategories?: string[];
+    blockedCategories?: string[];
+    maxPerUserPerDay?: number;
+    interstitialEverySessions?: number;
+    enabledFormats?: string[];
+  }) => request<any>("PATCH", "/admin/ads-config", body),
+
   // ============ NOTIFICATIONS ============
 
   /** Liste les notifications de l'utilisateur connecté. */

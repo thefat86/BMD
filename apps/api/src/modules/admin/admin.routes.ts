@@ -373,4 +373,39 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
       },
     });
   });
+
+  /* ===== Module Publicités (spec §6.4) ===== */
+
+  /**
+   * GET /admin/ads-config — config singleton (créée à la volée si absente).
+   */
+  app.get("/admin/ads-config", async () => {
+    const existing = await prisma.adsConfig.findUnique({
+      where: { id: "default" },
+    });
+    if (existing) return existing;
+    return prisma.adsConfig.create({ data: { id: "default" } });
+  });
+
+  /**
+   * PATCH /admin/ads-config — modifie la config publicités.
+   */
+  app.patch("/admin/ads-config", async (req) => {
+    const body = z
+      .object({
+        enabled: z.boolean().optional(),
+        enabledNetworks: z.array(z.string()).optional(),
+        allowedCategories: z.array(z.string()).optional(),
+        blockedCategories: z.array(z.string()).optional(),
+        maxPerUserPerDay: z.number().int().min(0).max(50).optional(),
+        interstitialEverySessions: z.number().int().min(1).max(100).optional(),
+        enabledFormats: z.array(z.string()).optional(),
+      })
+      .parse(req.body);
+    return prisma.adsConfig.upsert({
+      where: { id: "default" },
+      create: { id: "default", ...(body as any) },
+      update: body as any,
+    });
+  });
 }

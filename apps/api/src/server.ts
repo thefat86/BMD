@@ -1,6 +1,7 @@
 import Fastify, { FastifyInstance } from "fastify";
 import cors from "@fastify/cors";
 import jwt from "@fastify/jwt";
+import multipart from "@fastify/multipart";
 import { ZodError } from "zod";
 import { loadEnv } from "./lib/env.js";
 import { AppError } from "./lib/errors.js";
@@ -11,6 +12,7 @@ import { settlementsRoutes } from "./modules/settlements/settlements.routes.js";
 import { tontinesRoutes } from "./modules/tontines/tontines.routes.js";
 import { debtSwapsRoutes } from "./modules/debt-swaps/debt-swaps.routes.js";
 import { splitPresetsRoutes } from "./modules/split-presets/split-presets.routes.js";
+import { ocrRoutes } from "./modules/ocr/ocr.routes.js";
 import { assertSessionActive, type JwtPayload } from "./modules/auth/jwt.service.js";
 
 declare module "fastify" {
@@ -52,6 +54,14 @@ export async function buildServer(): Promise<FastifyInstance> {
   await app.register(jwt, {
     secret: env.JWT_SECRET,
     sign: { expiresIn: env.JWT_EXPIRES_IN },
+  });
+
+  // Pour l'upload d'images de tickets (M14 OCR)
+  await app.register(multipart, {
+    limits: {
+      fileSize: 10 * 1024 * 1024, // 10 Mo max
+      files: 1,
+    },
   });
 
   app.decorate("authenticate", async function (req: any, _reply: any) {
@@ -98,6 +108,7 @@ export async function buildServer(): Promise<FastifyInstance> {
   await app.register(tontinesRoutes);
   await app.register(debtSwapsRoutes);
   await app.register(splitPresetsRoutes);
+  await app.register(ocrRoutes);
 
   return app;
 }

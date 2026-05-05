@@ -259,4 +259,53 @@ export const api = {
 
   deletePreset: (presetId: string) =>
     request<void>("DELETE", `/split-presets/${presetId}`),
+
+  // ============ OCR · SCAN DE TICKETS (M14) ============
+
+  /**
+   * Scan une image de ticket. Retourne le marchand, le montant, la
+   * devise, la date et la catégorie devinée par l'IA.
+   * On utilise FormData (multipart) au lieu de JSON car on uploade un fichier.
+   */
+  scanReceipt: async (file: File) => {
+    const token = getToken();
+    const formData = new FormData();
+    formData.append("file", file);
+
+    let r: Response;
+    try {
+      r = await fetch(`${API_URL}/receipts/scan`, {
+        method: "POST",
+        headers: {
+          ...(token ? { authorization: `Bearer ${token}` } : {}),
+          // PAS de content-type ici — le navigateur le génère avec
+          // le boundary multipart automatiquement
+        },
+        body: formData,
+      });
+    } catch {
+      throw new ApiError(
+        0,
+        "network_error",
+        "Impossible de contacter le serveur OCR",
+      );
+    }
+    if (!r.ok) {
+      const errBody = await r.json().catch(() => ({ message: r.statusText }));
+      throw new ApiError(
+        r.status,
+        errBody.error ?? "unknown",
+        errBody.message ?? `HTTP ${r.status}`,
+      );
+    }
+    return (await r.json()) as {
+      merchant: string | null;
+      amount: string | null;
+      currency: string;
+      date: string | null;
+      category: string | null;
+      confidence: number;
+      rawText: string;
+    };
+  },
 };

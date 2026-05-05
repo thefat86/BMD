@@ -44,6 +44,39 @@ export default function GroupDetailPage() {
   // userId -> share value (montant for UNEQUAL, % for PERCENTAGE)
   const [shares, setShares] = useState<Record<string, string>>({});
 
+  // OCR (M14) — état du scan en cours + résultat
+  const [scanning, setScanning] = useState(false);
+  const [scanResult, setScanResult] = useState<{
+    merchant: string | null;
+    confidence: number;
+  } | null>(null);
+
+  async function scanTicket(file: File) {
+    setError(null);
+    setScanning(true);
+    setScanResult(null);
+    try {
+      const result = await api.scanReceipt(file);
+      // Auto-fill du formulaire avec les infos extraites
+      if (result.amount) setAmount(result.amount);
+      if (result.merchant) setDescription(result.merchant);
+      else if (result.category) setDescription(result.category);
+      setScanResult({
+        merchant: result.merchant,
+        confidence: result.confidence,
+      });
+    } catch (e) {
+      if (isUnauthorized(e)) {
+        clearToken();
+        router.replace("/login");
+        return;
+      }
+      setError(`Échec du scan : ${(e as Error).message}`);
+    } finally {
+      setScanning(false);
+    }
+  }
+
   // Active swap state (M09)
   const [activeSwap, setActiveSwap] = useState<any>(null);
 
@@ -603,6 +636,86 @@ export default function GroupDetailPage() {
 
         {showExpense && (
           <div style={{ marginTop: 18 }}>
+            {/* === M14 OCR : Scanner un ticket === */}
+            <div
+              style={{
+                background:
+                  "linear-gradient(135deg,rgba(232,163,61,0.1),rgba(181,70,46,0.05))",
+                border: "1.5px dashed var(--saffron)",
+                borderRadius: 12,
+                padding: 14,
+                marginBottom: 16,
+                textAlign: "center",
+              }}
+            >
+              <label
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 10,
+                  cursor: scanning ? "wait" : "pointer",
+                  padding: "10px 22px",
+                  borderRadius: 10,
+                  background: scanning
+                    ? "rgba(255,255,255,0.05)"
+                    : "linear-gradient(135deg, var(--saffron), var(--terracotta))",
+                  color: scanning ? "var(--cream-soft)" : "#16111E",
+                  fontWeight: 700,
+                  fontSize: 13,
+                  letterSpacing: 0.5,
+                  opacity: scanning ? 0.7 : 1,
+                }}
+              >
+                {scanning ? "⏳ Analyse en cours…" : "📷 Scanner un ticket"}
+                <input
+                  type="file"
+                  accept="image/*"
+                  capture="environment"
+                  disabled={scanning}
+                  onChange={(e) => {
+                    const f = e.target.files?.[0];
+                    if (f) void scanTicket(f);
+                    e.target.value = ""; // reset pour permettre de re-scanner le même fichier
+                  }}
+                  style={{ display: "none" }}
+                />
+              </label>
+              <div
+                style={{
+                  fontSize: 11,
+                  color: "var(--cream-soft)",
+                  marginTop: 8,
+                }}
+              >
+                {scanning
+                  ? "L'IA lit ton ticket… (~3 secondes)"
+                  : "L'IA détecte automatiquement le marchand et le montant"}
+              </div>
+              {scanResult && !scanning && (
+                <div
+                  style={{
+                    marginTop: 10,
+                    padding: "8px 12px",
+                    borderRadius: 8,
+                    fontSize: 11,
+                    background:
+                      scanResult.confidence > 0.6
+                        ? "rgba(63,125,92,0.15)"
+                        : "rgba(232,163,61,0.12)",
+                    border: `1px solid ${scanResult.confidence > 0.6 ? "var(--emerald)" : "var(--saffron)"}`,
+                    color:
+                      scanResult.confidence > 0.6
+                        ? "#7DC59E"
+                        : "var(--saffron)",
+                  }}
+                >
+                  ✓ Ticket lu · confiance{" "}
+                  {Math.round(scanResult.confidence * 100)} % · vérifie et
+                  ajuste les champs ci-dessous
+                </div>
+              )}
+            </div>
+
             {/* Description */}
             <div className="field">
               <label>Description</label>

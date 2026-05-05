@@ -196,11 +196,89 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
         description: z.string().max(500).nullable().optional(),
         limits: z.record(z.any()).optional(),
         isActive: z.boolean().optional(),
+        displayOrder: z.number().int().optional(),
       })
       .parse(req.body);
     return prisma.plan.update({
       where: { code },
       data: body as any,
+    });
+  });
+
+  /**
+   * POST /admin/plans (spec §6.3 : "Tout est configurable")
+   * Crée un nouveau plan tarifaire personnalisé. Le code est unique,
+   * en MAJUSCULES, sans espaces. Les limites sont du JSON libre.
+   */
+  app.post("/admin/plans", async (req) => {
+    const body = z
+      .object({
+        code: z
+          .string()
+          .min(2)
+          .max(40)
+          .regex(/^[A-Z0-9_]+$/, "Code en majuscules, chiffres ou _ uniquement"),
+        name: z.string().min(1).max(80),
+        priceCents: z.number().int().min(0).default(0),
+        priceCentsYearly: z.number().int().min(0).nullable().optional(),
+        description: z.string().max(500).optional(),
+        limits: z.record(z.any()).default({}),
+        displayOrder: z.number().int().default(99),
+      })
+      .parse(req.body);
+    return prisma.plan.create({ data: body as any });
+  });
+
+  /**
+   * DELETE /admin/plans/:code
+   * Supprime un plan. Refusé si des utilisateurs sont encore dessus
+   * (l'admin doit d'abord les migrer vers un autre plan).
+   */
+  app.delete("/admin/plans/:code", async (req, reply) => {
+    const { code } = z
+      .object({ code: z.string().min(1).max(40) })
+      .parse(req.params);
+    // Refuse si des users sont sur ce plan
+    const usersOnPlan = await prisma.user.count({
+      where: { planCode: code },
+    });
+    if (usersOnPlan > 0) {
+      return reply.code(409).send({
+        error: "plan_has_users",
+        message: `Impossible : ${usersOnPlan} utilisateur(s) encore sur ce plan. Migre-les d'abord.`,
+      });
+    }
+    // Refuse si c'est le plan FREE par défaut (ne jamais le supprimer)
+    if (code === "FREE") {
+      return reply.code(409).send({
+        error: "default_plan",
+        message: "Le plan FREE par défaut ne peut pas être supprimé.",
+      });
+    }
+    await prisma.plan.delete({ where: { code } });
+    return reply.code(204).send();
+  });
+
+  /**
+   * POST /admin/users/:id/change-plan
+   * Change le plan d'un utilisateur (admin only).
+   */
+  app.post("/admin/users/:id/change-plan", async (req) => {
+    const { id } = z
+      .object({ id: z.string().uuid() })
+      .parse(req.params);
+    const { planCode } = z
+      .object({ planCode: z.string().min(1).max(40) })
+      .parse(req.body);
+    // Vérif plan existe
+    const plan = await prisma.plan.findUnique({ where: { code: planCode } });
+    if (!plan) {
+      throw new Error("Plan introuvable");
+    }
+    return prisma.user.update({
+      where: { id },
+      data: { planCode },
+      select: { id: true, displayName: true, planCode: true },
     });
   });
 }

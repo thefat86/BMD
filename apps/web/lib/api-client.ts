@@ -525,6 +525,27 @@ export const api = {
       }>;
     }>("GET", `/tontine-turns/${turnId}/acks`),
 
+  /**
+   * Solde global de l'utilisateur sur tous ses groupes.
+   * Affiché en haut du dashboard (style maquette BMD_site_web.html).
+   *
+   * Note : pas de conversion FX live (spec §4 non-implémentée MVP).
+   * Si les groupes sont dans des devises différentes, byCurrency permet
+   * d'afficher le détail par devise.
+   */
+  getMyGlobalBalance: () =>
+    request<{
+      net: string;
+      owedToMe: string;
+      iOwe: string;
+      primaryCurrency: string;
+      byCurrency: Record<
+        string,
+        { net: string; owedToMe: string; iOwe: string }
+      >;
+      groupCount: number;
+    }>("GET", "/me/global-balance"),
+
   getBalance: (groupId: string) =>
     request<{
       currency: string;
@@ -843,8 +864,32 @@ export const api = {
       description?: string | null;
       limits?: Record<string, any>;
       isActive?: boolean;
+      displayOrder?: number;
     },
   ) => request<any>("PATCH", `/admin/plans/${code}`, body),
+
+  /** Crée un nouveau plan tarifaire (admin only, spec §6.3). */
+  adminCreatePlan: (body: {
+    code: string;
+    name: string;
+    priceCents?: number;
+    priceCentsYearly?: number | null;
+    description?: string;
+    limits?: Record<string, any>;
+    displayOrder?: number;
+  }) => request<any>("POST", "/admin/plans", body),
+
+  /** Supprime un plan (refus si users encore dessus). */
+  adminDeletePlan: (code: string) =>
+    request<void>("DELETE", `/admin/plans/${code}`),
+
+  /** Change le plan d'un utilisateur. */
+  adminChangeUserPlan: (userId: string, planCode: string) =>
+    request<{ id: string; displayName: string; planCode: string }>(
+      "POST",
+      `/admin/users/${userId}/change-plan`,
+      { planCode },
+    ),
 
   // ============ NOTIFICATIONS ============
 

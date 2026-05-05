@@ -40,6 +40,7 @@ export default function DashboardPage() {
   const router = useRouter();
   const [me, setMe] = useState<any>(null);
   const [groups, setGroups] = useState<any[]>([]);
+  const [globalBalance, setGlobalBalance] = useState<any | null>(null);
   const [showCreate, setShowCreate] = useState(false);
   const [name, setName] = useState("");
   const [type, setType] = useState("TONTINE");
@@ -53,10 +54,15 @@ export default function DashboardPage() {
       router.replace("/login");
       return;
     }
-    void Promise.all([api.me(), api.listGroups()])
-      .then(([m, g]) => {
+    void Promise.all([
+      api.me(),
+      api.listGroups(),
+      api.getMyGlobalBalance().catch(() => null),
+    ])
+      .then(([m, g, gb]) => {
         setMe(m.user);
         setGroups(g);
+        setGlobalBalance(gb);
         // Décide si on déclenche l'onboarding (uniquement si aucun groupe)
         if (shouldShowOnboarding(g.length > 0)) {
           setShowOnboarding(true);
@@ -178,83 +184,9 @@ export default function DashboardPage() {
         </div>
       </div>
 
-      {/* Balance card style maquette (gradient indigo + halo radial saffron) */}
-      <div
-        style={{
-          background: "linear-gradient(135deg, #2A2244, #3A2A52 80%)",
-          borderRadius: 22,
-          padding: 18,
-          border: "1px solid var(--line, rgba(232,163,61,0.18))",
-          position: "relative",
-          overflow: "hidden",
-          marginBottom: 16,
-        }}
-      >
-        {/* Halo radial décoratif (style mockup) */}
-        <div
-          aria-hidden="true"
-          style={{
-            position: "absolute",
-            right: -30,
-            top: -30,
-            width: 140,
-            height: 140,
-            borderRadius: "50%",
-            background:
-              "radial-gradient(circle, rgba(232,163,61,0.25), transparent 70%)",
-            pointerEvents: "none",
-          }}
-        />
-        <div
-          style={{
-            fontSize: 10,
-            color: "var(--cream-soft, #E8D5B7)",
-            letterSpacing: 1.5,
-            textTransform: "uppercase",
-            opacity: 0.85,
-            position: "relative",
-          }}
-        >
-          Tes groupes actifs
-        </div>
-        <div
-          style={{
-            fontFamily: "'Cormorant Garamond', serif",
-            fontSize: 38,
-            fontWeight: 600,
-            marginTop: 4,
-            color: "var(--cream, #F4E4C1)",
-            position: "relative",
-          }}
-        >
-          {groups.length}
-          <span
-            style={{
-              color: "var(--saffron, #E8A33D)",
-              fontSize: 16,
-              marginLeft: 6,
-            }}
-          >
-            {groups.length > 1 ? "groupes" : "groupe"}
-          </span>
-        </div>
-        <div
-          style={{
-            display: "flex",
-            justifyContent: "space-between",
-            marginTop: 14,
-            fontSize: 11,
-            position: "relative",
-          }}
-        >
-          <span style={{ color: "var(--emerald, #3F7D5C)", fontWeight: 600 }}>
-            ↑ {groups.filter((g) => g.type === "TONTINE").length} tontine(s)
-          </span>
-          <span style={{ color: "#D9714A", fontWeight: 600 }}>
-            {groups.reduce((acc, g) => acc + (g.membersCount ?? 0), 0)} membre(s)
-          </span>
-        </div>
-      </div>
+      {/* Balance card style maquette (BMD_site_web.html / BMD_maquettes.html) */}
+      {/* Solde global = ce que tout le monde te doit - ce que tu dois */}
+      <GlobalBalanceCard balance={globalBalance} groupCount={groups.length} />
 
       {/* Quick actions ronds (style maquette mobile) */}
       <div
@@ -517,4 +449,243 @@ export default function DashboardPage() {
       />
     </div>
   );
+}
+
+/**
+ * Balance card globale (spec / maquette BMD_site_web.html).
+ * Affiche le solde net + ce qu'on doit à l'utilisateur + ce qu'il doit.
+ *
+ * Design fidèle à la maquette :
+ *   - Gradient indigo #2A2244 → #3A2A52
+ *   - Halo radial saffron en haut-droite
+ *   - Solde en Cormorant Garamond, gros chiffres, saffron pour la devise
+ *   - Ligne du bas : ↗ on vous doit · ↘ vous devez (vert/rouge)
+ *
+ * Si le user a des groupes en plusieurs devises, on affiche un mini-disclaimer
+ * + détail par devise au clic.
+ */
+function GlobalBalanceCard({
+  balance,
+  groupCount,
+}: {
+  balance: any | null;
+  groupCount: number;
+}): JSX.Element {
+  const [showByCurrency, setShowByCurrency] = useState(false);
+
+  const net = balance ? parseFloat(balance.net) : 0;
+  const owedToMe = balance ? parseFloat(balance.owedToMe) : 0;
+  const iOwe = balance ? parseFloat(balance.iOwe) : 0;
+  const currency = balance?.primaryCurrency ?? "EUR";
+  const hasMultipleCurrencies =
+    balance && Object.keys(balance.byCurrency ?? {}).length > 1;
+  const symbol = currencySymbol(currency);
+
+  return (
+    <div
+      style={{
+        background: "linear-gradient(135deg, #2A2244, #3A2A52 80%)",
+        borderRadius: 22,
+        padding: 22,
+        border: "1px solid var(--line, rgba(232,163,61,0.18))",
+        position: "relative",
+        overflow: "hidden",
+        marginBottom: 16,
+      }}
+    >
+      {/* Halo radial saffron */}
+      <div
+        aria-hidden="true"
+        style={{
+          position: "absolute",
+          right: -40,
+          top: -40,
+          width: 180,
+          height: 180,
+          borderRadius: "50%",
+          background:
+            "radial-gradient(circle, rgba(232,163,61,0.30), transparent 70%)",
+          pointerEvents: "none",
+        }}
+      />
+
+      <div
+        style={{
+          fontSize: 10,
+          color: "var(--cream-soft, #E8D5B7)",
+          letterSpacing: 2,
+          textTransform: "uppercase",
+          opacity: 0.85,
+          position: "relative",
+          fontWeight: 700,
+        }}
+      >
+        Solde global
+      </div>
+
+      <div
+        style={{
+          fontFamily: "'Cormorant Garamond', Georgia, serif",
+          fontSize: 44,
+          fontWeight: 600,
+          marginTop: 4,
+          color: net < 0 ? "#D9714A" : "var(--cream, #F4E4C1)",
+          position: "relative",
+          lineHeight: 1.1,
+        }}
+      >
+        {balance === null ? (
+          <span style={{ fontSize: 16, color: "var(--cream-soft)" }}>
+            …
+          </span>
+        ) : (
+          <>
+            {net >= 0 ? "+" : "−"}
+            {Math.abs(net).toFixed(2).replace(".", ",")}
+            <span
+              style={{
+                color: "var(--saffron, #E8A33D)",
+                fontSize: 22,
+                marginLeft: 4,
+              }}
+            >
+              {symbol}
+            </span>
+          </>
+        )}
+      </div>
+
+      {balance && (groupCount > 0) && (
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            marginTop: 16,
+            fontSize: 12,
+            position: "relative",
+            gap: 8,
+            flexWrap: "wrap",
+          }}
+        >
+          <span
+            style={{
+              color: "#7DC59E",
+              fontWeight: 600,
+            }}
+          >
+            ↗ On vous doit{" "}
+            <strong>
+              {owedToMe.toFixed(0)} {symbol}
+            </strong>
+          </span>
+          <span style={{ color: "#D9714A", fontWeight: 600 }}>
+            ↘ Vous devez{" "}
+            <strong>
+              {iOwe.toFixed(0)} {symbol}
+            </strong>
+          </span>
+        </div>
+      )}
+
+      {balance && groupCount === 0 && (
+        <div
+          style={{
+            marginTop: 12,
+            fontSize: 12,
+            color: "var(--cream-soft)",
+            opacity: 0.7,
+            position: "relative",
+          }}
+        >
+          Crée un groupe pour commencer à suivre tes dépenses partagées.
+        </div>
+      )}
+
+      {/* Disclaimer multi-devises + détail au clic */}
+      {hasMultipleCurrencies && (
+        <div
+          style={{
+            marginTop: 12,
+            position: "relative",
+            fontSize: 10,
+            color: "var(--gold, #C9A24A)",
+          }}
+        >
+          ⚠ {Object.keys(balance.byCurrency).length} devises sans conversion
+          live —{" "}
+          <button
+            type="button"
+            onClick={() => setShowByCurrency((v) => !v)}
+            style={{
+              background: "transparent",
+              border: "none",
+              color: "var(--saffron)",
+              cursor: "pointer",
+              textDecoration: "underline",
+              padding: 0,
+              fontSize: 10,
+              fontFamily: "inherit",
+            }}
+          >
+            {showByCurrency ? "masquer le détail" : "voir par devise"}
+          </button>
+          {showByCurrency && (
+            <div
+              style={{
+                marginTop: 8,
+                background: "rgba(0,0,0,0.25)",
+                borderRadius: 8,
+                padding: 8,
+                fontSize: 11,
+                color: "var(--cream-soft)",
+              }}
+            >
+              {Object.entries(balance.byCurrency).map(
+                ([cur, b]: [string, any]) => (
+                  <div
+                    key={cur}
+                    style={{
+                      display: "flex",
+                      justifyContent: "space-between",
+                      padding: "2px 0",
+                    }}
+                  >
+                    <span>{cur}</span>
+                    <span
+                      style={{
+                        color:
+                          parseFloat(b.net) >= 0 ? "#7DC59E" : "#D9714A",
+                        fontWeight: 600,
+                      }}
+                    >
+                      {parseFloat(b.net) >= 0 ? "+" : ""}
+                      {parseFloat(b.net).toFixed(2)}
+                    </span>
+                  </div>
+                ),
+              )}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function currencySymbol(code: string): string {
+  switch (code) {
+    case "EUR":
+      return "€";
+    case "USD":
+      return "$";
+    case "GBP":
+      return "£";
+    case "CHF":
+      return "CHF";
+    case "XAF":
+    case "XOF":
+      return "F";
+    default:
+      return code;
+  }
 }

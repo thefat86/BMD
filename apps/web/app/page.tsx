@@ -459,6 +459,55 @@ export default function MarketingPage() {
                   ▷ {t.hero.ctaSecondary}
                 </a>
               </div>
+
+              {/* Stores row (fidèle BMD_site_web.html) */}
+              <div
+                style={{
+                  display: "flex",
+                  gap: 12,
+                  marginTop: 24,
+                  marginBottom: 16,
+                  flexWrap: "wrap",
+                }}
+              >
+                {[
+                  { ic: "📱", t1: "App Store", t2: "iOS 15+" },
+                  { ic: "🤖", t1: "Google Play", t2: "Android 9+" },
+                  { ic: "💬", t1: "WhatsApp", t2: "Bot natif" },
+                ].map((s, i) => (
+                  <div
+                    key={i}
+                    style={{
+                      padding: "10px 14px",
+                      borderRadius: 12,
+                      background: "rgba(255,255,255,0.04)",
+                      border: "1px solid rgba(244,228,193,0.08)",
+                      fontSize: 11,
+                      color: "#E8D5B7",
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 8,
+                    }}
+                  >
+                    <span style={{ fontSize: 18 }}>{s.ic}</span>
+                    <span>
+                      <strong
+                        style={{
+                          color: "#F4E4C1",
+                          fontFamily: "'Cormorant Garamond', serif",
+                          fontSize: 13,
+                          display: "block",
+                          lineHeight: 1.2,
+                        }}
+                      >
+                        {s.t1}
+                      </strong>
+                      {s.t2}
+                    </span>
+                  </div>
+                ))}
+              </div>
+
               <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                 {["🪙 Tontines", "💸 Dépenses", "↔ Swap", "📷 OCR", "🌍 Multi-devises"].map(
                   (p) => (
@@ -481,37 +530,74 @@ export default function MarketingPage() {
               </div>
             </div>
 
-            {/* Logo médaillon (style maquette mobile) */}
+            {/* Phone-frame mockup avec preview dashboard (fidèle BMD_site_web.html) */}
+            <PhoneFrameHero />
+          </div>
+        </section>
+
+        {/* ======== TRUST BAR (fidèle BMD_site_web.html) ======== */}
+        <div
+          style={{
+            padding: "24px 24px",
+            borderTop: "1px solid rgba(244,228,193,0.08)",
+            borderBottom: "1px solid rgba(244,228,193,0.08)",
+            background: "rgba(22,17,30,0.5)",
+            margin: "20px 0",
+          }}
+        >
+          <div
+            style={{
+              maxWidth: 1300,
+              margin: "0 auto",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              flexWrap: "wrap",
+              gap: 16,
+            }}
+          >
+            <div
+              style={{
+                fontSize: 11,
+                letterSpacing: 2,
+                textTransform: "uppercase",
+                color: "#C9A24A",
+                fontWeight: 600,
+              }}
+            >
+              ↘ Fait pour les communautés qui se font confiance
+            </div>
             <div
               style={{
                 display: "flex",
-                justifyContent: "center",
+                gap: 24,
+                flexWrap: "wrap",
                 alignItems: "center",
-                position: "relative",
               }}
-              className="hero-logo"
             >
-              <div
-                style={{
-                  width: 280,
-                  height: 280,
-                  maxWidth: "100%",
-                  borderRadius: "50%",
-                  background:
-                    "radial-gradient(circle at 30% 30%, #2A2244, #16111E 70%)",
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  boxShadow:
-                    "0 30px 80px rgba(0,0,0,0.6), inset 0 0 0 1px rgba(232,163,61,0.3)",
-                  position: "relative",
-                }}
-              >
-                <BmdLogo size={220} />
-              </div>
+              {[
+                "🪙 Tontines",
+                "🏠 Colocs",
+                "✈️ Voyages",
+                "💍 Mariages",
+                "⚽ Clubs",
+                "⛪ Associations",
+              ].map((l) => (
+                <span
+                  key={l}
+                  style={{
+                    fontSize: 13,
+                    color: "#E8D5B7",
+                    fontWeight: 600,
+                    opacity: 0.85,
+                  }}
+                >
+                  {l}
+                </span>
+              ))}
             </div>
           </div>
-        </section>
+        </div>
 
         {/* ======== MOCKUP : LOGIN ======== */}
         <SectionDivider
@@ -1768,6 +1854,351 @@ function MobileWelcome({
           .
         </div>
       </div>
+    </div>
+  );
+}
+
+/**
+ * Phone-frame avec preview dashboard fidèle à la maquette BMD_site_web.html.
+ *
+ * Reproduit :
+ *  - Cadre téléphone avec notch noir
+ *  - Écran avec greet + balance card (gradient indigo + halo) montrant
+ *    +247,50€ / On vous doit / Vous devez
+ *  - Quick actions 4 colonnes (Scanner / QR / Tontine / Chat)
+ *  - Mes groupes (2 lignes)
+ *  - Float-tags absolus : "Ticket scanné", "Tontine", "Bot WhatsApp"
+ */
+function PhoneFrameHero(): JSX.Element {
+  return (
+    <div
+      style={{
+        position: "relative",
+        display: "flex",
+        justifyContent: "center",
+        alignItems: "center",
+      }}
+      className="bmd-phone-hero"
+    >
+      <style jsx>{`
+        @media (max-width: 900px) {
+          .bmd-phone-hero {
+            transform: scale(0.85);
+          }
+        }
+        @media (max-width: 600px) {
+          .bmd-phone-hero {
+            transform: scale(0.75);
+          }
+        }
+      `}</style>
+
+      {/* Float tags décoratifs */}
+      <FloatTag
+        title="Ticket scanné"
+        subtitle="67,40 € · partagé en 4 ✓"
+        icon="🧾"
+        position={{ top: 80, left: -40 }}
+      />
+      <FloatTag
+        title="Tontine"
+        subtitle="Tour 4/12 · 1 950 € collectés"
+        icon="🪙"
+        position={{ bottom: 120, right: -30 }}
+      />
+      <FloatTag
+        title="Bot WhatsApp"
+        subtitle="« +25 € resto » → noté ✓"
+        icon="💬"
+        position={{ top: "50%", right: -50 }}
+      />
+
+      {/* Phone frame */}
+      <div
+        style={{
+          width: 320,
+          height: 640,
+          borderRadius: 44,
+          background: "linear-gradient(180deg, #0A0810, #15101D)",
+          padding: 12,
+          boxShadow:
+            "0 40px 90px rgba(0,0,0,0.7), 0 0 0 1px rgba(232,163,61,0.15)",
+          position: "relative",
+        }}
+      >
+        {/* Notch */}
+        <div
+          aria-hidden="true"
+          style={{
+            position: "absolute",
+            top: 12,
+            left: "50%",
+            transform: "translateX(-50%)",
+            width: 120,
+            height: 24,
+            borderRadius: 16,
+            background: "#000",
+            zIndex: 5,
+          }}
+        />
+        {/* Screen */}
+        <div
+          style={{
+            width: "100%",
+            height: "100%",
+            borderRadius: 32,
+            background: "linear-gradient(180deg, #16111E, #1E1830)",
+            overflow: "hidden",
+            display: "flex",
+            flexDirection: "column",
+            padding: "44px 18px 18px",
+            color: "#F4E4C1",
+          }}
+        >
+          <div style={{ fontSize: 11, color: "#E8D5B7", opacity: 0.6 }}>
+            Bonsoir,
+          </div>
+          <div
+            style={{
+              fontFamily: "'Cormorant Garamond', Georgia, serif",
+              fontSize: 22,
+              fontWeight: 600,
+              marginBottom: 18,
+            }}
+          >
+            Aïcha M.
+          </div>
+
+          {/* Balance card */}
+          <div
+            style={{
+              background: "linear-gradient(135deg, #2A2244, #3A2A52)",
+              borderRadius: 20,
+              padding: 18,
+              border: "1px solid rgba(232,163,61,0.18)",
+              position: "relative",
+              overflow: "hidden",
+            }}
+          >
+            <div
+              aria-hidden="true"
+              style={{
+                position: "absolute",
+                right: -30,
+                top: -30,
+                width: 150,
+                height: 150,
+                borderRadius: "50%",
+                background:
+                  "radial-gradient(circle, rgba(232,163,61,0.3), transparent 70%)",
+              }}
+            />
+            <div
+              style={{
+                fontSize: 9,
+                letterSpacing: 2,
+                textTransform: "uppercase",
+                color: "#E8D5B7",
+                opacity: 0.7,
+                position: "relative",
+              }}
+            >
+              Solde global
+            </div>
+            <div
+              style={{
+                fontFamily: "'Cormorant Garamond', Georgia, serif",
+                fontSize: 38,
+                fontWeight: 600,
+                color: "#F4E4C1",
+                marginTop: 4,
+                position: "relative",
+              }}
+            >
+              + 247,50
+              <span style={{ color: "#E8A33D", fontSize: 20 }}>€</span>
+            </div>
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                fontSize: 10,
+                marginTop: 12,
+                color: "#E8D5B7",
+                position: "relative",
+                gap: 4,
+              }}
+            >
+              <span style={{ color: "#7DC59E", fontWeight: 600 }}>
+                ↗ On vous doit 412 €
+              </span>
+              <span style={{ color: "#D9714A", fontWeight: 600 }}>
+                ↘ Vous devez 165 €
+              </span>
+            </div>
+          </div>
+
+          {/* Quick actions */}
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(4, 1fr)",
+              gap: 6,
+              marginTop: 14,
+            }}
+          >
+            {[
+              { ic: "📷", lbl: "Scanner" },
+              { ic: "▣", lbl: "QR" },
+              { ic: "🪙", lbl: "Tontine" },
+              { ic: "💬", lbl: "Chat" },
+            ].map((q, i) => (
+              <div
+                key={i}
+                style={{
+                  background: "rgba(232,163,61,0.06)",
+                  border: "1px solid rgba(244,228,193,0.08)",
+                  borderRadius: 12,
+                  padding: "10px 4px",
+                  display: "flex",
+                  flexDirection: "column",
+                  alignItems: "center",
+                  gap: 4,
+                  fontSize: 9,
+                  color: "#E8D5B7",
+                  textAlign: "center",
+                }}
+              >
+                <span style={{ fontSize: 16, color: "#E8A33D" }}>{q.ic}</span>
+                {q.lbl}
+              </div>
+            ))}
+          </div>
+
+          <div
+            style={{
+              fontSize: 9,
+              color: "#8A7B6B",
+              textTransform: "uppercase",
+              letterSpacing: 2,
+              marginTop: 16,
+              marginBottom: 6,
+            }}
+          >
+            Mes groupes
+          </div>
+
+          {[
+            { ic: "🪙", n: "Tontine Bamiléké", m: "12 membres · Tour 4/12", a: "+200 €", c: "#E8A33D" },
+            { ic: "🏠", n: "Coloc Belleville", m: "4 membres", a: "-89 €", c: "#D9714A" },
+          ].map((g, i) => (
+            <div
+              key={i}
+              style={{
+                marginTop: 6,
+                background: "rgba(255,255,255,0.025)",
+                border: "1px solid rgba(244,228,193,0.08)",
+                borderRadius: 12,
+                padding: 10,
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
+              }}
+            >
+              <div
+                style={{
+                  width: 30,
+                  height: 30,
+                  borderRadius: 9,
+                  background: "rgba(232,163,61,0.15)",
+                  color: "#E8A33D",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  fontSize: 13,
+                  flexShrink: 0,
+                }}
+              >
+                {g.ic}
+              </div>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div
+                  style={{
+                    fontSize: 11,
+                    fontWeight: 600,
+                    color: "#F4E4C1",
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  {g.n}
+                </div>
+                <div style={{ fontSize: 9, color: "#8A7B6B" }}>{g.m}</div>
+              </div>
+              <div
+                style={{
+                  fontSize: 11,
+                  fontWeight: 700,
+                  color: g.c,
+                }}
+              >
+                {g.a}
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function FloatTag({
+  title,
+  subtitle,
+  icon,
+  position,
+}: {
+  title: string;
+  subtitle: string;
+  icon: string;
+  position: React.CSSProperties;
+}): JSX.Element {
+  return (
+    <div
+      aria-hidden="true"
+      style={{
+        position: "absolute",
+        padding: "10px 14px",
+        borderRadius: 12,
+        background: "rgba(42,34,68,0.92)",
+        backdropFilter: "blur(10px)",
+        WebkitBackdropFilter: "blur(10px)",
+        border: "1px solid rgba(232,163,61,0.18)",
+        fontSize: 11,
+        color: "#F4E4C1",
+        boxShadow: "0 12px 30px rgba(0,0,0,0.4)",
+        display: "flex",
+        alignItems: "center",
+        gap: 8,
+        zIndex: 3,
+        maxWidth: 200,
+        ...position,
+      }}
+      className="bmd-float-tag"
+    >
+      <style jsx>{`
+        @media (max-width: 900px) {
+          .bmd-float-tag {
+            display: none;
+          }
+        }
+      `}</style>
+      <span style={{ fontSize: 14, color: "#E8A33D" }}>{icon}</span>
+      <span>
+        <strong style={{ display: "block", color: "#F4E4C1" }}>{title}</strong>
+        <span style={{ color: "#E8D5B7" }}>{subtitle}</span>
+      </span>
     </div>
   );
 }

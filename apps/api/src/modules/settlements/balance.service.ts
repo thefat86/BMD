@@ -137,3 +137,85 @@ export async function computeBalanceWithSuggestions(
   const suggestions = simplify(balances, currency);
   return { currency, balances, suggestions };
 }
+
+/**
+ * Solde global d'un utilisateur sur l'ensemble de ses groupes.
+ *
+ * Retourne 3 chiffres clés :
+ *  - net : solde global toutes devises confondues (en devise par défaut user)
+ *  - owedToMe : ce que les autres me doivent (somme des nets positifs)
+ *  - iOwe : ce que je dois (valeur absolue de la somme des nets négatifs)
+ *
+ * NOTE : pas de conversion FX live (spec §4 — non-implémenté MVP). On
+ * agrège dans la devise de chaque groupe, et on retourne plusieurs
+ * "buckets" par devise pour que l'UI affiche correctement.
+ *
+ * Pour la version simplifiée du dashboard : on additionne **comme si**
+ * tout était dans la même devise, ce qui est correct quand l'utilisateur
+ * a tous ses groupes dans la même devise (cas le plus fréquent).
+ */
+export async function computeUserGlobalBalance(userId: string) {
+  // Tous les groupes dont l'user est membre
+  const memberships = await import("../../lib/db.js").then(({ prisma }) =>
+    prisma.groupMember.findMany({
+      where: { userId },
+      select: { groupId: true, group: { select: { defaultCurrency: true } } },
+    }),
+  );
+
+  let owedToMe = 0;
+  let iOwe = 0;
+  const byCurrency: Record<string, { owedToMe: number; iOwe: number; net: number }> = {};
+
+  for (const m of memberships) {
+    try {
+      const { currency, balances } = await computeBalances(m.groupId, userId);
+      const myBalance = balances.find((b) => b.userId === userId);
+      if (!myBalance) continue;
+      const net = parseFloat(myBalance.net);
+      if (!Number.isFinite(net)) continue;
+
+      if (!byCurrency[currency]) {
+        byCurrency[currency] = { owedToMe: 0, iOwe: 0, net: 0 };
+      }
+      byCurrency[currency].net += net;
+      if (net > 0) {
+        byCurrency[currency].owedToMe += net;
+        owedToMe += net;
+      } else if (net < 0) {
+        byCurrency[currency].iOwe += -net;
+        iOwe += -net;
+      }
+    } catch {
+      // Membership invalide, on skip
+      continue;
+    }
+  }
+
+  // Devise primaire = celle qui apparaît le plus souvent dans les groupes
+  const counts: Record<string, number> = {};
+  memberships.forEach((m) => {
+    counts[m.group.defaultCurrency] = (counts[m.group.defaultCurrency] ?? 0) + 1;
+  });
+  const primaryCurrency =
+    Object.entries(counts).sort((a, b) => b[1] - a[1])[0]?.[0] ?? "EUR";
+
+  return {
+    net: (owedToMe - iOwe).toFixed(2),
+    owedToMe: owedToMe.toFixed(2),
+    iOwe: iOwe.toFixed(2),
+    primaryCurrency,
+    /** Détail par devise — utile si l'user a des groupes en devises différentes */
+    byCurrency: Object.fromEntries(
+      Object.entries(byCurrency).map(([cur, b]) => [
+        cur,
+        {
+          net: b.net.toFixed(2),
+          owedToMe: b.owedToMe.toFixed(2),
+          iOwe: b.iOwe.toFixed(2),
+        },
+      ]),
+    ),
+    groupCount: memberships.length,
+  };
+}

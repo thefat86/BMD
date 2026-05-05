@@ -1,6 +1,9 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { computeBalanceWithSuggestions } from "./balance.service.js";
+import {
+  computeBalanceWithSuggestions,
+  computeUserGlobalBalance,
+} from "./balance.service.js";
 
 export async function settlementsRoutes(app: FastifyInstance): Promise<void> {
   app.addHook("onRequest", app.authenticate);
@@ -31,5 +34,14 @@ export async function settlementsRoutes(app: FastifyInstance): Promise<void> {
         currency: s.currency,
       })),
     };
+  });
+
+  /**
+   * GET /me/global-balance
+   * Solde global de l'utilisateur sur tous ses groupes.
+   * Utilisé par le dashboard pour afficher la "balance card" en haut.
+   */
+  app.get("/me/global-balance", async (req) => {
+    return computeUserGlobalBalance(req.user.sub);
   });
 }

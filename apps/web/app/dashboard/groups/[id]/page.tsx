@@ -9,6 +9,8 @@ import {
   isUnauthorized,
 } from "../../../../lib/api-client";
 import { useToast } from "../../../../lib/ui/toast";
+import { NotificationBell } from "../../../../lib/ui/notification-bell";
+import { ExpenseAttachments } from "../../../../lib/ui/expense-attachments";
 import { validateContact } from "@bmd/shared-types";
 
 type SplitMode = "EQUAL" | "UNEQUAL" | "PERCENTAGE";
@@ -92,6 +94,11 @@ export default function GroupDetailPage() {
   // Mode édition : si non-null, le panel "expense" est en mode update
   // au lieu de create. Pré-rempli avec les valeurs existantes.
   const [editingExpenseId, setEditingExpenseId] = useState<string | null>(
+    null,
+  );
+
+  // Dépense actuellement expandée pour montrer les pièces jointes
+  const [expandedExpenseId, setExpandedExpenseId] = useState<string | null>(
     null,
   );
 
@@ -738,16 +745,19 @@ export default function GroupDetailPage() {
         >
           ← Mes groupes
         </Link>
-        <span
-          style={{
-            fontFamily: "Cormorant Garamond, serif",
-            fontSize: 18,
-            color: "var(--cream)",
-            fontWeight: 700,
-          }}
-        >
-          BMD<span style={{ color: "var(--saffron)" }}>·</span>
-        </span>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <NotificationBell />
+          <span
+            style={{
+              fontFamily: "Cormorant Garamond, serif",
+              fontSize: 18,
+              color: "var(--cream)",
+              fontWeight: 700,
+            }}
+          >
+            BMD<span style={{ color: "var(--saffron)" }}>·</span>
+          </span>
+        </div>
       </div>
 
       {/* Page header */}
@@ -1797,73 +1807,108 @@ export default function GroupDetailPage() {
                   (m: Member) =>
                     m.user.id === me?.id && m.role === "ADMIN",
                 );
+              const isExpanded = expandedExpenseId === e.id;
               return (
-                <div key={e.id} className="list-item">
-                  <div className="icon">💸</div>
-                  <div className="text">
-                    <div className="name">{e.description}</div>
-                    <div className="meta">
-                      {e.paidBy.displayName} · {e.shares.length}p ·{" "}
-                      {new Date(e.occurredAt).toLocaleDateString("fr-FR", {
-                        day: "numeric",
-                        month: "short",
-                      })}
+                <div key={e.id}>
+                  <div className="list-item">
+                    <div
+                      className="icon"
+                      style={{ cursor: "pointer" }}
+                      onClick={() =>
+                        setExpandedExpenseId(isExpanded ? null : e.id)
+                      }
+                      role="button"
+                      aria-label="Voir les détails"
+                    >
+                      💸
+                    </div>
+                    <div
+                      className="text"
+                      style={{ cursor: "pointer" }}
+                      onClick={() =>
+                        setExpandedExpenseId(isExpanded ? null : e.id)
+                      }
+                    >
+                      <div className="name">{e.description}</div>
+                      <div className="meta">
+                        {e.paidBy.displayName} · {e.shares.length}p ·{" "}
+                        {new Date(e.occurredAt).toLocaleDateString("fr-FR", {
+                          day: "numeric",
+                          month: "short",
+                        })}
+                      </div>
+                    </div>
+                    <div
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 8,
+                      }}
+                    >
+                      <div className="amount">
+                        {parseFloat(e.amount).toFixed(2)}
+                      </div>
+                      {canEdit && (
+                        <>
+                          <button
+                            onClick={() => openEditPanel(e.id)}
+                            title="Modifier cette dépense"
+                            aria-label="Modifier la dépense"
+                            style={{
+                              background: "transparent",
+                              border: "none",
+                              color: "var(--saffron, #E8A33D)",
+                              fontSize: 16,
+                              cursor: "pointer",
+                              padding: "4px 8px",
+                              minHeight: "32px",
+                              minWidth: "32px",
+                            }}
+                          >
+                            ✏️
+                          </button>
+                          <button
+                            onClick={() =>
+                              setConfirmDelete({
+                                expenseId: e.id,
+                                description: e.description,
+                              })
+                            }
+                            title="Supprimer cette dépense"
+                            aria-label="Supprimer la dépense"
+                            style={{
+                              background: "transparent",
+                              border: "none",
+                              color: "#ef4444",
+                              fontSize: 18,
+                              cursor: "pointer",
+                              padding: "4px 8px",
+                              minHeight: "32px",
+                              minWidth: "32px",
+                            }}
+                          >
+                            🗑
+                          </button>
+                        </>
+                      )}
                     </div>
                   </div>
-                  <div
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      gap: 8,
-                    }}
-                  >
-                    <div className="amount">
-                      {parseFloat(e.amount).toFixed(2)}
+                  {/* Expansion : pièces jointes (visibles par tous) */}
+                  {isExpanded && (
+                    <div
+                      style={{
+                        padding: "10px 14px 14px 60px",
+                        background: "var(--overlay, rgba(255,255,255,0.03))",
+                        borderRadius: "0 0 10px 10px",
+                        borderTop: "1px dashed var(--line-soft, #e5e7eb)",
+                      }}
+                    >
+                      <ExpenseAttachments
+                        expenseId={e.id}
+                        canManage={canEdit}
+                      />
                     </div>
-                    {canEdit && (
-                      <>
-                        <button
-                          onClick={() => openEditPanel(e.id)}
-                          title="Modifier cette dépense"
-                          aria-label="Modifier la dépense"
-                          style={{
-                            background: "transparent",
-                            border: "none",
-                            color: "var(--saffron, #E8A33D)",
-                            fontSize: 16,
-                            cursor: "pointer",
-                            padding: "4px 8px",
-                            minHeight: "32px",
-                            minWidth: "32px",
-                          }}
-                        >
-                          ✏️
-                        </button>
-                        <button
-                          onClick={() =>
-                            setConfirmDelete({
-                              expenseId: e.id,
-                              description: e.description,
-                            })
-                          }
-                          title="Supprimer cette dépense"
-                          aria-label="Supprimer la dépense"
-                          style={{
-                            background: "transparent",
-                            border: "none",
-                            color: "#ef4444",
-                            fontSize: 18,
-                            cursor: "pointer",
-                            padding: "4px 8px",
-                            minHeight: "32px",
-                            minWidth: "32px",
-                          }}
-                        >
-                          🗑
-                        </button>
-                      </>
-                    )}
-                  </div>
+                  )}
                 </div>
               );
             })}

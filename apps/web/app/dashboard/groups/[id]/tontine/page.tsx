@@ -8,6 +8,7 @@ import {
   getToken,
   isUnauthorized,
 } from "../../../../../lib/api-client";
+import { useToast } from "../../../../../lib/ui/toast";
 
 type Status = "DRAFT" | "ACTIVE" | "COMPLETED" | "CANCELLED";
 
@@ -520,12 +521,41 @@ export default function TontinePage() {
                   )}
                 </h2>
                 <span className="muted" style={{ fontSize: 11 }}>
-                  {new Date(turn.dueDate).toLocaleDateString("fr-FR", {
-                    day: "numeric",
-                    month: "short",
-                  })}
+                  📅{" "}
+                  {turn.scheduledDate
+                    ? new Date(turn.scheduledDate).toLocaleDateString(
+                        "fr-FR",
+                        { day: "numeric", month: "short", year: "numeric" },
+                      )
+                    : new Date(turn.dueDate).toLocaleDateString("fr-FR", {
+                        day: "numeric",
+                        month: "short",
+                        year: "numeric",
+                      })}
+                  {turn.scheduledDate && (
+                    <span
+                      style={{
+                        color: "var(--emerald, #10b981)",
+                        marginLeft: 4,
+                      }}
+                    >
+                      ✓
+                    </span>
+                  )}
                 </span>
               </div>
+
+              {/* Bloc dates : prévu vs choisi par bénéficiaire */}
+              <TurnDateBlock
+                turn={turn}
+                meId={me?.id}
+                isAdmin={
+                  group.members.find((m: any) => m.user.id === me?.id)
+                    ?.role === "ADMIN"
+                }
+                onChanged={refresh}
+              />
+
 
               {/* Bénéficiaire */}
               <div
@@ -701,6 +731,332 @@ export default function TontinePage() {
             </div>
           ))}
         </>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Bloc qui affiche la date d'un tour de tontine et permet :
+ *  - Au bénéficiaire (ou admin) de fixer/modifier la date dans une fenêtre ±15j
+ *  - Aux autres membres d'accuser réception après que le bénéficiaire l'a fixée
+ *  - À tous de voir qui a accusé / qui pas
+ *
+ * Si le tour est DISTRIBUTED ou CANCELLED, on affiche juste les dates en lecture seule.
+ */
+function TurnDateBlock({
+  turn,
+  meId,
+  isAdmin,
+  onChanged,
+}: {
+  turn: any;
+  meId?: string;
+  isAdmin: boolean;
+  onChanged: () => void;
+}) {
+  const toast = useToast();
+  const [showAcks, setShowAcks] = useState(false);
+  const [acks, setAcks] = useState<any | null>(null);
+  const [editing, setEditing] = useState(false);
+  const [draftDate, setDraftDate] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  const isBeneficiary = meId === turn.beneficiary.id;
+  const canSchedule = isBeneficiary || isAdmin;
+  const isFinal = turn.status === "DISTRIBUTED" || turn.status === "CANCELLED";
+
+  // Limites ±15 jours autour de dueDate
+  const due = new Date(turn.dueDate);
+  const minDate = new Date(due.getTime() - 15 * 24 * 3600 * 1000)
+    .toISOString()
+    .slice(0, 10);
+  const maxDate = new Date(due.getTime() + 15 * 24 * 3600 * 1000)
+    .toISOString()
+    .slice(0, 10);
+
+  function startEdit() {
+    setDraftDate(
+      (turn.scheduledDate ?? turn.dueDate).slice(0, 10),
+    );
+    setEditing(true);
+  }
+
+  async function saveDate() {
+    if (!draftDate) return;
+    setSaving(true);
+    try {
+      await api.scheduleTurn(turn.id, new Date(draftDate));
+      toast.success("Date enregistrée. Les autres membres sont notifiés.");
+      setEditing(false);
+      onChanged();
+    } catch (e) {
+      toast.error(e);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function ack() {
+    try {
+      await api.acknowledgeTurn(turn.id);
+      toast.success("Date confirmée ✓");
+      void loadAcks();
+      onChanged();
+    } catch (e) {
+      toast.error(e);
+    }
+  }
+
+  async function loadAcks() {
+    try {
+      const r = await api.listTurnAcks(turn.id);
+      setAcks(r);
+    } catch (e) {
+      toast.error(e);
+    }
+  }
+
+  function toggleAcks() {
+    if (!showAcks && !acks) void loadAcks();
+    setShowAcks(!showAcks);
+  }
+
+  const myAck = acks?.members.find((m: any) => m.userId === meId);
+  const ackedCount =
+    acks?.members.filter((m: any) => m.acknowledged).length ?? 0;
+  const totalNonBeneficiary =
+    acks?.members.filter((m: any) => !m.isBeneficiary).length ?? 0;
+
+  return (
+    <div
+      style={{
+        background: "rgba(255,255,255,0.04)",
+        border: "1px solid var(--line-soft, #2a2435)",
+        borderRadius: 12,
+        padding: 12,
+        marginBottom: 12,
+        fontSize: 13,
+      }}
+    >
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: 10,
+          flexWrap: "wrap",
+        }}
+      >
+        <div>
+          <div
+            style={{
+              fontSize: 10,
+              color: "var(--gold, #C9A14A)",
+              letterSpacing: 1.4,
+              fontWeight: 700,
+              textTransform: "uppercase",
+            }}
+          >
+            📅 Date du tour
+          </div>
+          <div style={{ marginTop: 4, color: "var(--cream, #f0e6d8)" }}>
+            {turn.scheduledDate ? (
+              <>
+                <strong>
+                  {new Date(turn.scheduledDate).toLocaleDateString("fr-FR", {
+                    weekday: "long",
+                    day: "numeric",
+                    month: "long",
+                    year: "numeric",
+                  })}
+                </strong>
+                <div
+                  style={{
+                    fontSize: 11,
+                    color: "var(--cream-soft, #c9bfae)",
+                    marginTop: 2,
+                  }}
+                >
+                  Prévu initialement :{" "}
+                  {new Date(turn.dueDate).toLocaleDateString("fr-FR")}
+                </div>
+              </>
+            ) : (
+              <>
+                <strong>
+                  {new Date(turn.dueDate).toLocaleDateString("fr-FR", {
+                    weekday: "long",
+                    day: "numeric",
+                    month: "long",
+                    year: "numeric",
+                  })}
+                </strong>
+                <div
+                  style={{
+                    fontSize: 11,
+                    color: "var(--cream-soft, #c9bfae)",
+                    marginTop: 2,
+                    fontStyle: "italic",
+                  }}
+                >
+                  Date prévue (modifiable par le bénéficiaire ±15j)
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+        {!isFinal && canSchedule && !editing && (
+          <button
+            onClick={startEdit}
+            className="btn-ghost btn-sm"
+            style={{
+              borderColor: "var(--saffron, #E8A33D)",
+              color: "var(--saffron, #E8A33D)",
+              padding: "6px 12px",
+              minHeight: 36,
+              fontSize: 12,
+            }}
+          >
+            {turn.scheduledDate ? "✏️ Modifier" : "📅 Fixer la date"}
+          </button>
+        )}
+      </div>
+
+      {editing && (
+        <div style={{ marginTop: 10 }}>
+          <label
+            style={{
+              fontSize: 11,
+              color: "var(--cream-soft, #c9bfae)",
+            }}
+          >
+            Choisis une date entre {new Date(minDate).toLocaleDateString("fr-FR")}{" "}
+            et {new Date(maxDate).toLocaleDateString("fr-FR")} :
+          </label>
+          <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
+            <input
+              type="date"
+              value={draftDate}
+              onChange={(e) => setDraftDate(e.target.value)}
+              min={minDate}
+              max={maxDate}
+              style={{
+                flex: 1,
+                padding: "10px 12px",
+                fontSize: 14,
+                border: "1px solid var(--line-soft, #2a2435)",
+                borderRadius: 8,
+                background: "rgba(0,0,0,0.3)",
+                color: "var(--cream, #f0e6d8)",
+                minWidth: 0,
+              }}
+            />
+            <button
+              onClick={saveDate}
+              disabled={saving || !draftDate}
+              className="btn btn-sm"
+              style={{ flexShrink: 0 }}
+            >
+              {saving ? "…" : "✓"}
+            </button>
+            <button
+              onClick={() => setEditing(false)}
+              className="btn-ghost btn-sm"
+              style={{ flexShrink: 0 }}
+            >
+              ✕
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Acknowledgements */}
+      {turn.scheduledDate && !isFinal && (
+        <div style={{ marginTop: 10 }}>
+          <button
+            onClick={toggleAcks}
+            style={{
+              background: "transparent",
+              border: "none",
+              color: "var(--saffron, #E8A33D)",
+              fontSize: 11,
+              padding: 0,
+              cursor: "pointer",
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 4,
+            }}
+          >
+            {showAcks ? "▾" : "▸"} Accusés de réception
+            {acks && totalNonBeneficiary > 0 && (
+              <span
+                style={{
+                  marginLeft: 6,
+                  color:
+                    ackedCount === totalNonBeneficiary
+                      ? "var(--emerald, #10b981)"
+                      : "var(--cream-soft, #c9bfae)",
+                }}
+              >
+                ({ackedCount}/{totalNonBeneficiary})
+              </span>
+            )}
+          </button>
+          {showAcks && acks && (
+            <div style={{ marginTop: 8 }}>
+              {acks.members.map((m: any) => (
+                <div
+                  key={m.userId}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 8,
+                    padding: "4px 0",
+                    fontSize: 12,
+                  }}
+                >
+                  <span
+                    style={{
+                      width: 16,
+                      display: "inline-block",
+                      textAlign: "center",
+                    }}
+                  >
+                    {m.isBeneficiary
+                      ? "🎁"
+                      : m.acknowledged
+                        ? "✓"
+                        : "⏳"}
+                  </span>
+                  <span
+                    style={{
+                      color: m.isBeneficiary
+                        ? "var(--saffron, #E8A33D)"
+                        : m.acknowledged
+                          ? "var(--emerald, #10b981)"
+                          : "var(--cream-soft, #c9bfae)",
+                    }}
+                  >
+                    {m.displayName}
+                    {m.userId === meId && " (moi)"}
+                    {m.isBeneficiary && " · bénéficiaire"}
+                  </span>
+                </div>
+              ))}
+              {/* Bouton ack pour les non-bénéficiaires */}
+              {!isBeneficiary && myAck && !myAck.acknowledged && (
+                <button
+                  onClick={ack}
+                  className="btn btn-sm btn-block"
+                  style={{ marginTop: 8 }}
+                >
+                  ✓ J'accuse réception de la date
+                </button>
+              )}
+            </div>
+          )}
+        </div>
       )}
     </div>
   );

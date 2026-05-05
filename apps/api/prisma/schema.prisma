@@ -39,6 +39,11 @@ model User {
   activitiesGenerated    ActivityLog[]          @relation("ActivityActor")
   attachmentsUploaded    ExpenseAttachment[]    @relation("AttachmentUploader")
   notifications          Notification[]
+  tontineTurnAcks        TontineTurnAck[]       @relation("TontineTurnAck")
+  debtTransfersProposed  DebtTransfer[]         @relation("DebtTransferProposer")
+  debtTransfersFrom      DebtTransfer[]         @relation("DebtTransferFrom")
+  debtTransfersAssumer   DebtTransfer[]         @relation("DebtTransferAssumer")
+  debtTransfersCreditor  DebtTransfer[]         @relation("DebtTransferCreditor")
 }
 
 enum ContactType {
@@ -123,6 +128,7 @@ model Group {
   splitPresets  SplitPreset[]
   inviteTokens  GroupInviteToken[]
   activityLogs  ActivityLog[]
+  debtTransfers DebtTransfer[]
 }
 
 model GroupMember {
@@ -287,20 +293,43 @@ enum TurnStatus {
 }
 
 model TontineTurn {
-  id              String      @id @default(uuid())
-  tontineId       String
-  tontine         Tontine     @relation(fields: [tontineId], references: [id], onDelete: Cascade)
-  turnNumber      Int
+  id                String      @id @default(uuid())
+  tontineId         String
+  tontine           Tontine     @relation(fields: [tontineId], references: [id], onDelete: Cascade)
+  turnNumber        Int
   beneficiaryUserId String
-  beneficiary     User        @relation("TurnBeneficiary", fields: [beneficiaryUserId], references: [id])
-  dueDate         DateTime
-  distributedAt   DateTime?
-  status          TurnStatus  @default(PENDING)
+  beneficiary       User        @relation("TurnBeneficiary", fields: [beneficiaryUserId], references: [id])
+  /** Date initiale calculée d'après startDate + frequency (modifiable par le bénéficiaire dans son mois) */
+  dueDate           DateTime
+  /** Date exacte choisie par le bénéficiaire dans la fenêtre du mois (peut être null si non encore fixée) */
+  scheduledDate     DateTime?
+  /** Date où le bénéficiaire a fixé scheduledDate (pour les notifs) */
+  scheduledAt       DateTime?
+  distributedAt     DateTime?
+  status            TurnStatus  @default(PENDING)
 
-  contributions TontineContribution[]
+  contributions     TontineContribution[]
+  /** Accusés de réception des autres membres après que le bénéficiaire a fixé sa date */
+  acknowledgments   TontineTurnAck[]
 
   @@unique([tontineId, turnNumber])
   @@index([beneficiaryUserId])
+}
+
+/**
+ * Accusé de réception de la date choisie par le bénéficiaire d'un tour.
+ * Une fois que le bénéficiaire fixe scheduledDate, chaque autre membre
+ * doit "accuser réception" pour confirmer qu'il a noté la date.
+ */
+model TontineTurnAck {
+  id              String      @id @default(uuid())
+  turnId          String
+  turn            TontineTurn @relation(fields: [turnId], references: [id], onDelete: Cascade)
+  userId          String
+  user            User        @relation("TontineTurnAck", fields: [userId], references: [id], onDelete: Cascade)
+  acknowledgedAt  DateTime    @default(now())
+
+  @@unique([turnId, userId])
 }
 
 enum ContributionStatus {
@@ -511,4 +540,60 @@ model Notification {
 
   @@index([userId, readAt])
   @@index([userId, createdAt])
+}
+
+// ============================================================
+// DEBT TRANSFER — transfert bilatéral d'une dette dans un groupe
+// ============================================================
+//
+// Différent du DebtSwap multi-parties :
+//   A doit X à B → A demande à C de prendre sa dette → si C accepte
+//   ET B confirme, alors :
+//     - dette A→B annulée (settlement virtuel)
+//     - dette C→B créée (settlement virtuel)
+//
+// Workflow :
+//   1. proposer (status=PROPOSED, fromUser=A, assumeUser=C, creditor=B, amount, currency)
+//      → notif à C et B (validation requise des 2)
+//   2. C accepte (acceptedByAssumer=true)
+//   3. B accepte (acceptedByCreditor=true)
+//   4. Quand les 2 ont accepté → status=ACTIVE, settlements virtuels créés
+//   5. Si l'un refuse → status=REJECTED
+//   6. Quiconque peut CANCEL avant ACTIVE
+//
+
+enum DebtTransferStatus {
+  PROPOSED
+  ACTIVE
+  REJECTED
+  CANCELLED
+}
+
+model DebtTransfer {
+  id                  String              @id @default(uuid())
+  groupId             String
+  group               Group               @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  proposedById        String
+  proposedBy          User                @relation("DebtTransferProposer", fields: [proposedById], references: [id])
+  /** L'utilisateur qui a la dette (le débiteur originel) */
+  fromUserId          String
+  fromUser            User                @relation("DebtTransferFrom", fields: [fromUserId], references: [id])
+  /** L'utilisateur qui prend la dette (le nouveau débiteur) */
+  assumeUserId        String
+  assumeUser          User                @relation("DebtTransferAssumer", fields: [assumeUserId], references: [id])
+  /** L'utilisateur à qui la dette est due (le créancier) */
+  creditorUserId      String
+  creditor            User                @relation("DebtTransferCreditor", fields: [creditorUserId], references: [id])
+  amount              Decimal             @db.Decimal(14, 4)
+  currency            String
+  reason              String?
+  status              DebtTransferStatus  @default(PROPOSED)
+  acceptedByAssumer   DateTime?
+  acceptedByCreditor  DateTime?
+  rejectedBy          String?
+  rejectedAt          DateTime?
+  createdAt           DateTime            @default(now())
+  activatedAt         DateTime?
+
+  @@index([groupId, status])
 }

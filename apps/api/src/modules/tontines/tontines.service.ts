@@ -445,3 +445,183 @@ export async function getTontineStats(
     totalPotPerTurn: totalPotPerTurn.toString(),
   };
 }
+
+// ============================================================
+// SCHEDULING DES TOURS — chaque bénéficiaire fixe sa date dans le mois
+// ============================================================
+
+/**
+ * Le bénéficiaire d'un tour fixe sa date exacte.
+ * Contraintes :
+ *  - Seul le bénéficiaire du tour peut le faire (ou un admin du groupe)
+ *  - La date doit rester dans la fenêtre "du mois" de dueDate
+ *    Mois = ±15 jours autour de dueDate (souple pour weekly aussi)
+ *  - Une fois fixée, tous les autres membres reçoivent une notif et doivent acker
+ */
+export async function scheduleTurn(input: {
+  turnId: string;
+  actorUserId: string;
+  scheduledDate: Date;
+}) {
+  const turn = await prisma.tontineTurn.findUnique({
+    where: { id: input.turnId },
+    include: {
+      tontine: {
+        include: {
+          group: { include: { members: { select: { userId: true, role: true } } } },
+        },
+      },
+      beneficiary: { select: { displayName: true } },
+    },
+  });
+  if (!turn) throw Errors.notFound("Tour introuvable");
+
+  const groupId = turn.tontine.groupId;
+  const groupName = turn.tontine.group ? "" : "";
+  // Permission : bénéficiaire OU admin du groupe
+  const member = turn.tontine.group.members.find(
+    (m) => m.userId === input.actorUserId,
+  );
+  if (!member) throw Errors.forbidden("Pas membre de ce groupe");
+  const canSchedule =
+    turn.beneficiaryUserId === input.actorUserId || member.role === "ADMIN";
+  if (!canSchedule) {
+    throw Errors.forbidden(
+      "Seul le bénéficiaire ou un admin peut fixer la date",
+    );
+  }
+
+  // Contrainte fenêtre : ±15 jours autour de dueDate
+  const dueMs = turn.dueDate.getTime();
+  const requestedMs = input.scheduledDate.getTime();
+  const FIFTEEN_DAYS = 15 * 24 * 3600 * 1000;
+  if (Math.abs(requestedMs - dueMs) > FIFTEEN_DAYS) {
+    throw Errors.badRequest(
+      "La date choisie doit être à ±15 jours de la date prévue du tour",
+    );
+  }
+
+  await prisma.$transaction([
+    prisma.tontineTurn.update({
+      where: { id: turn.id },
+      data: {
+        scheduledDate: input.scheduledDate,
+        scheduledAt: new Date(),
+      },
+    }),
+    // Reset les acks (si la date change, tout le monde doit reacker)
+    prisma.tontineTurnAck.deleteMany({ where: { turnId: turn.id } }),
+  ]);
+
+  // Notif aux membres autres que le bénéficiaire
+  const { notifyGroupMembers } = await import(
+    "../notifications/notifications.service.js"
+  );
+  void notifyGroupMembers({
+    groupId,
+    excludeUserId: input.actorUserId,
+    notification: {
+      kind: "TONTINE_DATE_CHANGED",
+      title: `Date fixée pour le tour ${turn.turnNumber}`,
+      body: `${turn.beneficiary.displayName} a choisi le ${input.scheduledDate.toLocaleDateString("fr-FR")}. Confirme la réception de l'info.`,
+      link: `/dashboard/groups/${groupId}/tontine`,
+      payload: {
+        groupId,
+        turnId: turn.id,
+        scheduledDate: input.scheduledDate.toISOString(),
+      },
+    },
+  });
+
+  return {
+    id: turn.id,
+    scheduledDate: input.scheduledDate.toISOString(),
+  };
+}
+
+/**
+ * Un membre accuse réception de la date choisie par le bénéficiaire.
+ * Idempotent : si déjà accusé, ne change rien.
+ */
+export async function acknowledgeTurn(input: {
+  turnId: string;
+  actorUserId: string;
+}) {
+  const turn = await prisma.tontineTurn.findUnique({
+    where: { id: input.turnId },
+    include: {
+      tontine: {
+        include: {
+          group: { include: { members: { select: { userId: true } } } },
+        },
+      },
+    },
+  });
+  if (!turn) throw Errors.notFound("Tour introuvable");
+  if (!turn.scheduledDate) {
+    throw Errors.badRequest(
+      "Aucune date à confirmer (le bénéficiaire ne l'a pas encore fixée)",
+    );
+  }
+  const isMember = turn.tontine.group.members.some(
+    (m) => m.userId === input.actorUserId,
+  );
+  if (!isMember) throw Errors.forbidden("Pas membre du groupe");
+
+  await prisma.tontineTurnAck.upsert({
+    where: {
+      turnId_userId: {
+        turnId: turn.id,
+        userId: input.actorUserId,
+      },
+    },
+    create: { turnId: turn.id, userId: input.actorUserId },
+    update: {}, // idempotent
+  });
+  return { acknowledged: true };
+}
+
+/**
+ * Liste les acks d'un tour (qui a confirmé, qui n'a pas encore).
+ */
+export async function listTurnAcks(input: {
+  turnId: string;
+  actorUserId: string;
+}) {
+  const turn = await prisma.tontineTurn.findUnique({
+    where: { id: input.turnId },
+    include: {
+      tontine: {
+        include: {
+          group: {
+            include: {
+              members: {
+                include: {
+                  user: { select: { id: true, displayName: true } },
+                },
+              },
+            },
+          },
+        },
+      },
+      acknowledgments: true,
+    },
+  });
+  if (!turn) throw Errors.notFound("Tour introuvable");
+  const isMember = turn.tontine.group.members.some(
+    (m) => m.userId === input.actorUserId,
+  );
+  if (!isMember) throw Errors.forbidden("Pas membre du groupe");
+
+  const ackedSet = new Set(turn.acknowledgments.map((a) => a.userId));
+  return {
+    turnId: turn.id,
+    scheduledDate: turn.scheduledDate?.toISOString() ?? null,
+    members: turn.tontine.group.members.map((m) => ({
+      userId: m.user.id,
+      displayName: m.user.displayName,
+      acknowledged: ackedSet.has(m.user.id),
+      isBeneficiary: m.user.id === turn.beneficiaryUserId,
+    })),
+  };
+}

@@ -5,6 +5,7 @@ import {
   BeneficiaryOrderMode,
 } from "@prisma/client";
 import {
+  acknowledgeTurn,
   activateTontine,
   cancelTontine,
   confirmContribution,
@@ -12,7 +13,9 @@ import {
   distributeTurn,
   getTontineByGroup,
   getTontineStats,
+  listTurnAcks,
   markContributionPaid,
+  scheduleTurn,
 } from "./tontines.service.js";
 
 const createSchema = z.object({
@@ -199,6 +202,53 @@ export async function tontinesRoutes(app: FastifyInstance): Promise<void> {
     });
 
     return { id: updated.id, status: updated.status };
+  });
+
+  /**
+   * POST /tontine-turns/:turnId/schedule
+   * Le bénéficiaire (ou admin) fixe la date exacte du tour dans le mois.
+   * Body: { scheduledDate: ISO datetime }
+   */
+  app.post("/tontine-turns/:turnId/schedule", async (req) => {
+    const { turnId } = z
+      .object({ turnId: z.string().uuid() })
+      .parse(req.params);
+    const { scheduledDate } = z
+      .object({ scheduledDate: z.string().datetime() })
+      .parse(req.body);
+    return scheduleTurn({
+      turnId,
+      actorUserId: req.user.sub,
+      scheduledDate: new Date(scheduledDate),
+    });
+  });
+
+  /**
+   * POST /tontine-turns/:turnId/acknowledge
+   * Accusé de réception de la date par un membre.
+   */
+  app.post("/tontine-turns/:turnId/acknowledge", async (req) => {
+    const { turnId } = z
+      .object({ turnId: z.string().uuid() })
+      .parse(req.params);
+    return acknowledgeTurn({
+      turnId,
+      actorUserId: req.user.sub,
+    });
+  });
+
+  /**
+   * GET /tontine-turns/:turnId/acks
+   * Liste des accusés de réception du tour (qui a confirmé, qui pas).
+   */
+  app.get("/tontine-turns/:turnId/acks", async (req) => {
+    const { turnId } = z
+      .object({ turnId: z.string().uuid() })
+      .parse(req.params);
+    return listTurnAcks({
+      turnId,
+      actorUserId: req.user.sub,
+    });
   });
 
   /**

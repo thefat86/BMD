@@ -377,6 +377,34 @@ export const api = {
       `/tontine-turns/${turnId}/distribute`,
     ),
 
+  /** Bénéficiaire ou admin : fixe la date exacte du tour (±15j de dueDate). */
+  scheduleTurn: (turnId: string, scheduledDate: Date) =>
+    request<{ id: string; scheduledDate: string }>(
+      "POST",
+      `/tontine-turns/${turnId}/schedule`,
+      { scheduledDate: scheduledDate.toISOString() },
+    ),
+
+  /** N'importe quel membre : accuse réception de la date choisie. */
+  acknowledgeTurn: (turnId: string) =>
+    request<{ acknowledged: boolean }>(
+      "POST",
+      `/tontine-turns/${turnId}/acknowledge`,
+    ),
+
+  /** Liste les acks d'un tour (qui a confirmé, qui pas). */
+  listTurnAcks: (turnId: string) =>
+    request<{
+      turnId: string;
+      scheduledDate: string | null;
+      members: Array<{
+        userId: string;
+        displayName: string;
+        acknowledged: boolean;
+        isBeneficiary: boolean;
+      }>;
+    }>("GET", `/tontine-turns/${turnId}/acks`),
+
   getBalance: (groupId: string) =>
     request<{
       currency: string;
@@ -413,6 +441,45 @@ export const api = {
       "POST",
       `/debt-swaps/${swapId}/cancel`,
     ),
+
+  // ============ DEBT TRANSFERS (bilatéral A→C / C↔B) ============
+
+  /**
+   * Liste les transferts de dette d'un groupe.
+   * Par défaut on ne renvoie que les PROPOSED et ACTIVE (les en-cours).
+   */
+  listDebtTransfers: (groupId: string, includeFinished = false) =>
+    request<any[]>(
+      "GET",
+      `/groups/${groupId}/debt-transfers${includeFinished ? "?includeFinished=1" : ""}`,
+    ),
+
+  /**
+   * Propose : A demande à C de reprendre sa dette envers B.
+   * Le proposer est typiquement A (fromUser), mais admin autorisé aussi.
+   */
+  proposeDebtTransfer: (
+    groupId: string,
+    input: {
+      fromUserId: string;
+      assumeUserId: string;
+      creditorUserId: string;
+      amount: string;
+      currency?: string;
+      reason?: string;
+    },
+  ) => request<any>("POST", `/groups/${groupId}/debt-transfers`, input),
+
+  acceptDebtTransferAsAssumer: (id: string) =>
+    request<any>("POST", `/debt-transfers/${id}/accept-assumer`),
+  rejectDebtTransferAsAssumer: (id: string) =>
+    request<any>("POST", `/debt-transfers/${id}/reject-assumer`),
+  acceptDebtTransferAsCreditor: (id: string) =>
+    request<any>("POST", `/debt-transfers/${id}/accept-creditor`),
+  rejectDebtTransferAsCreditor: (id: string) =>
+    request<any>("POST", `/debt-transfers/${id}/reject-creditor`),
+  cancelDebtTransfer: (id: string) =>
+    request<any>("POST", `/debt-transfers/${id}/cancel`),
 
   // ============ SPLIT PRESETS (M10) ============
 

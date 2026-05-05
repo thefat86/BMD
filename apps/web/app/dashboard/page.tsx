@@ -8,6 +8,7 @@ import {
   getToken,
   isUnauthorized,
 } from "../../lib/api-client";
+import { NotificationBell } from "../../lib/ui/notification-bell";
 
 const TYPES = [
   { value: "TONTINE", label: "🪙 Tontine" },
@@ -90,11 +91,13 @@ export default function DashboardPage() {
 
   return (
     <div className="container">
-      {/* Top bar : brand + déconnexion */}
+      {/* Top bar : brand + cloche + profil */}
       <div className="between" style={{ marginBottom: 18 }}>
         <div className="brand" style={{ marginBottom: 0 }}>
           BMD<span>·</span>
         </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+          <NotificationBell />
         <Link
           href="/dashboard/profile"
           className="btn-ghost btn-sm"
@@ -125,6 +128,7 @@ export default function DashboardPage() {
           </span>
           Profil
         </Link>
+        </div>
       </div>
 
       {/* Salutation + nom utilisateur (page-header) */}

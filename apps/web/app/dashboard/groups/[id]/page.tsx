@@ -14,8 +14,19 @@ type SplitMode = "EQUAL" | "UNEQUAL" | "PERCENTAGE";
 interface Member {
   id: string;
   role: string;
+  joinedAt?: string;
   user: { id: string; displayName: string; avatar?: string | null };
 }
+
+const GROUP_TYPE_ICONS: Record<string, string> = {
+  TONTINE: "🪙",
+  COLOC: "🏠",
+  TRAVEL: "✈️",
+  EVENT: "💍",
+  CLUB: "⚽",
+  PARISH: "⛪",
+  GENERIC: "📁",
+};
 
 export default function GroupDetailPage() {
   const router = useRouter();
@@ -27,58 +38,31 @@ export default function GroupDetailPage() {
   const [balance, setBalance] = useState<any>(null);
   const [me, setMe] = useState<any>(null);
   const [error, setError] = useState<string | null>(null);
+  const [activeSwap, setActiveSwap] = useState<any>(null);
+
+  // Un seul panel ouvert à la fois (mobile-friendly)
+  const [openPanel, setOpenPanel] = useState<"none" | "invite" | "expense">(
+    "none",
+  );
 
   // Invite
-  const [showInvite, setShowInvite] = useState(false);
   const [contactType, setContactType] = useState<"PHONE" | "EMAIL">("PHONE");
   const [contactValue, setContactValue] = useState("+33");
 
-  // Add expense
-  const [showExpense, setShowExpense] = useState(false);
+  // Expense form
   const [description, setDescription] = useState("");
   const [amount, setAmount] = useState("");
   const [paidByUserId, setPaidByUserId] = useState<string>("");
   const [splitMode, setSplitMode] = useState<SplitMode>("EQUAL");
-  // userId -> selected
   const [participants, setParticipants] = useState<Record<string, boolean>>({});
-  // userId -> share value (montant for UNEQUAL, % for PERCENTAGE)
   const [shares, setShares] = useState<Record<string, string>>({});
 
-  // OCR (M14) — état du scan en cours + résultat
+  // OCR
   const [scanning, setScanning] = useState(false);
   const [scanResult, setScanResult] = useState<{
     merchant: string | null;
     confidence: number;
   } | null>(null);
-
-  async function scanTicket(file: File) {
-    setError(null);
-    setScanning(true);
-    setScanResult(null);
-    try {
-      const result = await api.scanReceipt(file);
-      // Auto-fill du formulaire avec les infos extraites
-      if (result.amount) setAmount(result.amount);
-      if (result.merchant) setDescription(result.merchant);
-      else if (result.category) setDescription(result.category);
-      setScanResult({
-        merchant: result.merchant,
-        confidence: result.confidence,
-      });
-    } catch (e) {
-      if (isUnauthorized(e)) {
-        clearToken();
-        router.replace("/login");
-        return;
-      }
-      setError(`Échec du scan : ${(e as Error).message}`);
-    } finally {
-      setScanning(false);
-    }
-  }
-
-  // Active swap state (M09)
-  const [activeSwap, setActiveSwap] = useState<any>(null);
 
   async function refresh() {
     try {
@@ -93,7 +77,7 @@ export default function GroupDetailPage() {
       setGroup(g);
       setExpenses(e);
       setBalance(b);
-      setActiveSwap(swaps[0] ?? null); // au plus 1 swap actif à la fois
+      setActiveSwap(swaps[0] ?? null);
     } catch (er) {
       if (isUnauthorized(er)) {
         clearToken();
@@ -101,46 +85,6 @@ export default function GroupDetailPage() {
         return;
       }
       setError((er as Error).message);
-    }
-  }
-
-  async function proposeSwap() {
-    setError(null);
-    try {
-      await api.proposeSwap(groupId);
-      void refresh();
-    } catch (e) {
-      setError((e as Error).message);
-    }
-  }
-
-  async function acceptSwap() {
-    setError(null);
-    try {
-      await api.acceptSwap(activeSwap.id);
-      void refresh();
-    } catch (e) {
-      setError((e as Error).message);
-    }
-  }
-
-  async function rejectSwap() {
-    setError(null);
-    try {
-      await api.rejectSwap(activeSwap.id);
-      void refresh();
-    } catch (e) {
-      setError((e as Error).message);
-    }
-  }
-
-  async function cancelSwap() {
-    if (!window.confirm("Annuler la proposition de swap ?")) return;
-    try {
-      await api.cancelSwap(activeSwap.id);
-      void refresh();
-    } catch (e) {
-      setError((e as Error).message);
     }
   }
 
@@ -153,50 +97,47 @@ export default function GroupDetailPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [groupId]);
 
-  // Quand on ouvre le panneau "ajouter dépense" : précocher tout le monde + définir le payeur par défaut
+  // Init form expense
   useEffect(() => {
     if (!group || !me) return;
-    if (showExpense) {
-      const allSelected: Record<string, boolean> = {};
-      group.members.forEach((m: Member) => {
-        allSelected[m.user.id] = true;
-      });
-      setParticipants(allSelected);
+    if (openPanel === "expense") {
+      const all: Record<string, boolean> = {};
+      group.members.forEach((m: Member) => (all[m.user.id] = true));
+      setParticipants(all);
       setShares({});
-      // Le payeur par défaut = l'utilisateur connecté s'il est membre, sinon le 1er membre
-      const meIsMember = group.members.some((m: Member) => m.user.id === me.id);
+      const meIsMember = group.members.some(
+        (m: Member) => m.user.id === me.id,
+      );
       setPaidByUserId(meIsMember ? me.id : group.members[0]?.user.id ?? "");
     }
-  }, [showExpense, group, me]);
+  }, [openPanel, group, me]);
 
   function toggleParticipant(userId: string) {
     setParticipants((p) => ({ ...p, [userId]: !p[userId] }));
   }
-
   function setShare(userId: string, value: string) {
     setShares((s) => ({ ...s, [userId]: value }));
   }
-
-  // Liste des participants sélectionnés
   const selectedIds = useMemo(
     () => Object.keys(participants).filter((id) => participants[id]),
     [participants],
   );
 
-  // Calcul de validation en temps réel selon le mode
   const validation = useMemo(() => {
     const amt = parseFloat(amount);
     if (!description.trim()) return { ok: false, msg: "Description requise" };
-    if (!amt || amt <= 0) return { ok: false, msg: "Montant doit être > 0" };
+    if (!amt || amt <= 0) return { ok: false, msg: "Montant > 0 requis" };
     if (selectedIds.length === 0)
-      return { ok: false, msg: "Sélectionne au moins 1 participant" };
+      return { ok: false, msg: "Au moins 1 participant" };
     if (!paidByUserId) return { ok: false, msg: "Choisis qui a payé" };
 
     if (splitMode === "EQUAL") {
       const each = (amt / selectedIds.length).toFixed(2);
-      return { ok: true, msg: `${each} € par personne · ${selectedIds.length} participant(s)` };
+      return {
+        ok: true,
+        msg: `${each} ${group?.defaultCurrency ?? "€"} × ${selectedIds.length}`,
+      };
     }
-
     if (splitMode === "UNEQUAL") {
       const total = selectedIds.reduce(
         (acc, id) => acc + (parseFloat(shares[id] || "0") || 0),
@@ -206,34 +147,42 @@ export default function GroupDetailPage() {
       if (diff > 0.01) {
         return {
           ok: false,
-          msg: `Somme des parts: ${total.toFixed(2)} € · doit être ${amt.toFixed(2)} € (écart ${diff.toFixed(2)} €)`,
+          msg: `Somme ${total.toFixed(2)} ≠ ${amt.toFixed(2)}`,
         };
       }
-      return { ok: true, msg: `Somme des parts: ${total.toFixed(2)} € ✓` };
+      return { ok: true, msg: `Somme ${total.toFixed(2)} ✓` };
     }
-
-    // PERCENTAGE
     const totalPct = selectedIds.reduce(
       (acc, id) => acc + (parseFloat(shares[id] || "0") || 0),
       0,
     );
     if (Math.abs(totalPct - 100) > 0.01) {
-      return {
-        ok: false,
-        msg: `Somme: ${totalPct.toFixed(1)} % · doit être 100 % (écart ${(100 - totalPct).toFixed(1)} %)`,
-      };
+      return { ok: false, msg: `${totalPct.toFixed(1)} % ≠ 100 %` };
     }
-    return { ok: true, msg: `Somme: ${totalPct.toFixed(1)} % ✓` };
-  }, [description, amount, selectedIds, paidByUserId, splitMode, shares]);
+    return { ok: true, msg: `100 % ✓` };
+  }, [
+    description,
+    amount,
+    selectedIds,
+    paidByUserId,
+    splitMode,
+    shares,
+    group,
+  ]);
 
   async function invite() {
     setError(null);
     try {
       await api.inviteMember(groupId, contactType, contactValue);
-      setShowInvite(false);
-      setContactValue("+33");
+      setOpenPanel("none");
+      setContactValue(contactType === "PHONE" ? "+33" : "");
       void refresh();
     } catch (e) {
+      if (isUnauthorized(e)) {
+        clearToken();
+        router.replace("/login");
+        return;
+      }
       setError((e as Error).message);
     }
   }
@@ -259,17 +208,22 @@ export default function GroupDetailPage() {
               })),
       };
       await api.createExpense(groupId, payload);
-      setShowExpense(false);
+      setOpenPanel("none");
       setDescription("");
       setAmount("");
       setShares({});
+      setScanResult(null);
       void refresh();
     } catch (e) {
+      if (isUnauthorized(e)) {
+        clearToken();
+        router.replace("/login");
+        return;
+      }
       setError((e as Error).message);
     }
   }
 
-  // Helper : préremplir les parts (UNEQUAL) ou pourcentages (PERCENTAGE) en parts égales
   function autoFillShares() {
     if (selectedIds.length === 0) return;
     const next: Record<string, string> = {};
@@ -284,268 +238,656 @@ export default function GroupDetailPage() {
     setShares(next);
   }
 
-  if (!group)
+  async function scanTicket(file: File) {
+    setError(null);
+    setScanning(true);
+    setScanResult(null);
+    try {
+      const result = await api.scanReceipt(file);
+      if (result.amount) setAmount(result.amount);
+      if (result.merchant) setDescription(result.merchant);
+      else if (result.category) setDescription(result.category);
+      setScanResult({
+        merchant: result.merchant,
+        confidence: result.confidence,
+      });
+    } catch (e) {
+      if (isUnauthorized(e)) {
+        clearToken();
+        router.replace("/login");
+        return;
+      }
+      setError(`Échec du scan : ${(e as Error).message}`);
+    } finally {
+      setScanning(false);
+    }
+  }
+
+  async function proposeSwap() {
+    setError(null);
+    try {
+      await api.proposeSwap(groupId);
+      void refresh();
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }
+  async function acceptSwap() {
+    setError(null);
+    try {
+      await api.acceptSwap(activeSwap.id);
+      void refresh();
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }
+  async function rejectSwap() {
+    setError(null);
+    try {
+      await api.rejectSwap(activeSwap.id);
+      void refresh();
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }
+  async function cancelSwap() {
+    if (!window.confirm("Annuler la proposition de swap ?")) return;
+    try {
+      await api.cancelSwap(activeSwap.id);
+      void refresh();
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }
+
+  if (!group) {
     return (
       <div className="container">
-        <p>Chargement…</p>
+        <p className="muted">Chargement…</p>
       </div>
     );
+  }
+
+  const groupIcon = GROUP_TYPE_ICONS[group.type] ?? "📁";
 
   return (
     <div className="container">
-      <Link
-        href="/dashboard"
-        className="btn-ghost"
-        style={{ display: "inline-block", marginBottom: 18 }}
-      >
-        ← Retour
-      </Link>
+      {/* Top bar : retour + brand */}
+      <div className="between" style={{ marginBottom: 14 }}>
+        <Link
+          href="/dashboard"
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 4,
+            fontSize: 13,
+            color: "var(--cream-soft)",
+          }}
+        >
+          ← Mes groupes
+        </Link>
+        <span
+          style={{
+            fontFamily: "Cormorant Garamond, serif",
+            fontSize: 18,
+            color: "var(--cream)",
+            fontWeight: 700,
+          }}
+        >
+          BMD<span style={{ color: "var(--saffron)" }}>·</span>
+        </span>
+      </div>
 
-      <div className="brand">
-        <span style={{ color: "var(--cream)" }}>{group.name}</span>
+      {/* Page header */}
+      <div className="page-header">
+        <div className="titles">
+          <h1>
+            <span style={{ marginRight: 8 }}>{groupIcon}</span>
+            {group.name}
+          </h1>
+          <div className="sub">
+            {group.members.length} membre{group.members.length > 1 ? "s" : ""}{" "}
+            · {group.defaultCurrency} · {group.type.toLowerCase()}
+          </div>
+        </div>
       </div>
 
       {error && <div className="error">{error}</div>}
 
-      {/* Quick links vers les sous-modules */}
-      <div
-        style={{
-          display: "flex",
-          gap: 10,
-          marginBottom: 20,
-          flexWrap: "wrap",
-        }}
-      >
+      {/* Quick actions */}
+      <div className="quick-row">
         <Link
           href={`/dashboard/groups/${groupId}/tontine`}
+          className="quick-card"
+        >
+          <span className="ico">🪙</span>
+          <span className="lbl">Tontine</span>
+        </Link>
+        <button
+          type="button"
+          className="quick-card"
+          onClick={() =>
+            setOpenPanel(openPanel === "expense" ? "none" : "expense")
+          }
           style={{
-            display: "flex",
-            alignItems: "center",
-            gap: 8,
-            padding: "12px 20px",
-            borderRadius: 12,
-            background:
-              "linear-gradient(135deg,rgba(232,163,61,0.15),rgba(181,70,46,0.1))",
-            border: "1px solid var(--saffron)",
-            color: "var(--saffron)",
-            fontSize: 13,
-            fontWeight: 700,
-            textDecoration: "none",
+            cursor: "pointer",
+            ...(openPanel === "expense" && {
+              borderColor: "var(--saffron)",
+              background: "rgba(232,163,61,0.18)",
+            }),
           }}
         >
-          🪙 Tontine →
-        </Link>
+          <span className="ico">＋</span>
+          <span className="lbl">Dépense</span>
+        </button>
+        <button
+          type="button"
+          className="quick-card"
+          onClick={() =>
+            setOpenPanel(openPanel === "invite" ? "none" : "invite")
+          }
+          style={{
+            cursor: "pointer",
+            ...(openPanel === "invite" && {
+              borderColor: "var(--saffron)",
+              background: "rgba(232,163,61,0.18)",
+            }),
+          }}
+        >
+          <span className="ico">👤</span>
+          <span className="lbl">Inviter</span>
+        </button>
       </div>
 
-      {/* Members + invite */}
-      <div className="card">
-        <div
-          style={{
-            display: "flex",
-            justifyContent: "space-between",
-            alignItems: "center",
-          }}
-        >
-          <h2 style={{ marginBottom: 0 }}>👥 Membres ({group.members.length})</h2>
-          <button className="btn" onClick={() => setShowInvite(!showInvite)}>
-            {showInvite ? "Annuler" : "+ Inviter"}
-          </button>
-        </div>
-        {showInvite && (
-          <div style={{ marginTop: 18 }}>
-            <div className="field">
-              <label>Type</label>
-              <select
-                value={contactType}
-                onChange={(e) => setContactType(e.target.value as any)}
-              >
-                <option value="PHONE">Téléphone</option>
-                <option value="EMAIL">Email</option>
-              </select>
-            </div>
-            <div className="field">
-              <label>{contactType === "PHONE" ? "Numéro" : "Email"}</label>
-              <input
-                value={contactValue}
-                onChange={(e) => setContactValue(e.target.value)}
-              />
-            </div>
-            <button className="btn" onClick={invite} style={{ width: "100%" }}>
-              ✓ Inviter
+      {/* === PANEL : Inviter === */}
+      {openPanel === "invite" && (
+        <div className="card">
+          <div className="card-head">
+            <h2>👤 Inviter un membre</h2>
+            <button
+              className="btn-ghost btn-sm"
+              onClick={() => setOpenPanel("none")}
+            >
+              ✕
             </button>
           </div>
-        )}
-        <div style={{ marginTop: 14 }}>
-          {group.members.map((m: Member) => (
-            <div key={m.id} className="list-item">
-              <div className="name">
-                {m.user.displayName}
-                {me?.id === m.user.id && (
-                  <span
-                    style={{
-                      marginLeft: 8,
-                      fontSize: 10,
-                      letterSpacing: 1,
-                      color: "var(--saffron)",
-                      textTransform: "uppercase",
-                    }}
-                  >
-                    · toi
-                  </span>
-                )}
-              </div>
-              <div className="meta">{m.role}</div>
-            </div>
-          ))}
+          <div className="field">
+            <label>Méthode</label>
+            <select
+              value={contactType}
+              onChange={(e) => {
+                const t = e.target.value as "PHONE" | "EMAIL";
+                setContactType(t);
+                setContactValue(t === "PHONE" ? "+33" : "");
+              }}
+            >
+              <option value="PHONE">📞 Téléphone</option>
+              <option value="EMAIL">✉️ Email</option>
+            </select>
+          </div>
+          <div className="field">
+            <label>{contactType === "PHONE" ? "Numéro" : "Email"}</label>
+            <input
+              type={contactType === "EMAIL" ? "email" : "tel"}
+              inputMode={contactType === "EMAIL" ? "email" : "tel"}
+              value={contactValue}
+              onChange={(e) => setContactValue(e.target.value)}
+              placeholder={
+                contactType === "PHONE"
+                  ? "+33 6 12 34 56 78"
+                  : "ami@exemple.com"
+              }
+            />
+          </div>
+          <button className="btn btn-block" onClick={invite}>
+            ✓ Inviter
+          </button>
         </div>
-      </div>
+      )}
 
-      {/* Balances */}
-      {balance && (
+      {/* === PANEL : Ajouter dépense === */}
+      {openPanel === "expense" && (
         <div className="card">
-          <h2>⚖ Soldes ({balance.currency})</h2>
-          {balance.balances.map((b: any) => (
-            <div key={b.userId} className="list-item">
-              <div className="name">{b.displayName}</div>
-              <div
-                className="amount"
-                style={{ color: parseFloat(b.net) < 0 ? "#D9714A" : undefined }}
-              >
-                {parseFloat(b.net) > 0 ? "+" : ""}
-                {b.net} {balance.currency}
-              </div>
-            </div>
-          ))}
+          <div className="card-head">
+            <h2>＋ Nouvelle dépense</h2>
+            <button
+              className="btn-ghost btn-sm"
+              onClick={() => setOpenPanel("none")}
+            >
+              ✕
+            </button>
+          </div>
 
-          {balance.suggestions.length > 0 && (
-            <div style={{ marginTop: 18 }}>
-              <h2 style={{ fontSize: 18 }}>↔ Règlements suggérés</h2>
-              {balance.suggestions.map((s: any, i: number) => (
-                <div key={i} className="list-item">
-                  <div className="name">
-                    {s.fromName} → {s.toName}
-                  </div>
-                  <div className="amount">
-                    {s.amount} {s.currency}
-                  </div>
-                </div>
-              ))}
+          {/* OCR scan */}
+          <label
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: 8,
+              padding: "12px 14px",
+              borderRadius: 12,
+              border: "1.5px dashed var(--saffron)",
+              background:
+                "linear-gradient(135deg,rgba(232,163,61,0.08),rgba(181,70,46,0.04))",
+              cursor: scanning ? "wait" : "pointer",
+              fontSize: 13,
+              fontWeight: 700,
+              color: scanning ? "var(--cream-soft)" : "var(--saffron)",
+              marginBottom: 14,
+              minHeight: 50,
+              opacity: scanning ? 0.7 : 1,
+              transition: "all 0.15s",
+            }}
+          >
+            {scanning ? "⏳ Analyse en cours…" : "📷 Scanner ticket ou PDF"}
+            <input
+              type="file"
+              accept="image/*,application/pdf,.pdf"
+              disabled={scanning}
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                if (f) void scanTicket(f);
+                e.target.value = "";
+              }}
+              style={{ display: "none" }}
+            />
+          </label>
 
-              {/* Bouton Proposer Swap (M09) — si pas de swap actif */}
-              {!activeSwap && (
-                <button
-                  className="btn"
-                  onClick={proposeSwap}
-                  style={{ width: "100%", marginTop: 12 }}
-                >
-                  ⇄ Proposer un swap (compensation officielle)
-                </button>
-              )}
+          {scanResult && !scanning && (
+            <div
+              className={scanResult.confidence > 0.6 ? "success" : "info"}
+              style={{ fontSize: 12 }}
+            >
+              ✓ Lu · confiance {Math.round(scanResult.confidence * 100)} %
             </div>
           )}
 
-          {/* === Swap actif (M09) === */}
+          <div className="field">
+            <label>Description</label>
+            <input
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              placeholder="Resto, courses, hôtel…"
+            />
+          </div>
+
+          <div className="field">
+            <label>Montant ({group.defaultCurrency})</label>
+            <input
+              value={amount}
+              onChange={(e) => setAmount(e.target.value)}
+              placeholder="60.00"
+              inputMode="decimal"
+            />
+          </div>
+
+          <div className="field">
+            <label>Qui a payé ?</label>
+            <select
+              value={paidByUserId}
+              onChange={(e) => setPaidByUserId(e.target.value)}
+            >
+              {group.members.map((m: Member) => (
+                <option key={m.user.id} value={m.user.id}>
+                  {m.user.displayName}
+                  {me?.id === m.user.id ? " (moi)" : ""}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div className="field">
+            <label>Mode de partage</label>
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "1fr 1fr 1fr",
+                gap: 6,
+              }}
+            >
+              {[
+                { v: "EQUAL", lbl: "🟰 Égal" },
+                { v: "UNEQUAL", lbl: "✏️ Parts" },
+                { v: "PERCENTAGE", lbl: "% Pourc." },
+              ].map((opt) => (
+                <button
+                  key={opt.v}
+                  type="button"
+                  onClick={() => {
+                    setSplitMode(opt.v as SplitMode);
+                    setShares({});
+                  }}
+                  style={{
+                    padding: "10px 4px",
+                    borderRadius: 10,
+                    fontSize: 12,
+                    fontWeight: 700,
+                    border:
+                      splitMode === opt.v
+                        ? "1px solid var(--saffron)"
+                        : "1px solid var(--line-soft)",
+                    background:
+                      splitMode === opt.v
+                        ? "rgba(232,163,61,0.16)"
+                        : "var(--overlay-2)",
+                    color:
+                      splitMode === opt.v
+                        ? "var(--saffron)"
+                        : "var(--cream-soft)",
+                    cursor: "pointer",
+                    minHeight: 42,
+                  }}
+                >
+                  {opt.lbl}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="field">
+            <label>
+              Participants ({selectedIds.length}/{group.members.length})
+            </label>
+            <div
+              style={{
+                background: "var(--overlay)",
+                border: "1px solid var(--line-soft)",
+                borderRadius: 12,
+                padding: 6,
+              }}
+            >
+              {group.members.map((m: Member) => {
+                const isSel = !!participants[m.user.id];
+                return (
+                  <div
+                    key={m.user.id}
+                    onClick={() => toggleParticipant(m.user.id)}
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 10,
+                      padding: "10px",
+                      borderRadius: 8,
+                      cursor: "pointer",
+                      background: isSel
+                        ? "rgba(232,163,61,0.06)"
+                        : "transparent",
+                      minHeight: 42,
+                    }}
+                  >
+                    <div
+                      style={{
+                        width: 20,
+                        height: 20,
+                        borderRadius: 5,
+                        border: "1.5px solid var(--saffron)",
+                        background: isSel ? "var(--saffron)" : "transparent",
+                        color: "#16111e",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        fontSize: 12,
+                        fontWeight: 700,
+                        flexShrink: 0,
+                      }}
+                    >
+                      {isSel ? "✓" : ""}
+                    </div>
+                    <div
+                      style={{
+                        flex: 1,
+                        fontSize: 14,
+                        color: "var(--cream)",
+                        fontWeight: isSel ? 600 : 500,
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      {m.user.displayName}
+                      {me?.id === m.user.id && (
+                        <span
+                          style={{
+                            color: "var(--saffron)",
+                            fontSize: 10,
+                            marginLeft: 4,
+                          }}
+                        >
+                          (moi)
+                        </span>
+                      )}
+                    </div>
+                    {isSel && splitMode !== "EQUAL" && (
+                      <div
+                        onClick={(e) => e.stopPropagation()}
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 4,
+                        }}
+                      >
+                        <input
+                          value={shares[m.user.id] || ""}
+                          onChange={(e) =>
+                            setShare(m.user.id, e.target.value)
+                          }
+                          placeholder="0"
+                          inputMode="decimal"
+                          style={{
+                            width: 64,
+                            padding: "6px 8px",
+                            fontSize: 13,
+                            background: "rgba(0,0,0,0.3)",
+                            border: "1px solid var(--line-soft)",
+                            borderRadius: 6,
+                            color: "var(--cream)",
+                            textAlign: "right",
+                          }}
+                        />
+                        <span
+                          style={{
+                            fontSize: 11,
+                            color: "var(--muted)",
+                            width: 16,
+                          }}
+                        >
+                          {splitMode === "UNEQUAL"
+                            ? group.defaultCurrency.slice(0, 1)
+                            : "%"}
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+            {splitMode !== "EQUAL" && selectedIds.length > 0 && (
+              <button
+                type="button"
+                onClick={autoFillShares}
+                className="btn-ghost btn-sm"
+                style={{ marginTop: 8, alignSelf: "flex-start" }}
+              >
+                ⚖ Auto · parts égales
+              </button>
+            )}
+          </div>
+
+          <div
+            className={validation.ok ? "success" : "error"}
+            style={{ fontSize: 12 }}
+          >
+            {validation.ok ? "✓ " : "⚠ "}
+            {validation.msg}
+          </div>
+
+          <button
+            className="btn btn-block"
+            onClick={addExpense}
+            disabled={!validation.ok}
+          >
+            ✓ Ajouter
+          </button>
+        </div>
+      )}
+
+      {/* === SOLDES === */}
+      {balance && balance.balances.length > 0 && (
+        <div className="card">
+          <div className="card-head">
+            <h2>⚖ Soldes</h2>
+            <span className="muted" style={{ fontSize: 11 }}>
+              {balance.currency}
+            </span>
+          </div>
+          <div className="list">
+            {balance.balances.map((b: any) => {
+              const v = parseFloat(b.net);
+              const isMe = me?.id === b.userId;
+              return (
+                <div key={b.userId} className="list-item">
+                  <div
+                    className="icon"
+                    style={
+                      isMe
+                        ? {
+                            background:
+                              "linear-gradient(135deg,var(--saffron),var(--terracotta))",
+                            color: "#16111e",
+                          }
+                        : undefined
+                    }
+                  >
+                    {b.displayName.charAt(0).toUpperCase()}
+                  </div>
+                  <div className="text">
+                    <div className="name">
+                      {b.displayName}
+                      {isMe && (
+                        <span
+                          style={{
+                            color: "var(--saffron)",
+                            fontSize: 9,
+                            marginLeft: 6,
+                            letterSpacing: 1,
+                          }}
+                        >
+                          MOI
+                        </span>
+                      )}
+                    </div>
+                    <div className="meta">
+                      {v > 0
+                        ? "On lui doit"
+                        : v < 0
+                          ? "Doit au groupe"
+                          : "À l'équilibre"}
+                    </div>
+                  </div>
+                  <div
+                    className={`amount ${v < 0 ? "amount-neg" : v > 0 ? "amount-pos" : ""}`}
+                  >
+                    {v > 0 ? "+" : ""}
+                    {v.toFixed(2)}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          {balance.suggestions.length > 0 && (
+            <>
+              <div className="section-title">↔ Règlements suggérés</div>
+              <div className="list">
+                {balance.suggestions.map((s: any, i: number) => (
+                  <div key={i} className="list-item">
+                    <div className="icon">↔</div>
+                    <div className="text">
+                      <div className="name">
+                        {s.fromName} → {s.toName}
+                      </div>
+                      <div className="meta">Paiement à effectuer</div>
+                    </div>
+                    <div className="amount">
+                      {parseFloat(s.amount).toFixed(2)}
+                    </div>
+                  </div>
+                ))}
+              </div>
+              {!activeSwap && (
+                <button
+                  className="btn-ghost btn-block"
+                  onClick={proposeSwap}
+                  style={{ marginTop: 12 }}
+                >
+                  ⇄ Proposer un swap officiel
+                </button>
+              )}
+            </>
+          )}
+
           {activeSwap && (
             <div
               style={{
-                marginTop: 18,
-                padding: 18,
+                marginTop: 14,
+                padding: 14,
                 background:
-                  "linear-gradient(135deg,rgba(232,163,61,0.1),rgba(181,70,46,0.05))",
+                  "linear-gradient(135deg,rgba(232,163,61,0.1),rgba(181,70,46,0.04))",
                 border: "1.5px solid var(--saffron)",
                 borderRadius: 14,
               }}
             >
+              <div className="between" style={{ marginBottom: 10 }}>
+                <strong
+                  style={{
+                    fontFamily: "Cormorant Garamond, serif",
+                    fontSize: 16,
+                    color: "var(--saffron)",
+                  }}
+                >
+                  ⇄ Swap proposé
+                </strong>
+                <span className="chip chip-saffron">
+                  {new Date(activeSwap.expiresAt).toLocaleDateString("fr-FR", {
+                    day: "numeric",
+                    month: "short",
+                  })}
+                </span>
+              </div>
               <div
                 style={{
-                  display: "flex",
-                  justifyContent: "space-between",
-                  alignItems: "center",
+                  fontSize: 12,
+                  color: "var(--cream-soft)",
                   marginBottom: 10,
                 }}
               >
-                <h2 style={{ marginBottom: 0, fontSize: 18, color: "var(--saffron)" }}>
-                  ⇄ Swap proposé
-                </h2>
-                <span
-                  style={{
-                    fontSize: 10,
-                    color: "var(--gold)",
-                    background: "rgba(232,163,61,0.15)",
-                    padding: "3px 10px",
-                    borderRadius: 99,
-                    border: "1px solid var(--gold)",
-                    letterSpacing: 1,
-                    textTransform: "uppercase",
-                    fontWeight: 700,
-                  }}
-                >
-                  Expire {new Date(activeSwap.expiresAt).toLocaleDateString("fr-FR")}
-                </span>
+                {activeSwap.description}
               </div>
-              <p style={{ color: "var(--cream-soft)", fontSize: 13, marginBottom: 14 }}>
-                {activeSwap.description ?? "Compensation des dettes"}.{" "}
-                Une fois accepté par tous, devient le plan de règlement officiel.
-              </p>
-
-              {/* Legs */}
-              <div style={{ marginBottom: 14 }}>
-                {activeSwap.legs.map((l: any, i: number) => {
-                  const fromName =
-                    activeSwap.participants.find((p: any) => p.userId === l.fromUserId)
-                      ?.displayName ?? "?";
-                  const toName =
-                    activeSwap.participants.find((p: any) => p.userId === l.toUserId)
-                      ?.displayName ?? "?";
-                  return (
-                    <div key={i} className="list-item">
-                      <div className="name">
-                        {fromName} → {toName}
-                      </div>
-                      <div className="amount">
-                        {l.amount} {l.currency}
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-
-              {/* Acceptations */}
-              <div style={{ fontSize: 11, color: "var(--muted)", marginBottom: 12 }}>
+              <div
+                style={{
+                  display: "flex",
+                  flexWrap: "wrap",
+                  gap: 4,
+                  marginBottom: 12,
+                }}
+              >
                 {activeSwap.participants.map((p: any) => (
                   <span
                     key={p.id}
-                    style={{
-                      display: "inline-block",
-                      padding: "3px 9px",
-                      margin: "2px",
-                      borderRadius: 99,
-                      background: p.acceptedAt
-                        ? "rgba(63,125,92,0.15)"
+                    className={
+                      p.acceptedAt
+                        ? "chip chip-emerald"
                         : p.rejectedAt
-                          ? "rgba(217,113,74,0.15)"
-                          : "rgba(255,255,255,0.05)",
-                      color: p.acceptedAt
-                        ? "#7DC59E"
-                        : p.rejectedAt
-                          ? "#D9714A"
-                          : "var(--cream-soft)",
-                      border: `1px solid ${
-                        p.acceptedAt
-                          ? "rgba(63,125,92,0.3)"
-                          : p.rejectedAt
-                            ? "rgba(217,113,74,0.3)"
-                            : "var(--line-soft)"
-                      }`,
-                      fontSize: 11,
-                    }}
+                          ? "chip chip-rose"
+                          : "chip chip-muted"
+                    }
                   >
-                    {p.acceptedAt ? "✓" : p.rejectedAt ? "✗" : "⏳"} {p.displayName}
+                    {p.acceptedAt ? "✓" : p.rejectedAt ? "✗" : "⏳"}{" "}
+                    {p.displayName}
                   </span>
                 ))}
               </div>
-
-              {/* Mes actions */}
               {(() => {
                 const myPart = activeSwap.participants.find(
                   (p: any) => p.userId === me?.id,
@@ -553,35 +895,15 @@ export default function GroupDetailPage() {
                 if (!myPart) return null;
                 if (myPart.acceptedAt) {
                   return (
-                    <div
-                      style={{
-                        background: "rgba(63,125,92,0.12)",
-                        border: "1px solid var(--emerald)",
-                        color: "#7DC59E",
-                        padding: 10,
-                        borderRadius: 8,
-                        fontSize: 13,
-                        textAlign: "center",
-                      }}
-                    >
-                      ✓ Tu as accepté ce swap
+                    <div className="success" style={{ marginBottom: 0 }}>
+                      ✓ Tu as accepté
                     </div>
                   );
                 }
                 if (myPart.rejectedAt) {
                   return (
-                    <div
-                      style={{
-                        background: "rgba(217,113,74,0.12)",
-                        border: "1px solid #D9714A",
-                        color: "#D9714A",
-                        padding: 10,
-                        borderRadius: 8,
-                        fontSize: 13,
-                        textAlign: "center",
-                      }}
-                    >
-                      ✗ Tu as refusé ce swap
+                    <div className="error" style={{ marginBottom: 0 }}>
+                      ✗ Tu as refusé
                     </div>
                   );
                 }
@@ -604,12 +926,11 @@ export default function GroupDetailPage() {
                   </div>
                 );
               })()}
-
               {activeSwap.proposedById === me?.id && (
                 <button
-                  className="btn-ghost"
+                  className="btn-ghost btn-block btn-sm"
                   onClick={cancelSwap}
-                  style={{ width: "100%", marginTop: 8 }}
+                  style={{ marginTop: 8 }}
                 >
                   Annuler ma proposition
                 </button>
@@ -619,359 +940,77 @@ export default function GroupDetailPage() {
         </div>
       )}
 
-      {/* Expenses */}
+      {/* === MEMBRES === */}
       <div className="card">
-        <div
-          style={{
-            display: "flex",
-            justifyContent: "space-between",
-            alignItems: "center",
-          }}
-        >
-          <h2 style={{ marginBottom: 0 }}>🧾 Dépenses ({expenses.length})</h2>
-          <button className="btn" onClick={() => setShowExpense(!showExpense)}>
-            {showExpense ? "Annuler" : "+ Dépense"}
-          </button>
+        <div className="card-head">
+          <h2>👥 Membres</h2>
+          <span className="muted" style={{ fontSize: 11 }}>
+            {group.members.length}
+          </span>
         </div>
-
-        {showExpense && (
-          <div style={{ marginTop: 18 }}>
-            {/* === M14 OCR : Scanner un ticket === */}
-            <div
-              style={{
-                background:
-                  "linear-gradient(135deg,rgba(232,163,61,0.1),rgba(181,70,46,0.05))",
-                border: "1.5px dashed var(--saffron)",
-                borderRadius: 12,
-                padding: 14,
-                marginBottom: 16,
-                textAlign: "center",
-              }}
-            >
-              <label
-                style={{
-                  display: "inline-flex",
-                  alignItems: "center",
-                  gap: 10,
-                  cursor: scanning ? "wait" : "pointer",
-                  padding: "10px 22px",
-                  borderRadius: 10,
-                  background: scanning
-                    ? "rgba(255,255,255,0.05)"
-                    : "linear-gradient(135deg, var(--saffron), var(--terracotta))",
-                  color: scanning ? "var(--cream-soft)" : "#16111E",
-                  fontWeight: 700,
-                  fontSize: 13,
-                  letterSpacing: 0.5,
-                  opacity: scanning ? 0.7 : 1,
-                }}
-              >
-                {scanning ? "⏳ Analyse en cours…" : "📷 Scanner un ticket ou PDF"}
-                <input
-                  type="file"
-                  accept="image/*,application/pdf,.pdf"
-                  disabled={scanning}
-                  onChange={(e) => {
-                    const f = e.target.files?.[0];
-                    if (f) void scanTicket(f);
-                    e.target.value = ""; // reset pour permettre de re-scanner le même fichier
-                  }}
-                  style={{ display: "none" }}
-                />
-              </label>
-              <div
-                style={{
-                  fontSize: 11,
-                  color: "var(--cream-soft)",
-                  marginTop: 8,
-                }}
-              >
-                {scanning
-                  ? "L'IA lit ton ticket… (~3 secondes)"
-                  : "Photo, capture d'écran ou PDF · L'IA extrait le marchand et le montant"}
+        <div className="list">
+          {group.members.map((m: Member) => (
+            <div key={m.id} className="list-item">
+              <div className="icon">
+                {m.user.displayName.charAt(0).toUpperCase()}
               </div>
-              {scanResult && !scanning && (
-                <div
-                  style={{
-                    marginTop: 10,
-                    padding: "8px 12px",
-                    borderRadius: 8,
-                    fontSize: 11,
-                    background:
-                      scanResult.confidence > 0.6
-                        ? "rgba(63,125,92,0.15)"
-                        : "rgba(232,163,61,0.12)",
-                    border: `1px solid ${scanResult.confidence > 0.6 ? "var(--emerald)" : "var(--saffron)"}`,
-                    color:
-                      scanResult.confidence > 0.6
-                        ? "#7DC59E"
-                        : "var(--saffron)",
-                  }}
-                >
-                  ✓ Ticket lu · confiance{" "}
-                  {Math.round(scanResult.confidence * 100)} % · vérifie et
-                  ajuste les champs ci-dessous
-                </div>
-              )}
-            </div>
-
-            {/* Description */}
-            <div className="field">
-              <label>Description</label>
-              <input
-                value={description}
-                onChange={(e) => setDescription(e.target.value)}
-                placeholder="Ex: Resto, courses, hôtel…"
-              />
-            </div>
-
-            {/* Montant */}
-            <div className="field">
-              <label>Montant ({group.defaultCurrency})</label>
-              <input
-                value={amount}
-                onChange={(e) => setAmount(e.target.value)}
-                placeholder="60.00"
-                inputMode="decimal"
-              />
-            </div>
-
-            {/* Payeur */}
-            <div className="field">
-              <label>Qui a payé ?</label>
-              <select
-                value={paidByUserId}
-                onChange={(e) => setPaidByUserId(e.target.value)}
-              >
-                {group.members.map((m: Member) => (
-                  <option key={m.user.id} value={m.user.id}>
-                    {m.user.displayName}
-                    {me?.id === m.user.id ? " (moi)" : ""}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            {/* Mode de partage */}
-            <div className="field">
-              <label>Mode de partage</label>
-              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                {[
-                  { v: "EQUAL", label: "🟰 Égal" },
-                  { v: "UNEQUAL", label: "✏️ Parts inégales (€)" },
-                  { v: "PERCENTAGE", label: "％ Pourcentages" },
-                ].map((opt) => (
-                  <button
-                    key={opt.v}
-                    type="button"
-                    onClick={() => {
-                      setSplitMode(opt.v as SplitMode);
-                      setShares({});
-                    }}
-                    style={{
-                      flex: 1,
-                      minWidth: 110,
-                      padding: "10px 12px",
-                      borderRadius: 10,
-                      fontSize: 12,
-                      fontWeight: 600,
-                      border:
-                        splitMode === opt.v
-                          ? "1px solid var(--saffron)"
-                          : "1px solid var(--line-soft)",
-                      background:
-                        splitMode === opt.v
-                          ? "rgba(232,163,61,0.15)"
-                          : "rgba(255,255,255,0.04)",
-                      color:
-                        splitMode === opt.v
-                          ? "var(--saffron)"
-                          : "var(--cream-soft)",
-                      cursor: "pointer",
-                    }}
-                  >
-                    {opt.label}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            {/* Sélection des participants */}
-            <div className="field">
-              <label>
-                Qui participe à cette dépense ? ({selectedIds.length}/
-                {group.members.length})
-              </label>
-              <div
-                style={{
-                  background: "rgba(255,255,255,0.025)",
-                  border: "1px solid var(--line-soft)",
-                  borderRadius: 10,
-                  padding: 8,
-                }}
-              >
-                {group.members.map((m: Member) => {
-                  const isSelected = !!participants[m.user.id];
-                  return (
-                    <div
-                      key={m.user.id}
+              <div className="text">
+                <div className="name">
+                  {m.user.displayName}
+                  {me?.id === m.user.id && (
+                    <span
                       style={{
-                        display: "flex",
-                        alignItems: "center",
-                        gap: 10,
-                        padding: "8px 10px",
-                        borderRadius: 8,
-                        cursor: "pointer",
-                        background: isSelected
-                          ? "rgba(232,163,61,0.08)"
-                          : "transparent",
+                        color: "var(--saffron)",
+                        fontSize: 9,
+                        marginLeft: 6,
+                        letterSpacing: 1,
                       }}
-                      onClick={() => toggleParticipant(m.user.id)}
                     >
-                      <div
-                        style={{
-                          width: 18,
-                          height: 18,
-                          borderRadius: 4,
-                          border: "1.5px solid var(--saffron)",
-                          background: isSelected
-                            ? "var(--saffron)"
-                            : "transparent",
-                          color: "#16111e",
-                          display: "flex",
-                          alignItems: "center",
-                          justifyContent: "center",
-                          fontSize: 12,
-                          fontWeight: 700,
-                          flexShrink: 0,
-                        }}
-                      >
-                        {isSelected ? "✓" : ""}
-                      </div>
-                      <div style={{ flex: 1, fontSize: 13 }}>
-                        {m.user.displayName}
-                        {me?.id === m.user.id && (
-                          <span
-                            style={{
-                              marginLeft: 6,
-                              fontSize: 10,
-                              color: "var(--saffron)",
-                            }}
-                          >
-                            (moi)
-                          </span>
-                        )}
-                      </div>
-
-                      {/* Champ de saisie pour UNEQUAL ou PERCENTAGE */}
-                      {isSelected && splitMode !== "EQUAL" && (
-                        <div
-                          style={{ display: "flex", alignItems: "center", gap: 4 }}
-                          onClick={(e) => e.stopPropagation()}
-                        >
-                          <input
-                            value={shares[m.user.id] || ""}
-                            onChange={(e) =>
-                              setShare(m.user.id, e.target.value)
-                            }
-                            placeholder={splitMode === "UNEQUAL" ? "0.00" : "0"}
-                            inputMode="decimal"
-                            style={{
-                              width: 80,
-                              padding: "6px 8px",
-                              fontSize: 12,
-                              background: "rgba(0,0,0,0.3)",
-                              border: "1px solid var(--line-soft)",
-                              borderRadius: 6,
-                              color: "var(--cream)",
-                              textAlign: "right",
-                            }}
-                          />
-                          <span
-                            style={{
-                              fontSize: 12,
-                              color: "var(--muted)",
-                              width: 20,
-                            }}
-                          >
-                            {splitMode === "UNEQUAL"
-                              ? group.defaultCurrency.slice(0, 2)
-                              : "%"}
-                          </span>
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-              {splitMode !== "EQUAL" && selectedIds.length > 0 && (
-                <button
-                  type="button"
-                  onClick={autoFillShares}
-                  style={{
-                    marginTop: 8,
-                    padding: "6px 12px",
-                    fontSize: 11,
-                    background: "transparent",
-                    border: "1px solid var(--line-soft)",
-                    borderRadius: 8,
-                    color: "var(--cream-soft)",
-                    cursor: "pointer",
-                  }}
-                >
-                  ⚖ Pré-remplir en parts égales
-                </button>
-              )}
-            </div>
-
-            {/* Validation en temps réel */}
-            <div
-              style={{
-                padding: "10px 14px",
-                borderRadius: 10,
-                fontSize: 12,
-                marginBottom: 12,
-                background: validation.ok
-                  ? "rgba(63,125,92,0.12)"
-                  : "rgba(217,113,74,0.12)",
-                border: validation.ok
-                  ? "1px solid var(--emerald)"
-                  : "1px solid #d9714a",
-                color: validation.ok ? "#7DC59E" : "#D9714A",
-              }}
-            >
-              {validation.ok ? "✓ " : "⚠ "}
-              {validation.msg}
-            </div>
-
-            <button
-              className="btn"
-              onClick={addExpense}
-              disabled={!validation.ok}
-              style={{ width: "100%", opacity: validation.ok ? 1 : 0.5 }}
-            >
-              ✓ Ajouter la dépense
-            </button>
-          </div>
-        )}
-
-        <div style={{ marginTop: 14 }}>
-          {expenses.map((e: any) => (
-            <div key={e.id} className="list-item">
-              <div>
-                <div className="name">{e.description}</div>
-                <div className="meta">
-                  Payé par <strong>{e.paidBy.displayName}</strong> ·{" "}
-                  {e.shares.length} participant(s) · {e.splitMode} ·{" "}
-                  {new Date(e.occurredAt).toLocaleDateString("fr-FR")}
+                      MOI
+                    </span>
+                  )}
                 </div>
-              </div>
-              <div style={{ marginLeft: "auto" }} className="amount">
-                {e.amount} {e.currency}
+                <div className="meta">{m.role.toLowerCase()}</div>
               </div>
             </div>
           ))}
         </div>
+      </div>
+
+      {/* === DÉPENSES === */}
+      <div className="card">
+        <div className="card-head">
+          <h2>🧾 Dépenses</h2>
+          <span className="muted" style={{ fontSize: 11 }}>
+            {expenses.length}
+          </span>
+        </div>
+        {expenses.length === 0 ? (
+          <p className="muted text-center" style={{ padding: "20px 0" }}>
+            Aucune dépense pour l'instant
+          </p>
+        ) : (
+          <div className="list">
+            {expenses.map((e: any) => (
+              <div key={e.id} className="list-item">
+                <div className="icon">💸</div>
+                <div className="text">
+                  <div className="name">{e.description}</div>
+                  <div className="meta">
+                    {e.paidBy.displayName} · {e.shares.length}p ·{" "}
+                    {new Date(e.occurredAt).toLocaleDateString("fr-FR", {
+                      day: "numeric",
+                      month: "short",
+                    })}
+                  </div>
+                </div>
+                <div className="amount">
+                  {parseFloat(e.amount).toFixed(2)}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );

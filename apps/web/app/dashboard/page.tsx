@@ -2,7 +2,12 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { api, clearToken, getToken, isUnauthorized } from "../../lib/api-client";
+import {
+  api,
+  clearToken,
+  getToken,
+  isUnauthorized,
+} from "../../lib/api-client";
 
 const TYPES = [
   { value: "TONTINE", label: "🪙 Tontine" },
@@ -13,6 +18,16 @@ const TYPES = [
   { value: "PARISH", label: "⛪ Paroisse" },
   { value: "GENERIC", label: "📁 Autre" },
 ];
+
+const TYPE_ICONS: Record<string, string> = {
+  TONTINE: "🪙",
+  COLOC: "🏠",
+  TRAVEL: "✈️",
+  EVENT: "💍",
+  CLUB: "⚽",
+  PARISH: "⛪",
+  GENERIC: "📁",
+};
 
 export default function DashboardPage() {
   const router = useRouter();
@@ -35,7 +50,6 @@ export default function DashboardPage() {
       })
       .catch((e) => {
         if (isUnauthorized(e)) {
-          // Session invalide / révoquée → redirect silencieux vers login
           clearToken();
           router.replace("/login");
           return;
@@ -58,120 +72,156 @@ export default function DashboardPage() {
   }
 
   function logout() {
-    // On efface la session locale IMMÉDIATEMENT pour éviter tout appel API en parallèle
-    // qui se ferait avec un token déjà invalide.
     clearToken();
-    // Best effort : informer le backend (pas grave si ça échoue).
-    api.logout().catch(() => {
-      /* session déjà révoquée ou DB reset, on s'en fiche */
-    });
+    api.logout().catch(() => {});
     router.replace("/login");
   }
 
   if (!me) {
     return (
       <div className="container">
-        <div className="brand">BMD<span>·</span></div>
-        <p>Chargement…</p>
+        <div className="brand">
+          BMD<span>·</span>
+        </div>
+        <p className="muted">Chargement…</p>
       </div>
     );
   }
 
   return (
     <div className="container">
-      <div
-        style={{
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "center",
-          marginBottom: 24,
-        }}
-      >
+      {/* Top bar : brand + déconnexion */}
+      <div className="between" style={{ marginBottom: 18 }}>
         <div className="brand" style={{ marginBottom: 0 }}>
           BMD<span>·</span>
         </div>
-        <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
-          <span style={{ color: "var(--cream-soft)", fontSize: 14 }}>
-            👋 {me.displayName}
-          </span>
-          <button className="btn-ghost" onClick={logout}>
-            ↩ Déconnexion
-          </button>
+        <button
+          className="btn-ghost btn-sm"
+          onClick={logout}
+          style={{ minHeight: 36 }}
+        >
+          ↩ Quitter
+        </button>
+      </div>
+
+      {/* Salutation + nom utilisateur (page-header) */}
+      <div className="page-header">
+        <div className="titles">
+          <h1>Bonjour {me.displayName}</h1>
+          <div className="sub">
+            {groups.length} groupe{groups.length > 1 ? "s" : ""} actif
+            {groups.length > 1 ? "s" : ""}
+          </div>
         </div>
       </div>
 
       {error && <div className="error">{error}</div>}
 
-      <div className="card">
-        <div
-          style={{
-            display: "flex",
-            justifyContent: "space-between",
-            alignItems: "center",
-          }}
+      {/* Nouveau groupe — bouton large en tête */}
+      {!showCreate && (
+        <button
+          className="btn btn-block"
+          onClick={() => setShowCreate(true)}
+          style={{ marginBottom: 14 }}
         >
-          <h2 style={{ marginBottom: 0 }}>🪙 Mes groupes ({groups.length})</h2>
-          <button className="btn" onClick={() => setShowCreate(!showCreate)}>
-            {showCreate ? "Annuler" : "+ Nouveau groupe"}
-          </button>
-        </div>
+          ＋ Créer un nouveau groupe
+        </button>
+      )}
 
-        {showCreate && (
-          <div style={{ marginTop: 18 }}>
-            <div className="field">
-              <label>Nom du groupe</label>
-              <input
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                placeholder="Ex: Tontine Bamiléké"
-              />
-            </div>
-            <div className="field">
-              <label>Type</label>
-              <select value={type} onChange={(e) => setType(e.target.value)}>
-                {TYPES.map((t) => (
-                  <option key={t.value} value={t.value}>
-                    {t.label}
-                  </option>
-                ))}
-              </select>
-            </div>
+      {/* Form création groupe */}
+      {showCreate && (
+        <div className="card">
+          <div className="card-head">
+            <h2>Nouveau groupe</h2>
             <button
-              className="btn"
-              onClick={createGroup}
-              disabled={!name}
-              style={{ width: "100%" }}
+              className="btn-ghost btn-sm"
+              onClick={() => {
+                setShowCreate(false);
+                setName("");
+              }}
             >
-              ✓ Créer
+              ✕
             </button>
           </div>
-        )}
+          <div className="field">
+            <label>Nom du groupe</label>
+            <input
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="Ex : Tontine Bamiléké, Voyage Dakar…"
+              autoFocus
+            />
+          </div>
+          <div className="field">
+            <label>Type</label>
+            <select value={type} onChange={(e) => setType(e.target.value)}>
+              {TYPES.map((t) => (
+                <option key={t.value} value={t.value}>
+                  {t.label}
+                </option>
+              ))}
+            </select>
+          </div>
+          <button
+            className="btn btn-block"
+            onClick={createGroup}
+            disabled={!name.trim()}
+          >
+            ✓ Créer
+          </button>
+        </div>
+      )}
 
-        {groups.length === 0 && !showCreate && (
-          <p style={{ marginTop: 18, color: "var(--muted)", fontSize: 14 }}>
-            Aucun groupe pour l'instant. Crée-en un !
+      {/* Section groupes */}
+      <div className="section-title">
+        <span>Mes groupes</span>
+        <span className="muted" style={{ fontSize: 11 }}>
+          {groups.length}
+        </span>
+      </div>
+
+      {groups.length === 0 ? (
+        <div
+          className="card text-center"
+          style={{ padding: "30px 20px" }}
+        >
+          <div style={{ fontSize: 40, marginBottom: 10 }}>🌱</div>
+          <p className="muted" style={{ fontSize: 13 }}>
+            Aucun groupe pour l'instant.
+            <br />
+            Crée-en un pour démarrer.
           </p>
-        )}
-
-        <div style={{ marginTop: 18 }}>
+        </div>
+      ) : (
+        <div className="list">
           {groups.map((g) => (
             <Link
               key={g.id}
               href={`/dashboard/groups/${g.id}`}
-              style={{ textDecoration: "none" }}
+              className="list-item"
+              style={{ textDecoration: "none", color: "inherit" }}
             >
-              <div className="list-item">
+              <div className="icon">{TYPE_ICONS[g.type] ?? "📁"}</div>
+              <div className="text">
                 <div className="name">{g.name}</div>
                 <div className="meta">
                   {g.membersCount} membre{g.membersCount > 1 ? "s" : ""} ·{" "}
-                  {g.defaultCurrency}
+                  {g.defaultCurrency} · {g.type.toLowerCase()}
                 </div>
-                <div style={{ color: "var(--saffron)" }}>→</div>
+              </div>
+              <div
+                style={{
+                  color: "var(--saffron)",
+                  fontSize: 18,
+                  flexShrink: 0,
+                }}
+              >
+                ›
               </div>
             </Link>
           ))}
         </div>
-      </div>
+      )}
     </div>
   );
 }

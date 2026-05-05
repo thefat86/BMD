@@ -46,13 +46,44 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="container" style={{ maxWidth: 480 }}>
-      <div className="brand">
-        BMD<span>·</span>
+    <div className="container" style={{ maxWidth: 440 }}>
+      <div
+        className="text-center"
+        style={{
+          marginTop: 28,
+          marginBottom: 28,
+        }}
+      >
+        <div
+          style={{
+            fontFamily: "Cormorant Garamond, serif",
+            fontSize: 42,
+            fontWeight: 700,
+            color: "var(--cream)",
+            letterSpacing: 1,
+            lineHeight: 1,
+          }}
+        >
+          BMD<span style={{ color: "var(--saffron)" }}>·</span>
+        </div>
+        <div
+          style={{
+            fontSize: 11,
+            color: "var(--gold)",
+            letterSpacing: 4,
+            textTransform: "uppercase",
+            marginTop: 8,
+            fontWeight: 600,
+          }}
+        >
+          Back · Mes · Do
+        </div>
       </div>
 
       <div className="card">
-        <h2>{step === "contact" ? "Te connecter" : "Saisir le code"}</h2>
+        <h2 style={{ marginBottom: 14 }}>
+          {step === "contact" ? "Te connecter" : "Saisir le code"}
+        </h2>
 
         {error && <div className="error">{error}</div>}
 
@@ -96,7 +127,7 @@ export default function LoginPage() {
               />
             </div>
             <button
-              className="btn"
+              className="btn btn-block"
               onClick={requestOtp}
               disabled={loading}
               style={{ width: "100%" }}
@@ -141,7 +172,7 @@ export default function LoginPage() {
               />
             </div>
             <button
-              className="btn"
+              className="btn btn-block"
               onClick={verifyOtp}
               disabled={loading || code.length < 4}
               style={{ width: "100%" }}
@@ -149,7 +180,7 @@ export default function LoginPage() {
               {loading ? "Vérification…" : "✓ Me connecter"}
             </button>
             <button
-              className="btn-ghost"
+              className="btn-ghost btn-block"
               onClick={() => setStep("contact")}
               style={{ width: "100%", marginTop: 10 }}
             >

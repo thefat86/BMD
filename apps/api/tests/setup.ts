@@ -15,18 +15,32 @@ process.env.OTP_DELIVERY_MODE = "console";
 process.env.LOG_LEVEL = "error";
 
 async function truncateAll() {
-  // Order matters because of FK constraints
-  await prisma.$transaction([
-    prisma.expenseShare.deleteMany(),
-    prisma.expense.deleteMany(),
-    prisma.settlement.deleteMany(),
-    prisma.groupMember.deleteMany(),
-    prisma.group.deleteMany(),
-    prisma.session.deleteMany(),
-    prisma.otpCode.deleteMany(),
-    prisma.userContact.deleteMany(),
-    prisma.user.deleteMany(),
-  ]);
+  // Approche robuste : TRUNCATE ... CASCADE en SQL natif.
+  // Plus rapide que deleteMany et règle automatiquement les FK constraints.
+  // Inclut TOUTES les tables (anciennes et nouvelles), sans dépendre de l'ordre.
+  const tables = [
+    "DebtSwapLeg",
+    "DebtSwapParticipant",
+    "DebtSwap",
+    "TontineContribution",
+    "TontineTurn",
+    "Tontine",
+    "SplitPreset",
+    "ExpenseShare",
+    "Expense",
+    "Settlement",
+    "GroupMember",
+    "Group",
+    "Session",
+    "OtpCode",
+    "UserContact",
+    "User",
+  ];
+  // Génère: TRUNCATE TABLE "DebtSwapLeg", "DebtSwapParticipant", ... RESTART IDENTITY CASCADE;
+  const tableList = tables.map((t) => `"${t}"`).join(", ");
+  await prisma.$executeRawUnsafe(
+    `TRUNCATE TABLE ${tableList} RESTART IDENTITY CASCADE`,
+  );
 }
 
 beforeAll(async () => {

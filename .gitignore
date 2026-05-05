@@ -30,6 +30,9 @@ pnpm-debug.log*
 *.swo
 *~
 
+# Modèles de langue Tesseract (M14 OCR) — téléchargés automatiquement à la volée
+*.traineddata
+
 # ============================================
 # Bases de données locales / migrations dev
 # ============================================

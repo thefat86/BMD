@@ -666,11 +666,10 @@ export default function GroupDetailPage() {
                   opacity: scanning ? 0.7 : 1,
                 }}
               >
-                {scanning ? "⏳ Analyse en cours…" : "📷 Scanner un ticket"}
+                {scanning ? "⏳ Analyse en cours…" : "📷 Scanner un ticket ou PDF"}
                 <input
                   type="file"
-                  accept="image/*"
-                  capture="environment"
+                  accept="image/*,application/pdf,.pdf"
                   disabled={scanning}
                   onChange={(e) => {
                     const f = e.target.files?.[0];
@@ -689,7 +688,7 @@ export default function GroupDetailPage() {
               >
                 {scanning
                   ? "L'IA lit ton ticket… (~3 secondes)"
-                  : "L'IA détecte automatiquement le marchand et le montant"}
+                  : "Photo, capture d'écran ou PDF · L'IA extrait le marchand et le montant"}
               </div>
               {scanResult && !scanning && (
                 <div

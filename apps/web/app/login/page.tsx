@@ -62,21 +62,36 @@ export default function LoginPage() {
               <label>Méthode</label>
               <select
                 value={contactType}
-                onChange={(e) =>
-                  setContactType(e.target.value as "PHONE" | "EMAIL")
-                }
+                onChange={(e) => {
+                  const newType = e.target.value as "PHONE" | "EMAIL";
+                  setContactType(newType);
+                  // Reset le champ avec une valeur appropriée :
+                  // - téléphone : pré-remplir "+33" (utile pour la France)
+                  // - email : vider le champ (l'utilisateur tape son email)
+                  setContactValue(newType === "PHONE" ? "+33" : "");
+                  setError(null);
+                }}
               >
-                <option value="PHONE">Téléphone</option>
-                <option value="EMAIL">Email</option>
+                <option value="PHONE">📞 Téléphone</option>
+                <option value="EMAIL">✉️ Email</option>
               </select>
             </div>
             <div className="field">
-              <label>{contactType === "PHONE" ? "Numéro" : "Email"}</label>
+              <label>
+                {contactType === "PHONE"
+                  ? "Numéro de téléphone"
+                  : "Adresse email"}
+              </label>
               <input
+                type={contactType === "EMAIL" ? "email" : "tel"}
+                inputMode={contactType === "EMAIL" ? "email" : "tel"}
+                autoComplete={contactType === "EMAIL" ? "email" : "tel"}
                 value={contactValue}
                 onChange={(e) => setContactValue(e.target.value)}
                 placeholder={
-                  contactType === "PHONE" ? "+33612345678" : "tu@bmd.app"
+                  contactType === "PHONE"
+                    ? "+33 6 12 34 56 78"
+                    : "ton.email@exemple.com"
                 }
               />
             </div>

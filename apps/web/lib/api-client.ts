@@ -1,7 +1,19 @@
 "use client";
 
-const API_URL =
-  process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
+/**
+ * URL de l'API · résolution intelligente :
+ *  1. Si NEXT_PUBLIC_API_URL est défini (build prod), on l'utilise
+ *  2. Sinon, on dérive de window.location → utile pour l'accès mobile
+ *     via le Wi-Fi local (l'iPhone connaît l'IP du Mac, pas localhost)
+ *  3. Fallback SSR : localhost
+ */
+function getApiUrl(): string {
+  if (process.env.NEXT_PUBLIC_API_URL) return process.env.NEXT_PUBLIC_API_URL;
+  if (typeof window !== "undefined") {
+    return `${window.location.protocol}//${window.location.hostname}:4000`;
+  }
+  return "http://localhost:4000";
+}
 
 const TOKEN_KEY = "bmd_token";
 
@@ -46,7 +58,7 @@ async function request<T>(
   const token = getToken();
   let r: Response;
   try {
-    r = await fetch(`${API_URL}${path}`, {
+    r = await fetch(`${getApiUrl()}${path}`, {
       method,
       headers: {
         "content-type": "application/json",
@@ -274,7 +286,7 @@ export const api = {
 
     let r: Response;
     try {
-      r = await fetch(`${API_URL}/receipts/scan`, {
+      r = await fetch(`${getApiUrl()}/receipts/scan`, {
         method: "POST",
         headers: {
           ...(token ? { authorization: `Bearer ${token}` } : {}),

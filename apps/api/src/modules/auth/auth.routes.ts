@@ -588,4 +588,120 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
       };
     },
   );
+
+  /* =================================================================
+   * QR LOGIN — connexion par scan QR depuis le mobile (spec §8.5)
+   * =================================================================
+   * Workflow :
+   *  Desktop : POST /auth/qr-login/start  → { token, expiresAt }
+   *            Affiche un QR code avec ce token (URL bmd.app/qr-login/{token})
+   *            Poll GET /auth/qr-login/status/{token} jusqu'à status=APPROVED
+   *            Reçoit le JWT, login auto.
+   *  Mobile  : Scanne le QR → ouvre /qr-login/{token} dans l'app
+   *            POST /auth/qr-login/approve {token} (auth requise)
+   *            Le request passe à APPROVED.
+   */
+
+  /**
+   * POST /auth/qr-login/start (PAS d'auth — appelé par un browser non connecté)
+   * Crée une demande de QR login. TTL 90s. Retourne le token à inclure
+   * dans le QR code.
+   */
+  app.post("/auth/qr-login/start", async (req) => {
+    const { randomBytes } = await import("crypto");
+    const token = randomBytes(24).toString("base64url");
+    const expiresAt = new Date(Date.now() + 90_000);
+    await prisma.qrLoginRequest.create({
+      data: {
+        token,
+        expiresAt,
+        device: req.headers["user-agent"] ?? null,
+      },
+    });
+    return {
+      token,
+      expiresAt: expiresAt.toISOString(),
+    };
+  });
+
+  /**
+   * GET /auth/qr-login/status/:token (PAS d'auth)
+   * Le desktop poll cette route. Quand status=APPROVED, on émet un JWT
+   * pour l'utilisateur qui a scanné le QR (et on marque le request USED).
+   */
+  app.get("/auth/qr-login/status/:token", async (req, reply) => {
+    const { token } = z
+      .object({ token: z.string().min(20).max(80) })
+      .parse(req.params);
+    const r = await prisma.qrLoginRequest.findUnique({ where: { token } });
+    if (!r) return reply.code(404).send({ error: "not_found" });
+    if (r.expiresAt < new Date()) {
+      return { status: "EXPIRED" };
+    }
+    if (r.status === "PENDING") return { status: "PENDING" };
+    if (r.status === "USED") {
+      // Le request a déjà été échangé, on ne peut plus le réutiliser
+      return reply.code(410).send({ error: "already_used" });
+    }
+    if (r.status === "APPROVED" && r.userId) {
+      // Émission du JWT et marquage USED (one-shot)
+      const { issueToken } = await import("./jwt.service.js");
+      const { token: jwt, expiresAt } = await issueToken(
+        app,
+        r.userId,
+        r.device ?? undefined,
+      );
+      await prisma.qrLoginRequest.update({
+        where: { id: r.id },
+        data: { status: "USED", usedAt: new Date() },
+      });
+      const user = await prisma.user.findUniqueOrThrow({
+        where: { id: r.userId },
+        select: { id: true, displayName: true, avatar: true },
+      });
+      return {
+        status: "APPROVED",
+        token: jwt,
+        expiresAt: expiresAt.toISOString(),
+        user,
+      };
+    }
+    return { status: r.status };
+  });
+
+  /**
+   * POST /auth/qr-login/approve (AUTH requise — depuis le mobile)
+   * Body: { token } — l'utilisateur scanne le QR et confirme.
+   */
+  app.post(
+    "/auth/qr-login/approve",
+    { onRequest: [app.authenticate] },
+    async (req, reply) => {
+      const body = z
+        .object({ token: z.string().min(20).max(80) })
+        .parse(req.body);
+      const r = await prisma.qrLoginRequest.findUnique({
+        where: { token: body.token },
+      });
+      if (!r) return reply.code(404).send({ error: "not_found" });
+      if (r.expiresAt < new Date()) {
+        return reply.code(410).send({ error: "expired" });
+      }
+      if (r.status !== "PENDING") {
+        return reply.code(409).send({
+          error: "not_pending",
+          message: `Request status is ${r.status}`,
+        });
+      }
+      await prisma.qrLoginRequest.update({
+        where: { id: r.id },
+        data: {
+          userId: req.user.sub,
+          status: "APPROVED",
+          approvedAt: new Date(),
+        },
+      });
+      return { approved: true };
+    },
+  );
 }

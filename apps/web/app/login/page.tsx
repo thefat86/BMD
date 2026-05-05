@@ -354,6 +354,50 @@ function LoginPageInner() {
             >
               En mode dev, le code s'affiche dans la console du backend.
             </p>
+
+            {/* Connexion par QR depuis mobile (spec §8.5) */}
+            <div
+              style={{
+                margin: "16px 0",
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
+                color: "var(--muted)",
+                fontSize: 11,
+                letterSpacing: 2,
+                textTransform: "uppercase",
+              }}
+            >
+              <div
+                style={{
+                  flex: 1,
+                  height: 1,
+                  background: "var(--line-soft)",
+                }}
+              />
+              ou
+              <div
+                style={{
+                  flex: 1,
+                  height: 1,
+                  background: "var(--line-soft)",
+                }}
+              />
+            </div>
+            <Link
+              href="/login/qr"
+              className="btn-ghost btn-block"
+              style={{
+                textAlign: "center",
+                textDecoration: "none",
+                display: "inline-flex",
+                alignItems: "center",
+                justifyContent: "center",
+                gap: 8,
+              }}
+            >
+              ⊞ Scanner le QR depuis l'app mobile
+            </Link>
           </>
         )}
 

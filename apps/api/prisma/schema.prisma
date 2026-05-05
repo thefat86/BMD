@@ -53,6 +53,56 @@ model User {
   twoFactorSecret        String?
   /// Date d'activation 2FA — null = pas activée
   twoFactorEnabledAt     DateTime?
+  qrLoginsApproved       QrLoginRequest[]       @relation("QrLoginUser")
+  /// Code du rôle admin custom (spec §6.10) — null = pas de rôle particulier.
+  /// Si défini, donne des permissions spécifiques en plus de isSuperAdmin.
+  adminRoleCode          String?
+}
+
+/**
+ * Rôle custom pour les admins (spec §6.10).
+ * Permet de créer des rôles avec des permissions précises (ex: support
+ * peut suspendre des utilisateurs mais pas modifier des plans).
+ *
+ * Permissions stockées en JSON pour configurabilité sans migration :
+ *   { plans: ["read","write","delete"], users: ["read","suspend"], ... }
+ *
+ * Le superadmin (User.isSuperAdmin) garde TOUS les droits — ce système
+ * de rôles est pour les admins de niveau 2 (équipe support, modération,
+ * compta, etc.).
+ */
+model AdminRole {
+  /// Code stable (ex: "SUPPORT", "ACCOUNTANT", "MODERATOR")
+  code        String   @id
+  name        String
+  description String?
+  /// Permissions JSON : { resource: ["read","write","delete","suspend",...] }
+  permissions Json
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+/// Connexion par scan QR depuis le mobile (spec §8.5).
+/// Le desktop crée une demande, le mobile scanne et approuve, le
+/// desktop échange contre un JWT. TTL 90s pour limiter les risques.
+model QrLoginRequest {
+  id          String    @id @default(uuid())
+  /// Token public court inclus dans le QR (32 bytes URL-safe)
+  token       String    @unique
+  /// User qui a approuvé (null tant que PENDING)
+  userId      String?
+  user        User?     @relation("QrLoginUser", fields: [userId], references: [id], onDelete: SetNull)
+  /// PENDING / APPROVED / USED / EXPIRED
+  status      String    @default("PENDING")
+  /// User-agent du device qui a créé la demande
+  device      String?
+  expiresAt   DateTime
+  approvedAt  DateTime?
+  usedAt      DateTime?
+  createdAt   DateTime  @default(now())
+
+  @@index([token])
+  @@index([expiresAt])
 }
 
 enum ContactType {

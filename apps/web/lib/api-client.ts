@@ -250,6 +250,33 @@ export const api = {
   twoFactorDisable: (code: string) =>
     request<{ disabled: boolean }>("POST", "/auth/2fa/disable", { code }),
 
+  // ============ QR Login (spec §8.5) ============
+
+  /** Desktop crée une demande, retourne un token à mettre dans un QR. */
+  qrLoginStart: () =>
+    request<{ token: string; expiresAt: string }>(
+      "POST",
+      "/auth/qr-login/start",
+    ),
+
+  /** Desktop poll cette route — quand APPROVED, reçoit le JWT. */
+  qrLoginStatus: (token: string) =>
+    request<
+      | { status: "PENDING" | "EXPIRED" }
+      | {
+          status: "APPROVED";
+          token: string;
+          expiresAt: string;
+          user: { id: string; displayName: string; avatar: string | null };
+        }
+    >("GET", `/auth/qr-login/status/${token}`),
+
+  /** Mobile (connecté) approuve la demande. */
+  qrLoginApprove: (token: string) =>
+    request<{ approved: boolean }>("POST", "/auth/qr-login/approve", {
+      token,
+    }),
+
   listGroups: () =>
     request<
       Array<{
@@ -954,6 +981,46 @@ export const api = {
       `/admin/users/${userId}/change-plan`,
       { planCode },
     ),
+
+  // ============ Rôles admin custom (spec §6.10) ============
+
+  adminListRoles: () =>
+    request<
+      Array<{
+        code: string;
+        name: string;
+        description: string | null;
+        permissions: Record<string, string[]>;
+        createdAt: string;
+        updatedAt: string;
+      }>
+    >("GET", "/admin/roles"),
+
+  adminCreateRole: (body: {
+    code: string;
+    name: string;
+    description?: string;
+    permissions?: Record<string, string[]>;
+  }) => request<any>("POST", "/admin/roles", body),
+
+  adminUpdateRole: (
+    code: string,
+    body: {
+      name?: string;
+      description?: string | null;
+      permissions?: Record<string, string[]>;
+    },
+  ) => request<any>("PATCH", `/admin/roles/${code}`, body),
+
+  adminDeleteRole: (code: string) =>
+    request<void>("DELETE", `/admin/roles/${code}`),
+
+  adminAssignRole: (userId: string, roleCode: string | null) =>
+    request<{
+      id: string;
+      displayName: string;
+      adminRoleCode: string | null;
+    }>("POST", `/admin/users/${userId}/admin-role`, { roleCode }),
 
   // ============ NOTIFICATIONS ============
 

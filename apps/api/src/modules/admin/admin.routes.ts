@@ -281,4 +281,96 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
       select: { id: true, displayName: true, planCode: true },
     });
   });
+
+  /* ===== Rôles admin custom (spec §6.10) ===== */
+
+  /** Liste les rôles admin custom + leurs permissions. */
+  app.get("/admin/roles", async () => {
+    const roles = await prisma.adminRole.findMany({
+      orderBy: { code: "asc" },
+    });
+    return roles.map((r) => ({
+      ...r,
+      createdAt: r.createdAt.toISOString(),
+      updatedAt: r.updatedAt.toISOString(),
+    }));
+  });
+
+  /** Crée un nouveau rôle admin custom. */
+  app.post("/admin/roles", async (req) => {
+    const body = z
+      .object({
+        code: z
+          .string()
+          .min(2)
+          .max(40)
+          .regex(/^[A-Z0-9_]+$/, "Code en majuscules / chiffres / _"),
+        name: z.string().min(1).max(80),
+        description: z.string().max(500).optional(),
+        permissions: z.record(z.array(z.string())).default({}),
+      })
+      .parse(req.body);
+    return prisma.adminRole.create({ data: body as any });
+  });
+
+  /** Met à jour un rôle admin (permissions, nom, description). */
+  app.patch("/admin/roles/:code", async (req) => {
+    const { code } = z
+      .object({ code: z.string().min(1).max(40) })
+      .parse(req.params);
+    const body = z
+      .object({
+        name: z.string().min(1).max(80).optional(),
+        description: z.string().max(500).nullable().optional(),
+        permissions: z.record(z.array(z.string())).optional(),
+      })
+      .parse(req.body);
+    return prisma.adminRole.update({
+      where: { code },
+      data: body as any,
+    });
+  });
+
+  /** Supprime un rôle admin (refus si users assignés). */
+  app.delete("/admin/roles/:code", async (req, reply) => {
+    const { code } = z
+      .object({ code: z.string().min(1).max(40) })
+      .parse(req.params);
+    const usersOnRole = await prisma.user.count({
+      where: { adminRoleCode: code },
+    });
+    if (usersOnRole > 0) {
+      return reply.code(409).send({
+        error: "role_has_users",
+        message: `Impossible : ${usersOnRole} utilisateur(s) ont ce rôle. Réassigne-les d'abord.`,
+      });
+    }
+    await prisma.adminRole.delete({ where: { code } });
+    return reply.code(204).send();
+  });
+
+  /** Assigne un rôle admin à un utilisateur. */
+  app.post("/admin/users/:id/admin-role", async (req) => {
+    const { id } = z
+      .object({ id: z.string().uuid() })
+      .parse(req.params);
+    const { roleCode } = z
+      .object({ roleCode: z.string().min(1).max(40).nullable() })
+      .parse(req.body);
+    if (roleCode !== null) {
+      const role = await prisma.adminRole.findUnique({
+        where: { code: roleCode },
+      });
+      if (!role) throw new Error("Rôle introuvable");
+    }
+    return prisma.user.update({
+      where: { id },
+      data: { adminRoleCode: roleCode },
+      select: {
+        id: true,
+        displayName: true,
+        adminRoleCode: true,
+      },
+    });
+  });
 }

@@ -39,20 +39,65 @@ export default function GroupDetailPage() {
   // userId -> share value (montant for UNEQUAL, % for PERCENTAGE)
   const [shares, setShares] = useState<Record<string, string>>({});
 
+  // Active swap state (M09)
+  const [activeSwap, setActiveSwap] = useState<any>(null);
+
   async function refresh() {
     try {
-      const [m, g, e, b] = await Promise.all([
+      const [m, g, e, b, swaps] = await Promise.all([
         api.me(),
         api.getGroup(groupId),
         api.listExpenses(groupId),
         api.getBalance(groupId),
+        api.listSwaps(groupId, false),
       ]);
       setMe(m.user);
       setGroup(g);
       setExpenses(e);
       setBalance(b);
+      setActiveSwap(swaps[0] ?? null); // au plus 1 swap actif à la fois
     } catch (er) {
       setError((er as Error).message);
+    }
+  }
+
+  async function proposeSwap() {
+    setError(null);
+    try {
+      await api.proposeSwap(groupId);
+      void refresh();
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }
+
+  async function acceptSwap() {
+    setError(null);
+    try {
+      await api.acceptSwap(activeSwap.id);
+      void refresh();
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }
+
+  async function rejectSwap() {
+    setError(null);
+    try {
+      await api.rejectSwap(activeSwap.id);
+      void refresh();
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }
+
+  async function cancelSwap() {
+    if (!window.confirm("Annuler la proposition de swap ?")) return;
+    try {
+      await api.cancelSwap(activeSwap.id);
+      void refresh();
+    } catch (e) {
+      setError((e as Error).message);
     }
   }
 
@@ -219,6 +264,36 @@ export default function GroupDetailPage() {
 
       {error && <div className="error">{error}</div>}
 
+      {/* Quick links vers les sous-modules */}
+      <div
+        style={{
+          display: "flex",
+          gap: 10,
+          marginBottom: 20,
+          flexWrap: "wrap",
+        }}
+      >
+        <Link
+          href={`/dashboard/groups/${groupId}/tontine`}
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+            padding: "12px 20px",
+            borderRadius: 12,
+            background:
+              "linear-gradient(135deg,rgba(232,163,61,0.15),rgba(181,70,46,0.1))",
+            border: "1px solid var(--saffron)",
+            color: "var(--saffron)",
+            fontSize: 13,
+            fontWeight: 700,
+            textDecoration: "none",
+          }}
+        >
+          🪙 Tontine →
+        </Link>
+      </div>
+
       {/* Members + invite */}
       <div className="card">
         <div
@@ -312,6 +387,190 @@ export default function GroupDetailPage() {
                   </div>
                 </div>
               ))}
+
+              {/* Bouton Proposer Swap (M09) — si pas de swap actif */}
+              {!activeSwap && (
+                <button
+                  className="btn"
+                  onClick={proposeSwap}
+                  style={{ width: "100%", marginTop: 12 }}
+                >
+                  ⇄ Proposer un swap (compensation officielle)
+                </button>
+              )}
+            </div>
+          )}
+
+          {/* === Swap actif (M09) === */}
+          {activeSwap && (
+            <div
+              style={{
+                marginTop: 18,
+                padding: 18,
+                background:
+                  "linear-gradient(135deg,rgba(232,163,61,0.1),rgba(181,70,46,0.05))",
+                border: "1.5px solid var(--saffron)",
+                borderRadius: 14,
+              }}
+            >
+              <div
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "center",
+                  marginBottom: 10,
+                }}
+              >
+                <h2 style={{ marginBottom: 0, fontSize: 18, color: "var(--saffron)" }}>
+                  ⇄ Swap proposé
+                </h2>
+                <span
+                  style={{
+                    fontSize: 10,
+                    color: "var(--gold)",
+                    background: "rgba(232,163,61,0.15)",
+                    padding: "3px 10px",
+                    borderRadius: 99,
+                    border: "1px solid var(--gold)",
+                    letterSpacing: 1,
+                    textTransform: "uppercase",
+                    fontWeight: 700,
+                  }}
+                >
+                  Expire {new Date(activeSwap.expiresAt).toLocaleDateString("fr-FR")}
+                </span>
+              </div>
+              <p style={{ color: "var(--cream-soft)", fontSize: 13, marginBottom: 14 }}>
+                {activeSwap.description ?? "Compensation des dettes"}.{" "}
+                Une fois accepté par tous, devient le plan de règlement officiel.
+              </p>
+
+              {/* Legs */}
+              <div style={{ marginBottom: 14 }}>
+                {activeSwap.legs.map((l: any, i: number) => {
+                  const fromName =
+                    activeSwap.participants.find((p: any) => p.userId === l.fromUserId)
+                      ?.displayName ?? "?";
+                  const toName =
+                    activeSwap.participants.find((p: any) => p.userId === l.toUserId)
+                      ?.displayName ?? "?";
+                  return (
+                    <div key={i} className="list-item">
+                      <div className="name">
+                        {fromName} → {toName}
+                      </div>
+                      <div className="amount">
+                        {l.amount} {l.currency}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* Acceptations */}
+              <div style={{ fontSize: 11, color: "var(--muted)", marginBottom: 12 }}>
+                {activeSwap.participants.map((p: any) => (
+                  <span
+                    key={p.id}
+                    style={{
+                      display: "inline-block",
+                      padding: "3px 9px",
+                      margin: "2px",
+                      borderRadius: 99,
+                      background: p.acceptedAt
+                        ? "rgba(63,125,92,0.15)"
+                        : p.rejectedAt
+                          ? "rgba(217,113,74,0.15)"
+                          : "rgba(255,255,255,0.05)",
+                      color: p.acceptedAt
+                        ? "#7DC59E"
+                        : p.rejectedAt
+                          ? "#D9714A"
+                          : "var(--cream-soft)",
+                      border: `1px solid ${
+                        p.acceptedAt
+                          ? "rgba(63,125,92,0.3)"
+                          : p.rejectedAt
+                            ? "rgba(217,113,74,0.3)"
+                            : "var(--line-soft)"
+                      }`,
+                      fontSize: 11,
+                    }}
+                  >
+                    {p.acceptedAt ? "✓" : p.rejectedAt ? "✗" : "⏳"} {p.displayName}
+                  </span>
+                ))}
+              </div>
+
+              {/* Mes actions */}
+              {(() => {
+                const myPart = activeSwap.participants.find(
+                  (p: any) => p.userId === me?.id,
+                );
+                if (!myPart) return null;
+                if (myPart.acceptedAt) {
+                  return (
+                    <div
+                      style={{
+                        background: "rgba(63,125,92,0.12)",
+                        border: "1px solid var(--emerald)",
+                        color: "#7DC59E",
+                        padding: 10,
+                        borderRadius: 8,
+                        fontSize: 13,
+                        textAlign: "center",
+                      }}
+                    >
+                      ✓ Tu as accepté ce swap
+                    </div>
+                  );
+                }
+                if (myPart.rejectedAt) {
+                  return (
+                    <div
+                      style={{
+                        background: "rgba(217,113,74,0.12)",
+                        border: "1px solid #D9714A",
+                        color: "#D9714A",
+                        padding: 10,
+                        borderRadius: 8,
+                        fontSize: 13,
+                        textAlign: "center",
+                      }}
+                    >
+                      ✗ Tu as refusé ce swap
+                    </div>
+                  );
+                }
+                return (
+                  <div style={{ display: "flex", gap: 8 }}>
+                    <button
+                      className="btn-ghost"
+                      onClick={rejectSwap}
+                      style={{ flex: 1 }}
+                    >
+                      ✗ Refuser
+                    </button>
+                    <button
+                      className="btn"
+                      onClick={acceptSwap}
+                      style={{ flex: 2 }}
+                    >
+                      ✓ Accepter
+                    </button>
+                  </div>
+                );
+              })()}
+
+              {activeSwap.proposedById === me?.id && (
+                <button
+                  className="btn-ghost"
+                  onClick={cancelSwap}
+                  style={{ width: "100%", marginTop: 8 }}
+                >
+                  Annuler ma proposition
+                </button>
+              )}
             </div>
           )}
         </div>

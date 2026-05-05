@@ -8,6 +8,9 @@ import { authRoutes } from "./modules/auth/auth.routes.js";
 import { groupsRoutes } from "./modules/groups/groups.routes.js";
 import { expensesRoutes } from "./modules/expenses/expenses.routes.js";
 import { settlementsRoutes } from "./modules/settlements/settlements.routes.js";
+import { tontinesRoutes } from "./modules/tontines/tontines.routes.js";
+import { debtSwapsRoutes } from "./modules/debt-swaps/debt-swaps.routes.js";
+import { splitPresetsRoutes } from "./modules/split-presets/split-presets.routes.js";
 import { assertSessionActive, type JwtPayload } from "./modules/auth/jwt.service.js";
 
 declare module "fastify" {
@@ -92,6 +95,9 @@ export async function buildServer(): Promise<FastifyInstance> {
   await app.register(groupsRoutes);
   await app.register(expensesRoutes);
   await app.register(settlementsRoutes);
+  await app.register(tontinesRoutes);
+  await app.register(debtSwapsRoutes);
+  await app.register(splitPresetsRoutes);
 
   return app;
 }

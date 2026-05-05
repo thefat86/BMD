@@ -1,0 +1,447 @@
+import {
+  Prisma,
+  TontineFrequency,
+  BeneficiaryOrderMode,
+  TontineStatus,
+  TurnStatus,
+  ContributionStatus,
+} from "@prisma/client";
+import { prisma } from "../../lib/db.js";
+import { Errors } from "../../lib/errors.js";
+import { assertRole, getGroupForMember } from "../groups/groups.service.js";
+
+/**
+ * MODULE M08 · TONTINES
+ *
+ * Une tontine = épargne collective rotative entre N membres :
+ *  - Chaque "tour" (turn) un membre est désigné bénéficiaire
+ *  - Tous les autres lui versent leur cotisation à cette date
+ *  - Cycle complet = N tours
+ *
+ * Anti-fraude :
+ *  - Une cotisation passe par PENDING → PAID (par le contributeur)
+ *    → CONFIRMED (par le bénéficiaire ou l'admin)
+ *  - Le pot ne peut être distribué que quand TOUTES les cotisations sont CONFIRMED
+ *  - Toutes les transitions sont auditées (timestamps)
+ */
+
+// ============================================================
+// HELPERS
+// ============================================================
+
+function shuffle<T>(array: T[]): T[] {
+  const arr = [...array];
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [arr[i], arr[j]] = [arr[j]!, arr[i]!];
+  }
+  return arr;
+}
+
+function addPeriod(date: Date, freq: TontineFrequency, n: number): Date {
+  const d = new Date(date);
+  if (freq === "WEEKLY") d.setDate(d.getDate() + 7 * n);
+  else if (freq === "BIWEEKLY") d.setDate(d.getDate() + 14 * n);
+  else d.setMonth(d.getMonth() + n); // MONTHLY
+  return d;
+}
+
+// ============================================================
+// CRUD TONTINE
+// ============================================================
+
+export interface CreateTontineInput {
+  groupId: string;
+  actorUserId: string;
+  contributionAmount: string; // decimal as string
+  currency?: string;
+  frequency: TontineFrequency;
+  startDate: Date;
+  orderMode?: BeneficiaryOrderMode;
+  centralizedPot?: boolean;
+  notes?: string;
+}
+
+export async function createTontine(input: CreateTontineInput) {
+  const group = await getGroupForMember(input.groupId, input.actorUserId);
+  await assertRole(input.groupId, input.actorUserId, ["ADMIN", "TREASURER"]);
+
+  if (group.members.length < 2) {
+    throw Errors.badRequest(
+      "Une tontine nécessite au moins 2 membres dans le groupe",
+    );
+  }
+
+  // 1 tontine max par groupe (contrainte schema)
+  const existing = await prisma.tontine.findUnique({
+    where: { groupId: input.groupId },
+  });
+  if (existing) {
+    throw Errors.conflict(
+      "Ce groupe a déjà une tontine. Annule-la avant d'en créer une nouvelle.",
+    );
+  }
+
+  const amount = new Prisma.Decimal(input.contributionAmount);
+  if (amount.lessThanOrEqualTo(0)) {
+    throw Errors.badRequest("Le montant de la cotisation doit être positif");
+  }
+
+  return prisma.tontine.create({
+    data: {
+      groupId: input.groupId,
+      contributionAmount: amount,
+      currency: input.currency ?? group.defaultCurrency,
+      frequency: input.frequency,
+      startDate: input.startDate,
+      orderMode: input.orderMode ?? "MANUAL",
+      centralizedPot: input.centralizedPot ?? true,
+      notes: input.notes,
+      status: "DRAFT",
+    },
+  });
+}
+
+/**
+ * Activer une tontine = générer les N turns + créer toutes les cotisations PENDING.
+ * Si orderMode = RANDOM, l'ordre est tiré au sort.
+ * Si orderMode = MANUAL, l'admin doit fournir beneficiaryOrder (liste d'userIds).
+ */
+export async function activateTontine(input: {
+  tontineId: string;
+  actorUserId: string;
+  beneficiaryOrder?: string[]; // requis si MANUAL
+}) {
+  const tontine = await prisma.tontine.findUnique({
+    where: { id: input.tontineId },
+    include: {
+      group: { include: { members: { include: { user: true } } } },
+    },
+  });
+  if (!tontine) throw Errors.notFound("Tontine introuvable");
+  if (tontine.status !== "DRAFT") {
+    throw Errors.conflict(
+      `Tontine déjà ${tontine.status.toLowerCase()} — activation impossible`,
+    );
+  }
+  await assertRole(tontine.groupId, input.actorUserId, [
+    "ADMIN",
+    "TREASURER",
+  ]);
+
+  const memberIds = tontine.group.members.map((m) => m.userId);
+
+  let order: string[];
+  if (tontine.orderMode === "RANDOM") {
+    order = shuffle(memberIds);
+  } else if (tontine.orderMode === "MANUAL") {
+    if (!input.beneficiaryOrder || input.beneficiaryOrder.length === 0) {
+      throw Errors.badRequest(
+        "Pour le mode MANUAL, fournis l'ordre des bénéficiaires (beneficiaryOrder)",
+      );
+    }
+    // Vérifier que chaque userId fourni est bien membre, et qu'on couvre tous les membres
+    const set = new Set(input.beneficiaryOrder);
+    if (set.size !== memberIds.length) {
+      throw Errors.badRequest(
+        `beneficiaryOrder doit contenir ${memberIds.length} userIds uniques (un par membre)`,
+      );
+    }
+    for (const id of input.beneficiaryOrder) {
+      if (!memberIds.includes(id)) {
+        throw Errors.badRequest(`User ${id} n'est pas membre de ce groupe`);
+      }
+    }
+    order = input.beneficiaryOrder;
+  } else {
+    throw Errors.badRequest(`Mode ${tontine.orderMode} non encore supporté`);
+  }
+
+  // Créer les turns + contributions en transaction
+  return prisma.$transaction(async (tx) => {
+    const updated = await tx.tontine.update({
+      where: { id: input.tontineId },
+      data: { status: "ACTIVE" },
+    });
+
+    for (let i = 0; i < order.length; i++) {
+      const beneficiaryId = order[i]!;
+      const dueDate = addPeriod(tontine.startDate, tontine.frequency, i);
+
+      const turn = await tx.tontineTurn.create({
+        data: {
+          tontineId: tontine.id,
+          turnNumber: i + 1,
+          beneficiaryUserId: beneficiaryId,
+          dueDate,
+          status: i === 0 ? "IN_PROGRESS" : "PENDING",
+        },
+      });
+
+      // Une cotisation par membre (y compris le bénéficiaire si tu le souhaites,
+      // ici on exclut le bénéficiaire = il ne se paie pas à lui-même)
+      const contributors = memberIds.filter((id) => id !== beneficiaryId);
+      await tx.tontineContribution.createMany({
+        data: contributors.map((cid) => ({
+          turnId: turn.id,
+          contributorUserId: cid,
+          amount: tontine.contributionAmount,
+          status: "PENDING" as ContributionStatus,
+        })),
+      });
+    }
+
+    return updated;
+  });
+}
+
+/**
+ * Récupère une tontine avec tous ses turns + contributions, pour l'affichage.
+ */
+export async function getTontineByGroup(groupId: string, actorUserId: string) {
+  await getGroupForMember(groupId, actorUserId);
+
+  return prisma.tontine.findUnique({
+    where: { groupId },
+    include: {
+      turns: {
+        orderBy: { turnNumber: "asc" },
+        include: {
+          beneficiary: {
+            select: { id: true, displayName: true, avatar: true },
+          },
+          contributions: {
+            include: {
+              contributor: {
+                select: { id: true, displayName: true, avatar: true },
+              },
+            },
+          },
+        },
+      },
+    },
+  });
+}
+
+// ============================================================
+// CONTRIBUTIONS — workflow de paiement
+// ============================================================
+
+/** Le contributeur déclare avoir payé */
+export async function markContributionPaid(input: {
+  contributionId: string;
+  actorUserId: string;
+  paymentMethod?: string;
+  paymentReference?: string;
+}) {
+  const contrib = await prisma.tontineContribution.findUnique({
+    where: { id: input.contributionId },
+    include: { turn: { include: { tontine: true } } },
+  });
+  if (!contrib) throw Errors.notFound("Cotisation introuvable");
+  if (contrib.contributorUserId !== input.actorUserId) {
+    throw Errors.forbidden("Seul le contributeur peut marquer comme payé");
+  }
+  if (contrib.status !== "PENDING") {
+    throw Errors.conflict(
+      `Cotisation déjà ${contrib.status.toLowerCase()}`,
+    );
+  }
+
+  return prisma.tontineContribution.update({
+    where: { id: contrib.id },
+    data: {
+      status: "PAID",
+      paidAt: new Date(),
+      paymentMethod: input.paymentMethod,
+      paymentReference: input.paymentReference,
+    },
+  });
+}
+
+/** Le bénéficiaire (ou un admin) confirme la réception */
+export async function confirmContribution(input: {
+  contributionId: string;
+  actorUserId: string;
+}) {
+  const contrib = await prisma.tontineContribution.findUnique({
+    where: { id: input.contributionId },
+    include: {
+      turn: { include: { tontine: { include: { group: true } } } },
+    },
+  });
+  if (!contrib) throw Errors.notFound("Cotisation introuvable");
+
+  // Autorisation : bénéficiaire du tour OU admin/trésorier du groupe
+  const isBeneficiary = contrib.turn.beneficiaryUserId === input.actorUserId;
+  if (!isBeneficiary) {
+    await assertRole(contrib.turn.tontine.groupId, input.actorUserId, [
+      "ADMIN",
+      "TREASURER",
+    ]);
+  }
+
+  if (contrib.status !== "PAID") {
+    throw Errors.conflict(
+      `La cotisation doit être PAID avant d'être confirmée (actuellement ${contrib.status})`,
+    );
+  }
+
+  return prisma.tontineContribution.update({
+    where: { id: contrib.id },
+    data: {
+      status: "CONFIRMED",
+      confirmedAt: new Date(),
+    },
+  });
+}
+
+/**
+ * Distribue le pot d'un tour (clôture le tour).
+ * Toutes les cotisations doivent être CONFIRMED.
+ * Le tour suivant passe automatiquement à IN_PROGRESS.
+ */
+export async function distributeTurn(input: {
+  turnId: string;
+  actorUserId: string;
+}) {
+  const turn = await prisma.tontineTurn.findUnique({
+    where: { id: input.turnId },
+    include: {
+      tontine: true,
+      contributions: true,
+    },
+  });
+  if (!turn) throw Errors.notFound("Tour introuvable");
+  await assertRole(turn.tontine.groupId, input.actorUserId, [
+    "ADMIN",
+    "TREASURER",
+  ]);
+
+  if (turn.status === "DISTRIBUTED") {
+    throw Errors.conflict("Ce tour a déjà été distribué");
+  }
+  if (turn.status === "CANCELLED") {
+    throw Errors.conflict("Tour annulé");
+  }
+
+  const notConfirmed = turn.contributions.filter(
+    (c) => c.status !== "CONFIRMED",
+  );
+  if (notConfirmed.length > 0) {
+    throw Errors.badRequest(
+      `${notConfirmed.length} cotisation(s) non encore confirmée(s) — distribution impossible`,
+    );
+  }
+
+  return prisma.$transaction(async (tx) => {
+    // Marquer ce tour comme distribué
+    const updated = await tx.tontineTurn.update({
+      where: { id: turn.id },
+      data: { status: "DISTRIBUTED", distributedAt: new Date() },
+    });
+
+    // Activer le tour suivant s'il existe
+    const nextTurn = await tx.tontineTurn.findFirst({
+      where: {
+        tontineId: turn.tontineId,
+        turnNumber: turn.turnNumber + 1,
+      },
+    });
+    if (nextTurn) {
+      await tx.tontineTurn.update({
+        where: { id: nextTurn.id },
+        data: { status: "IN_PROGRESS" },
+      });
+    } else {
+      // Tous les tours sont distribués → tontine COMPLETED
+      await tx.tontine.update({
+        where: { id: turn.tontineId },
+        data: { status: "COMPLETED", completedAt: new Date() },
+      });
+    }
+
+    return updated;
+  });
+}
+
+/** Annule une tontine entière (admin uniquement) */
+export async function cancelTontine(input: {
+  tontineId: string;
+  actorUserId: string;
+}) {
+  const tontine = await prisma.tontine.findUnique({
+    where: { id: input.tontineId },
+  });
+  if (!tontine) throw Errors.notFound("Tontine introuvable");
+  await assertRole(tontine.groupId, input.actorUserId, ["ADMIN"]);
+
+  if (tontine.status === "COMPLETED" || tontine.status === "CANCELLED") {
+    throw Errors.conflict(`Tontine déjà ${tontine.status.toLowerCase()}`);
+  }
+
+  return prisma.tontine.update({
+    where: { id: input.tontineId },
+    data: { status: "CANCELLED", cancelledAt: new Date() },
+  });
+}
+
+// ============================================================
+// STATISTIQUES
+// ============================================================
+
+/** Compte le nombre de cotisations par statut sur l'ensemble de la tontine */
+export interface TontineStats {
+  totalTurns: number;
+  completedTurns: number;
+  currentTurnNumber: number | null;
+  totalContributions: number;
+  pendingCount: number;
+  paidCount: number;
+  confirmedCount: number;
+  missedCount: number;
+  totalPotPerTurn: string;
+}
+
+export async function getTontineStats(
+  tontineId: string,
+): Promise<TontineStats> {
+  const tontine = await prisma.tontine.findUnique({
+    where: { id: tontineId },
+    include: {
+      turns: {
+        include: { contributions: true },
+        orderBy: { turnNumber: "asc" },
+      },
+    },
+  });
+  if (!tontine) throw Errors.notFound();
+
+  const totalTurns = tontine.turns.length;
+  const completedTurns = tontine.turns.filter(
+    (t) => t.status === "DISTRIBUTED",
+  ).length;
+  const current = tontine.turns.find((t) => t.status === "IN_PROGRESS");
+
+  const allContribs = tontine.turns.flatMap((t) => t.contributions);
+  const count = (s: ContributionStatus) =>
+    allContribs.filter((c) => c.status === s).length;
+
+  // Pot par tour : (N - 1) × cotisationAmount (le bénéficiaire ne se paie pas à lui-même)
+  const memberCount = tontine.turns.length; // = nb membres
+  const totalPotPerTurn = new Prisma.Decimal(tontine.contributionAmount).times(
+    memberCount > 1 ? memberCount - 1 : 1,
+  );
+
+  return {
+    totalTurns,
+    completedTurns,
+    currentTurnNumber: current ? current.turnNumber : null,
+    totalContributions: allContribs.length,
+    pendingCount: count("PENDING"),
+    paidCount: count("PAID"),
+    confirmedCount: count("CONFIRMED"),
+    missedCount: count("MISSED"),
+    totalPotPerTurn: totalPotPerTurn.toString(),
+  };
+}

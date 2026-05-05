@@ -92,9 +92,69 @@ export const api = {
       description: string;
       amount: string;
       splitMode: "EQUAL" | "UNEQUAL" | "PERCENTAGE";
+      paidByUserId?: string;
       participants: Array<{ userId: string; share?: number }>;
     },
   ) => request<any>("POST", `/groups/${groupId}/expenses`, input),
+
+  // ============ TONTINES (M08) ============
+
+  getTontine: (groupId: string) =>
+    request<{ tontine: any | null }>("GET", `/groups/${groupId}/tontine`),
+
+  createTontine: (
+    groupId: string,
+    input: {
+      contributionAmount: string;
+      currency?: string;
+      frequency: "WEEKLY" | "BIWEEKLY" | "MONTHLY";
+      startDate: string;
+      orderMode?: "RANDOM" | "MANUAL" | "AUCTION";
+      centralizedPot?: boolean;
+      notes?: string;
+    },
+  ) =>
+    request<{ id: string; status: string }>(
+      "POST",
+      `/groups/${groupId}/tontine`,
+      input,
+    ),
+
+  activateTontine: (tontineId: string, beneficiaryOrder?: string[]) =>
+    request<{ id: string; status: string }>(
+      "POST",
+      `/tontines/${tontineId}/activate`,
+      { beneficiaryOrder },
+    ),
+
+  cancelTontine: (tontineId: string) =>
+    request<{ id: string; status: string }>(
+      "POST",
+      `/tontines/${tontineId}/cancel`,
+    ),
+
+  markContributionPaid: (
+    contributionId: string,
+    paymentMethod?: string,
+    paymentReference?: string,
+  ) =>
+    request<{ id: string; status: string; paidAt: string | null }>(
+      "POST",
+      `/tontine-contributions/${contributionId}/mark-paid`,
+      { paymentMethod, paymentReference },
+    ),
+
+  confirmContribution: (contributionId: string) =>
+    request<{ id: string; status: string; confirmedAt: string | null }>(
+      "POST",
+      `/tontine-contributions/${contributionId}/confirm`,
+    ),
+
+  distributeTurn: (turnId: string) =>
+    request<{ id: string; status: string }>(
+      "POST",
+      `/tontine-turns/${turnId}/distribute`,
+    ),
 
   getBalance: (groupId: string) =>
     request<{
@@ -109,4 +169,58 @@ export const api = {
         currency: string;
       }>;
     }>("GET", `/groups/${groupId}/balance`),
+
+  // ============ DEBT SWAPS (M09) ============
+
+  listSwaps: (groupId: string, includeResolved = false) =>
+    request<any[]>(
+      "GET",
+      `/groups/${groupId}/debt-swaps?includeResolved=${includeResolved}`,
+    ),
+
+  proposeSwap: (groupId: string, description?: string) =>
+    request<any>("POST", `/groups/${groupId}/debt-swaps`, { description }),
+
+  acceptSwap: (swapId: string) =>
+    request<any>("POST", `/debt-swaps/${swapId}/accept`),
+
+  rejectSwap: (swapId: string) =>
+    request<any>("POST", `/debt-swaps/${swapId}/reject`),
+
+  cancelSwap: (swapId: string) =>
+    request<{ id: string; status: string }>(
+      "POST",
+      `/debt-swaps/${swapId}/cancel`,
+    ),
+
+  // ============ SPLIT PRESETS (M10) ============
+
+  listPresets: (groupId: string) =>
+    request<
+      Array<{
+        id: string;
+        name: string;
+        splitMode: "EQUAL" | "UNEQUAL" | "PERCENTAGE";
+        config: {
+          participants: Array<{ userId: string; share?: number }>;
+          paidByUserId?: string;
+        };
+        createdAt: string;
+      }>
+    >("GET", `/groups/${groupId}/split-presets`),
+
+  createPreset: (
+    groupId: string,
+    input: {
+      name: string;
+      splitMode: "EQUAL" | "UNEQUAL" | "PERCENTAGE";
+      config: {
+        participants: Array<{ userId: string; share?: number }>;
+        paidByUserId?: string;
+      };
+    },
+  ) => request<any>("POST", `/groups/${groupId}/split-presets`, input),
+
+  deletePreset: (presetId: string) =>
+    request<void>("DELETE", `/split-presets/${presetId}`),
 };

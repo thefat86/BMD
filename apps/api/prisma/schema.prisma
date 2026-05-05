@@ -23,13 +23,16 @@ model User {
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
-  contacts          UserContact[]
-  groupMemberships  GroupMember[]
-  expensesPaid      Expense[]      @relation("ExpensePaidBy")
-  expenseShares     ExpenseShare[]
-  sessions          Session[]
-  settlementsFrom   Settlement[]   @relation("SettlementFrom")
-  settlementsTo     Settlement[]   @relation("SettlementTo")
+  contacts             UserContact[]
+  groupMemberships     GroupMember[]
+  expensesPaid         Expense[]              @relation("ExpensePaidBy")
+  expenseShares        ExpenseShare[]
+  sessions             Session[]
+  settlementsFrom      Settlement[]           @relation("SettlementFrom")
+  settlementsTo        Settlement[]           @relation("SettlementTo")
+  tontineContributions TontineContribution[]
+  tontineTurns         TontineTurn[]          @relation("TurnBeneficiary")
+  debtSwapParticipations DebtSwapParticipant[]
 }
 
 enum ContactType {
@@ -106,9 +109,12 @@ model Group {
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
 
-  members  GroupMember[]
-  expenses Expense[]
-  settlements Settlement[]
+  members      GroupMember[]
+  expenses     Expense[]
+  settlements  Settlement[]
+  tontine      Tontine?
+  debtSwaps    DebtSwap[]
+  splitPresets SplitPreset[]
 }
 
 model GroupMember {
@@ -194,4 +200,167 @@ model Settlement {
   proposedAt         DateTime         @default(now())
   confirmedByPayerAt DateTime?
   confirmedByPayeeAt DateTime?
+}
+
+// ============================================================
+// TONTINES (M08) — épargne collective rotative
+// ============================================================
+
+enum TontineFrequency {
+  WEEKLY
+  BIWEEKLY
+  MONTHLY
+}
+
+enum TontineStatus {
+  DRAFT       // configurée mais pas encore lancée
+  ACTIVE      // en cours
+  COMPLETED   // tous les tours réalisés
+  CANCELLED
+}
+
+enum BeneficiaryOrderMode {
+  RANDOM      // ordre tiré au sort à la création
+  MANUAL      // ordre défini par l'admin
+  AUCTION     // enchères type Hui (à venir)
+}
+
+model Tontine {
+  id                    String                @id @default(uuid())
+  groupId               String                @unique
+  group                 Group                 @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  contributionAmount    Decimal               @db.Decimal(14, 4)
+  currency              String
+  frequency             TontineFrequency
+  startDate             DateTime
+  status                TontineStatus         @default(DRAFT)
+  orderMode             BeneficiaryOrderMode  @default(MANUAL)
+  centralizedPot        Boolean               @default(true)  // true = cagnotte centralisée, false = paiements directs au bénéficiaire
+  notes                 String?
+  createdAt             DateTime              @default(now())
+  updatedAt             DateTime              @updatedAt
+  cancelledAt           DateTime?
+  completedAt           DateTime?
+
+  turns TontineTurn[]
+}
+
+enum TurnStatus {
+  PENDING       // pas encore commencé
+  IN_PROGRESS   // ouvert aux cotisations
+  DISTRIBUTED   // pot remis au bénéficiaire
+  CANCELLED
+}
+
+model TontineTurn {
+  id              String      @id @default(uuid())
+  tontineId       String
+  tontine         Tontine     @relation(fields: [tontineId], references: [id], onDelete: Cascade)
+  turnNumber      Int
+  beneficiaryUserId String
+  beneficiary     User        @relation("TurnBeneficiary", fields: [beneficiaryUserId], references: [id])
+  dueDate         DateTime
+  distributedAt   DateTime?
+  status          TurnStatus  @default(PENDING)
+
+  contributions TontineContribution[]
+
+  @@unique([tontineId, turnNumber])
+  @@index([beneficiaryUserId])
+}
+
+enum ContributionStatus {
+  PENDING       // attendue, pas encore versée
+  PAID          // l'utilisateur dit avoir payé
+  CONFIRMED     // bénéficiaire/admin a confirmé la réception
+  MISSED        // n'a pas payé (anti-fraude)
+}
+
+model TontineContribution {
+  id                String              @id @default(uuid())
+  turnId            String
+  turn              TontineTurn         @relation(fields: [turnId], references: [id], onDelete: Cascade)
+  contributorUserId String
+  contributor       User                @relation(fields: [contributorUserId], references: [id])
+  amount            Decimal             @db.Decimal(14, 4)
+  status            ContributionStatus  @default(PENDING)
+  paidAt            DateTime?
+  confirmedAt       DateTime?
+  paymentMethod     String?             // ex: "Wave", "Lydia", "Cash"
+  paymentReference  String?
+
+  @@unique([turnId, contributorUserId])
+  @@index([contributorUserId])
+}
+
+// ============================================================
+// DEBT SWAP (M09) — compensation triangulaire / N-aire
+// ============================================================
+
+enum DebtSwapStatus {
+  PROPOSED    // proposition active, en attente d'acceptations
+  ACCEPTED    // toutes les parties ont accepté → compensation effective
+  REJECTED    // au moins une partie a refusé
+  EXPIRED     // pas accepté dans les 48h
+  CANCELLED   // proposeur a annulé
+}
+
+model DebtSwap {
+  id            String          @id @default(uuid())
+  groupId       String
+  group         Group           @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  proposedById  String
+  status        DebtSwapStatus  @default(PROPOSED)
+  description   String?         // ex: "Simplification de 3 dettes croisées"
+  totalSavedAmount Decimal      @db.Decimal(14, 4)  // montant total compensé (combien d'argent évite de circuler)
+  expiresAt     DateTime
+  createdAt     DateTime        @default(now())
+  resolvedAt    DateTime?
+
+  participants DebtSwapParticipant[]
+  legs         DebtSwapLeg[]
+
+  @@index([groupId, status])
+}
+
+model DebtSwapParticipant {
+  id          String          @id @default(uuid())
+  swapId      String
+  swap        DebtSwap        @relation(fields: [swapId], references: [id], onDelete: Cascade)
+  userId      String
+  user        User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  acceptedAt  DateTime?       // null = pas encore répondu
+  rejectedAt  DateTime?
+
+  @@unique([swapId, userId])
+}
+
+// "leg" = un transfert virtuel résultant du swap (qui doit payer combien à qui APRÈS la compensation)
+model DebtSwapLeg {
+  id           String   @id @default(uuid())
+  swapId       String
+  swap         DebtSwap @relation(fields: [swapId], references: [id], onDelete: Cascade)
+  fromUserId   String
+  toUserId     String
+  amount       Decimal  @db.Decimal(14, 4)
+  currency     String
+}
+
+// ============================================================
+// SPLIT PRESETS (M10) — modèles de partage réutilisables par groupe
+// ============================================================
+
+model SplitPreset {
+  id          String   @id @default(uuid())
+  groupId     String
+  group       Group    @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  name        String              // ex: "Couple seul", "Comité salle (8 personnes)", "Famille 60% / amis 40%"
+  splitMode   SplitMode
+  // structure : { participants: [{userId, share}], paidByUserId? }
+  // stockée en JSON pour flexibilité
+  config      Json
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([groupId])
 }

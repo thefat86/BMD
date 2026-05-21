@@ -1,0 +1,24 @@
+{
+  "applinks": {
+    "apps": [],
+    "details": [
+      {
+        "appID": "TEAM_ID_PLACEHOLDER.com.backmesdo.bmd",
+        "paths": [
+          "/dashboard/*",
+          "/login",
+          "/login/*",
+          "/join/*",
+          "/pay/*",
+          "/qr-login/*",
+          "/onboarding/*",
+          "NOT /api/*",
+          "NOT /.well-known/*"
+        ]
+      }
+    ]
+  },
+  "webcredentials": {
+    "apps": ["TEAM_ID_PLACEHOLDER.com.backmesdo.bmd"]
+  }
+}

@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">BMD</string>
+    <string name="title_activity_main">BMD</string>
+    <string name="package_name">com.backmesdo.bmd</string>
+    <string name="custom_url_scheme">com.backmesdo.bmd</string>
+</resources>

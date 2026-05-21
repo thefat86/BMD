@@ -1,0 +1,157 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>fr</string>
+	<key>CFBundleDisplayName</key>
+	<string>BMD</string>
+	<key>CFBundleExecutable</key>
+	<string>$(EXECUTABLE_NAME)</string>
+	<key>CFBundleIdentifier</key>
+	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>$(PRODUCT_NAME)</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>$(MARKETING_VERSION)</string>
+	<key>CFBundleVersion</key>
+	<string>$(CURRENT_PROJECT_VERSION)</string>
+	<key>LSRequiresIPhoneOS</key>
+	<true/>
+	<key>UILaunchStoryboardName</key>
+	<string>LaunchScreen</string>
+	<key>UIMainStoryboardFile</key>
+	<string>Main</string>
+	<key>UIRequiredDeviceCapabilities</key>
+	<array>
+		<string>armv7</string>
+	</array>
+	<key>UISupportedInterfaceOrientations</key>
+	<array>
+		<string>UIInterfaceOrientationPortrait</string>
+	</array>
+	<key>UISupportedInterfaceOrientations~ipad</key>
+	<array>
+		<string>UIInterfaceOrientationPortrait</string>
+		<string>UIInterfaceOrientationPortraitUpsideDown</string>
+		<string>UIInterfaceOrientationLandscapeLeft</string>
+		<string>UIInterfaceOrientationLandscapeRight</string>
+	</array>
+	<key>UIViewControllerBasedStatusBarAppearance</key>
+	<true/>
+
+	<!-- ================================================================== -->
+	<!-- BMD · PERMISSIONS UTILISATEUR (textes vus dans les prompts iOS)    -->
+	<!-- Texte chaleureux et précis — Apple rejette les *UsageDescription   -->
+	<!-- vagues ou copy-paste type "We need your camera".                   -->
+	<!-- ================================================================== -->
+
+	<key>NSCameraUsageDescription</key>
+	<string>BMD utilise la caméra pour scanner tes tickets de caisse et créer automatiquement les dépenses dans tes groupes.</string>
+
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>BMD accède à tes photos pour importer un ticket existant ou un justificatif de paiement.</string>
+
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>BMD peut sauvegarder un reçu fiscal ou une preuve de paiement dans tes photos.</string>
+
+	<key>NSContactsUsageDescription</key>
+	<string>BMD propose de retrouver tes amis qui utilisent déjà l'app et de les ajouter à tes groupes en un tap. Tes contacts ne quittent pas ton appareil sans ton accord explicite.</string>
+
+	<key>NSFaceIDUsageDescription</key>
+	<string>BMD utilise Face ID pour te reconnecter rapidement et confirmer les opérations sensibles (paiement, ajout de méthode).</string>
+
+	<key>NSMicrophoneUsageDescription</key>
+	<string>BMD utilise le micro quand tu enregistres une réunion de groupe pour générer le procès-verbal automatique.</string>
+
+	<key>NSUserTrackingUsageDescription</key>
+	<string>BMD ne te suit pas. Cette permission n'est pas demandée — elle apparaît seulement si une fonctionnalité future le nécessite.</string>
+
+	<!-- ================================================================== -->
+	<!-- BMD · BACKGROUND MODES (push notifications APNs + audio meeting)   -->
+	<!-- ================================================================== -->
+
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>remote-notification</string>
+		<string>audio</string>
+	</array>
+
+	<!-- ================================================================== -->
+	<!-- BMD · ENCRYPTION EXPORT COMPLIANCE                                 -->
+	<!-- BMD utilise du chiffrement (HTTPS, JWT signé, vault AES-256).      -->
+	<!-- Tous les algos sont standards et publiés → exemption qualifiée.    -->
+	<!-- Cf. https://www.apple.com/legal/encryption-export/                  -->
+	<!-- ================================================================== -->
+
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
+
+	<!-- ================================================================== -->
+	<!-- BMD · APP TRANSPORT SECURITY                                       -->
+	<!-- Tout le trafic doit être HTTPS (sauf exception explicite).         -->
+	<!-- En dev, le serveur est sur le LAN en HTTP — l'exception est gérée  -->
+	<!-- par capacitor.config.ts (`cleartext: true` uniquement en dev).     -->
+	<!-- ================================================================== -->
+
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsArbitraryLoads</key>
+		<false/>
+		<!-- Permet HTTP sur le LAN local (192.168.x.x, 10.x.x.x) en dev,
+		     sans ouvrir HTTP sur internet. Safe pour prod aussi. -->
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+		<!-- Whitelist explicite des domaines BMD -->
+		<key>NSExceptionDomains</key>
+		<dict>
+			<key>backmesdo.com</key>
+			<dict>
+				<key>NSIncludesSubdomains</key>
+				<true/>
+				<key>NSExceptionRequiresForwardSecrecy</key>
+				<true/>
+			</dict>
+		</dict>
+	</dict>
+
+	<!-- ================================================================== -->
+	<!-- BMD · URL SCHEMES (deep links custom + retours OAuth)              -->
+	<!-- Universal Links (https://backmesdo.com/...) sont gérés via         -->
+	<!-- App.entitlements (Associated Domains) — voir ce fichier.           -->
+	<!-- ================================================================== -->
+
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>com.backmesdo.bmd</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>bmd</string>
+			</array>
+		</dict>
+	</array>
+
+	<!-- ================================================================== -->
+	<!-- BMD · LOCALIZATIONS DÉCLARÉES                                       -->
+	<!-- Pour que l'App Store affiche l'app dans ces langues.               -->
+	<!-- ================================================================== -->
+
+	<key>CFBundleLocalizations</key>
+	<array>
+		<string>fr</string>
+		<string>en</string>
+		<string>es</string>
+		<string>pt</string>
+		<string>ar</string>
+		<string>de</string>
+		<string>it</string>
+	</array>
+
+</dict>
+</plist>

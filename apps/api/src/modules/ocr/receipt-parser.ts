@@ -8,15 +8,29 @@
  *  - la date
  *  - la catégorie devinée à partir du marchand
  *
- * Aucune dépendance externe — pure logique, donc 100% testable.
+ * V83 · La catégorie retournée est désormais une des 6 valeurs canoniques
+ * BMD (resto / courses / transport / logement / loisirs / autres), pas
+ * un libellé en titre case. Source : @bmd/shared-types
+ * (normalizeExpenseCategory + EXPENSE_CATEGORY_KEYWORDS). Avant V83 le
+ * parser retournait "Restaurant" / "Voyage" qui ne matchaient AUCUNE
+ * règle côté front (lowercase only).
+ *
+ * Aucune dépendance externe (à part shared-types) — pure logique, donc
+ * 100% testable.
  */
+import {
+  EXPENSE_CATEGORY_KEYWORDS,
+  EXPENSE_CATEGORY_VALUES,
+  type ExpenseCategoryValue,
+} from "@bmd/shared-types";
 
 export interface ParsedReceipt {
   merchant: string | null;
   amount: string | null; // "12.34" comme string pour précision
   currency: string;
   date: string | null; // ISO 8601
-  category: string | null;
+  /** V83 · Catégorie canonique BMD ou null si non détectée. */
+  category: ExpenseCategoryValue | null;
   confidence: number; // 0-1, indique la fiabilité
   rawText: string;
   /// Lignes d'items détectées (pour le mode ITEMIZED)
@@ -33,112 +47,10 @@ export interface ParsedItem {
 // ============================================================
 // HEURISTIQUES MARCHAND PAR CATÉGORIE
 // ============================================================
-
-const CATEGORY_KEYWORDS: Record<string, string[]> = {
-  Restaurant: [
-    "restaurant",
-    "resto",
-    "brasserie",
-    "bistrot",
-    "café",
-    "pizza",
-    "kebab",
-    "sushi",
-    "burger",
-    "mcdonald",
-    "kfc",
-    "subway",
-    "tacos",
-    "asian",
-    "thai",
-    "chinois",
-    "indien",
-    "africain",
-    "libanais",
-  ],
-  Courses: [
-    "carrefour",
-    "auchan",
-    "leclerc",
-    "intermarché",
-    "monoprix",
-    "casino",
-    "lidl",
-    "aldi",
-    "franprix",
-    "g20",
-    "spar",
-    "supermarché",
-    "supermarket",
-    "grocery",
-    "épicerie",
-    "marché",
-    "halal",
-    "biocoop",
-  ],
-  Transport: [
-    "uber",
-    "bolt",
-    "kapten",
-    "taxi",
-    "ratp",
-    "sncf",
-    "tgv",
-    "metro",
-    "bus",
-    "train",
-    "essence",
-    "carburant",
-    "shell",
-    "total",
-    "esso",
-    "bp",
-    "péage",
-  ],
-  Logement: [
-    "loyer",
-    "edf",
-    "engie",
-    "veolia",
-    "suez",
-    "orange",
-    "free",
-    "sfr",
-    "bouygues",
-    "internet",
-    "électricité",
-    "gaz",
-    "eau",
-    "loyer",
-  ],
-  Loisirs: [
-    "cinéma",
-    "ugc",
-    "pathé",
-    "mk2",
-    "concert",
-    "théâtre",
-    "musée",
-    "spotify",
-    "netflix",
-    "amazon",
-    "fnac",
-  ],
-  Voyage: [
-    "hotel",
-    "hôtel",
-    "airbnb",
-    "booking",
-    "ryanair",
-    "easyjet",
-    "air france",
-    "klm",
-    "lufthansa",
-    "emirates",
-    "vol",
-    "billet",
-  ],
-};
+// V83 · Les keywords sont désormais centralisés dans @bmd/shared-types
+// (EXPENSE_CATEGORY_KEYWORDS) — voir docstring du module pour la motivation.
+// Cette section n'a plus de table locale ; guessCategory() ci-dessous itère
+// directement sur les 6 valeurs canoniques.
 
 // ============================================================
 // DEVISES SUPPORTÉES
@@ -317,11 +229,22 @@ export function extractDate(text: string): string | null {
 // DÉTECTION CATÉGORIE
 // ============================================================
 
-export function guessCategory(merchant: string | null, fullText: string): string | null {
+/**
+ * V83 · Retourne une catégorie canonique BMD ("resto" | "courses" |
+ * "transport" | "logement" | "loisirs") ou null si rien ne matche.
+ * Ne retourne JAMAIS "autres" — c'est un bucket de fallback côté UI,
+ * pas une détection positive (les keywords "autres" sont vides).
+ */
+export function guessCategory(
+  merchant: string | null,
+  fullText: string,
+): ExpenseCategoryValue | null {
   const haystack = `${merchant ?? ""} ${fullText}`.toLowerCase();
-  for (const [category, keywords] of Object.entries(CATEGORY_KEYWORDS)) {
+  for (const cat of EXPENSE_CATEGORY_VALUES) {
+    if (cat === "autres") continue; // pas de keywords positifs pour "autres"
+    const keywords = EXPENSE_CATEGORY_KEYWORDS[cat];
     for (const kw of keywords) {
-      if (haystack.includes(kw)) return category;
+      if (haystack.includes(kw)) return cat;
     }
   }
   return null;

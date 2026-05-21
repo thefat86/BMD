@@ -16,6 +16,8 @@
 import { useEffect, useState } from "react";
 import { useParams, useSearchParams } from "next/navigation";
 import { api, getToken, isUnauthorized } from "../../../../../lib/api-client";
+// V108 — Barre d'actions sticky partagée (back + imprimer + PDF).
+import { PrintActionBar } from "../../../../../lib/ui/print-action-bar";
 
 export default function TaxReceiptPage() {
   const { id } = useParams();
@@ -34,6 +36,8 @@ export default function TaxReceiptPage() {
   const [expenses, setExpenses] = useState<any[]>([]);
   const [target, setTarget] = useState<any>(null);
 
+  // V108 — Plus d'auto-print : Fabrice veut LIRE le document d'abord puis
+  // déclencher l'impression manuellement via la barre d'actions en haut.
   useEffect(() => {
     if (!getToken()) {
       window.location.href = "/login";
@@ -53,8 +57,6 @@ export default function TaxReceiptPage() {
           ? g.members.find((mb: any) => mb.user.id === targetUserId)?.user
           : m.user;
         setTarget(t ?? m.user);
-        // Auto-impression après chargement
-        setTimeout(() => window.print(), 800);
       })
       .catch((err) => {
         if (isUnauthorized(err)) window.location.href = "/login";
@@ -65,6 +67,81 @@ export default function TaxReceiptPage() {
     return (
       <div style={{ padding: 40, fontFamily: "Inter, sans-serif" }}>
         Génération du reçu fiscal…
+      </div>
+    );
+  }
+
+  // V111 — Guard : la fonctionnalité « reçu fiscal » doit être explicitement
+  // activée dans les réglages du groupe (réservée aux associations / asso
+  // à but non lucratif). Sinon on affiche un message clair + lien vers
+  // les réglages où l'admin peut activer.
+  if (!group.taxReceiptsEnabled) {
+    return (
+      <div
+        style={{
+          maxWidth: 540,
+          margin: "60px auto",
+          padding: "32px 24px",
+          background: "var(--paper, #FFFFFF)",
+          border: "1px solid rgba(43,31,21,0.10)",
+          borderRadius: 18,
+          boxShadow: "0 4px 16px rgba(43,31,21,0.06)",
+          textAlign: "center",
+          color: "var(--cocoa, #2B1F15)",
+          fontFamily: "Inter, system-ui, sans-serif",
+        }}
+      >
+        <div
+          aria-hidden
+          style={{
+            fontSize: 38,
+            marginBottom: 14,
+          }}
+        >
+          🚫
+        </div>
+        <h1
+          style={{
+            margin: "0 0 10px",
+            fontFamily: "Cormorant Garamond, serif",
+            fontSize: 24,
+            fontWeight: 700,
+            color: "var(--cocoa, #2B1F15)",
+          }}
+        >
+          Reçus fiscaux non activés
+        </h1>
+        <p
+          style={{
+            margin: "0 0 18px",
+            fontSize: 14,
+            color: "var(--cocoa-soft, #6B5A47)",
+            lineHeight: 1.5,
+          }}
+        >
+          La fonction « reçu fiscal » n'est disponible que pour les groupes
+          configurés comme <strong>association</strong> ou{" "}
+          <strong>organisme à but non lucratif</strong>. Un admin peut
+          l'activer dans les réglages du groupe.
+        </p>
+        <a
+          href={`/dashboard/groups/${groupId}/settings`}
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 6,
+            padding: "10px 20px",
+            background:
+              "linear-gradient(135deg, #C58A2E, #9F4628)",
+            color: "#FFFFFF",
+            textDecoration: "none",
+            borderRadius: 10,
+            fontSize: 13,
+            fontWeight: 700,
+          }}
+        >
+          Ouvrir les réglages →
+        </a>
       </div>
     );
   }
@@ -94,8 +171,13 @@ export default function TaxReceiptPage() {
             background: #fff !important;
             color: #000 !important;
           }
-          .no-print {
+          .no-print,
+          .print-action-bar {
             display: none !important;
+          }
+          .bmd-print-doc {
+            padding: 0 !important;
+            max-width: none !important;
           }
         }
         body {
@@ -106,46 +188,24 @@ export default function TaxReceiptPage() {
         }
       `}</style>
 
+      {/* V108 — Barre d'actions sticky (Back / Imprimer / PDF) */}
+      <PrintActionBar
+        title={`Reçu fiscal ${year}`}
+        subtitle={`${target.displayName} · ${group.name}`}
+        backHref={`/dashboard/groups/${groupId}`}
+      />
+
       <div
+        className="bmd-print-doc"
         style={{
           maxWidth: 720,
           margin: "0 auto",
-          padding: 32,
+          padding: "clamp(16px, 4vw, 32px)",
           color: "#16111e",
           fontSize: 13,
           lineHeight: 1.6,
         }}
       >
-        {/* Boutons (masqués à l'impression) */}
-        <div className="no-print" style={{ marginBottom: 20 }}>
-          <button
-            onClick={() => window.print()}
-            style={{
-              background: "linear-gradient(135deg, #E8A33D, #B5462E)",
-              color: "#fff",
-              border: "none",
-              padding: "12px 24px",
-              borderRadius: 10,
-              fontWeight: 700,
-              cursor: "pointer",
-              fontSize: 14,
-            }}
-          >
-            🖨 Imprimer / Enregistrer en PDF
-          </button>
-          <a
-            href={`/dashboard/groups/${groupId}`}
-            style={{
-              marginLeft: 12,
-              color: "#666",
-              textDecoration: "none",
-              fontSize: 13,
-            }}
-          >
-            ← Retour
-          </a>
-        </div>
-
         {/* En-tête organisme */}
         <div
           style={{
@@ -456,7 +516,7 @@ export default function TaxReceiptPage() {
             textAlign: "center",
           }}
         >
-          Reçu généré par BMD · Back Mes Do · bmd.app
+          Reçu généré par BMD · Back Mes Do · backmesdo.com
         </div>
       </div>
     </>

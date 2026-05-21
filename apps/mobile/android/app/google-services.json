@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "997551545384",
+    "project_id": "backmesdo",
+    "storage_bucket": "backmesdo.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:997551545384:android:2377b40ef83d3a056de91d",
+        "android_client_info": {
+          "package_name": "com.backmesdo.bmd"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCCgM6x2yKYLMl5Fk1i5Cb4xdSALBHP2dw"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

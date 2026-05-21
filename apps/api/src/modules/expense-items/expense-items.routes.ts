@@ -40,6 +40,9 @@ export async function expenseItemsRoutes(
             unitPrice: z.string().regex(/^\d+(\.\d{1,4})?$/),
             totalPrice: z.string().regex(/^\d+(\.\d{1,4})?$/),
             category: z.string().max(50).optional(),
+            // V239.A — Liste des users qui consomment cet article (peut être
+            // vide si non assigné). Le service crée 1 claim/userId share=1/N.
+            assignedUserIds: z.array(z.string().uuid()).optional(),
           }),
         ),
       })
@@ -62,12 +65,21 @@ export async function expenseItemsRoutes(
   app.post("/expense-items/:id/claim", async (req) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
     const body = z
-      .object({ share: z.number().positive().max(1).optional() })
+      .object({
+        share: z.number().positive().max(1).optional(),
+        /**
+         * Réservé au payeur ou admin : assigne directement l'article à un
+         * autre membre (ex: à la création de la dépense, le payeur indique
+         * qui a consommé quoi).
+         */
+        targetUserId: z.string().uuid().optional(),
+      })
       .parse(req.body ?? {});
     return claimItem({
       itemId: id,
       actorUserId: (req.user as any).sub,
       share: body.share,
+      targetUserId: body.targetUserId,
     });
   });
 

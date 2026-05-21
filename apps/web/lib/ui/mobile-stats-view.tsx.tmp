@@ -1,0 +1,1129 @@
+"use client";
+
+/**
+ * <MobileStatsView> · V41 — refonte stats mobile, "Year in Review" story.
+ *
+ * Innovation visuelle :
+ *  1. HERO STAT principale — total dépensé sur la période en HUGE typo
+ *     Cormorant Garamond, gradient saffron, sous-label discret.
+ *  2. PILLS RANGE — 6m / 12m / 24m en pills sticky.
+ *  3. INSIGHTS GRID 2×2 — 4 cards rapides : Total / Mon net / Nb dépenses /
+ *     Nb groupes. Chaque card a une couleur identitaire.
+ *  4. TIMELINE SVG — bars chart minimaliste sans dep, mois par mois, avec
+ *     gradient saffron→terracotta. Tap sur une barre = montre le mois.
+ *  5. TOP CATÉGORIES — barres horizontales colorées avec %.
+ *  6. TOP PERSONNES — liste compacte avec leur net.
+ */
+
+import { useCallback, useEffect, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
+import { api, clearToken, isUnauthorized } from "../api-client";
+import { useT } from "../i18n/app-strings";
+import { useCurrency } from "../currency-provider";
+// V52.C2 — SVG remplace EMOJI : icon registry V52.A2
+import { Icon, type IconName } from "./icons";
+import { SegmentedControl } from "./segmented-control";
+
+type Range = 6 | 12 | 24;
+
+interface Stats {
+  currency: string;
+  rangeMonths: Range;
+  totalSpent: number;
+  totalSettled: number;
+  expenseCount: number;
+  groupCount: number;
+  myNet: number;
+  timeline: Array<{
+    period: string;
+    totalSpent: number;
+    myNet: number;
+    expenseCount: number;
+  }>;
+  topCategories: Array<{
+    category: string;
+    totalAmount: number;
+    expenseCount: number;
+    percent: number;
+  }>;
+  topPayers: Array<{
+    userId: string;
+    displayName: string;
+    totalPaid: number;
+    totalOwed: number;
+    net: number;
+    expenseCount: number;
+  }>;
+}
+
+const CATEGORY_COLORS = [
+  "#E8A33D", // saffron
+  "#5B6CFF", // indigo
+  "#7DC59E", // emerald
+  "#D9714A", // terracotta
+  "#B58FE0", // lavender
+  "#F4C863", // gold
+];
+
+// V52.C2 — SVG remplace EMOJI : map vers IconName (registry V52.A2)
+const CATEGORY_ICON: Record<string, IconName> = {
+  GROCERY: "shopping-cart",
+  RESTAURANT: "utensils",
+  TRANSPORT: "car",
+  HOUSING: "home",
+  UTILITIES: "lightbulb",
+  HEALTH: "pill",
+  ENTERTAINMENT: "palette",
+  TRAVEL: "plane",
+  GIFT: "gift",
+  OTHER: "tag",
+};
+
+export function MobileStatsView() {
+  const router = useRouter();
+  const t = useT();
+  const { formatAmount } = useCurrency();
+
+  const [range, setRange] = useState<Range>(6);
+  const [stats, setStats] = useState<Stats | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  // V52 — Mode Stories : index courant + scroll listener
+  const storiesRef = useRef<HTMLDivElement | null>(null);
+  const [currentStory, setCurrentStory] = useState(0);
+  const STORY_COUNT = 5;
+
+  useEffect(() => {
+    const el = storiesRef.current;
+    if (!el) return;
+    const onScroll = () => {
+      const w = el.clientWidth;
+      if (w <= 0) return;
+      const idx = Math.round(el.scrollLeft / w);
+      const clamped = Math.max(0, Math.min(STORY_COUNT - 1, idx));
+      setCurrentStory((prev) => (prev === clamped ? prev : clamped));
+    };
+    el.addEventListener("scroll", onScroll, { passive: true });
+    return () => el.removeEventListener("scroll", onScroll);
+  }, [stats]);
+
+  const goToStory = useCallback((idx: number) => {
+    const el = storiesRef.current;
+    if (!el) return;
+    const clamped = Math.max(0, Math.min(STORY_COUNT - 1, idx));
+    el.scrollTo({ left: clamped * el.clientWidth, behavior: "smooth" });
+  }, []);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const r = await api.getMyStats(range);
+      setStats(r);
+      setError(null);
+    } catch (e) {
+      if (isUnauthorized(e)) {
+        clearToken();
+        router.replace("/login");
+        return;
+      }
+      setError((e as Error).message);
+    } finally {
+      setLoading(false);
+    }
+  }, [range, router]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  if (loading && !stats) return <StatsSkeleton />;
+  if (error && !stats) {
+    return (
+      <div style={{ padding: "20px 16px", color: "var(--cocoa-soft, #6B5A47)" }}>
+        <div
+          style={{
+            padding: 16,
+            borderRadius: 14,
+            background: "rgba(217,113,74,0.10)",
+            border: "1px solid rgba(217,113,74,0.30)",
+            color: "#FFB89A",
+            fontSize: 13,
+          }}
+        >
+          {error}
+        </div>
+      </div>
+    );
+  }
+  if (!stats) return null;
+
+  const currency = stats.currency;
+  const myNet = stats.myNet;
+
+  // V52 — Mode Stories Instagram : 5 cards plein écran swipeables
+  const storyCardStyle: React.CSSProperties = {
+    scrollSnapAlign: "start",
+    flexShrink: 0,
+    width: "100%",
+    maxWidth: "100%",
+    minHeight: "calc(100vh - 140px)",
+    padding: "20px 18px 24px",
+    boxSizing: "border-box",
+    display: "flex",
+    flexDirection: "column",
+    gap: 16,
+  };
+
+  return (
+    <div
+      style={{
+        width: "100%",
+        maxWidth: "100%",
+        overflow: "hidden",
+        boxSizing: "border-box",
+        position: "relative",
+      }}
+    >
+      {/* === PROGRESS BAR sticky top — 5 segments saffron === */}
+      <div
+        style={{
+          position: "sticky",
+          top: 0,
+          zIndex: 5,
+          display: "flex",
+          gap: 4,
+          padding: "10px 18px 8px",
+          background:
+            "linear-gradient(180deg, var(--night, #16111E) 70%, rgba(22,17,30,0))",
+        }}
+      >
+        {Array.from({ length: STORY_COUNT }).map((_, i) => (
+          <button
+            key={i}
+            type="button"
+            onClick={() => goToStory(i)}
+            aria-label={`Story ${i + 1}/${STORY_COUNT}`}
+            style={{
+              flex: 1,
+              height: 3,
+              borderRadius: 999,
+              border: "none",
+              padding: 0,
+              cursor: "pointer",
+              background:
+                i === currentStory
+                  ? "var(--saffron, #E8A33D)"
+                  : "var(--v45-line, rgba(232,163,61,0.18))",
+              transition: "background 0.2s ease",
+              touchAction: "manipulation",
+            }}
+          />
+        ))}
+      </div>
+
+      {/* === CONTENEUR STORIES — scroll horizontal contained === */}
+      <div
+        ref={storiesRef}
+        style={{
+          display: "flex",
+          overflowX: "auto",
+          overflowY: "hidden",
+          scrollSnapType: "x mandatory",
+          scrollbarWidth: "none",
+          msOverflowStyle: "none",
+          WebkitOverflowScrolling: "touch",
+          width: "100%",
+          maxWidth: "100%",
+          boxSizing: "border-box",
+        }}
+      >
+        {/* ============ STORY 1 — HERO total dépensé ============ */}
+        <div style={storyCardStyle}>
+          <section
+            style={{
+              flex: 1,
+              padding: "26px 20px",
+              borderRadius: 22,
+              background:
+                "linear-gradient(135deg, #FBF6EC 0%, #F6E8C5 60%, #F4ECD8 100%)",
+              border: "1px solid rgba(232,163,61,0.22)",
+              position: "relative",
+              overflow: "hidden",
+              display: "flex",
+              flexDirection: "column",
+              justifyContent: "center",
+            }}
+          >
+            <div
+              aria-hidden
+              style={{
+                position: "absolute",
+                top: -80,
+                right: -80,
+                width: 280,
+                height: 280,
+                borderRadius: "50%",
+                background:
+                  "radial-gradient(circle, rgba(197,138,46,0.18), transparent 70%)",
+                pointerEvents: "none",
+              }}
+            />
+            <div
+              style={{
+                position: "relative",
+                fontSize: 10,
+                color: "var(--cocoa-soft, #6B5A47)",
+                letterSpacing: 1.6,
+                textTransform: "uppercase",
+                fontWeight: 700,
+                marginBottom: 10,
+              }}
+            >
+              {t("stats.totalSpentLabel") || "Total dépensé"} ·{" "}
+              {t("stats.rangeMonths", { n: String(range) }) || `${range} mois`}
+            </div>
+            <div
+              style={{
+                position: "relative",
+                fontFamily: "Cormorant Garamond, serif",
+                // V52 stories : hero bigNumber 60-72px
+                fontSize: "clamp(48px, 16vw, 72px)",
+                fontWeight: 700,
+                color: "var(--cocoa, #2B1F15)",
+                lineHeight: 1,
+                fontVariantNumeric: "tabular-nums",
+                marginBottom: 18,
+                overflowWrap: "anywhere",
+                minWidth: 0,
+                maxWidth: "100%",
+              }}
+            >
+              {formatAmount(stats.totalSpent, currency)}
+            </div>
+            <div
+              style={{
+                position: "relative",
+                display: "flex",
+                gap: 8,
+                flexWrap: "wrap",
+                marginBottom: 16,
+              }}
+            >
+              <HeroChip
+                label={t("stats.myNet") || "Mon net"}
+                value={
+                  (myNet >= 0 ? "+" : "−") +
+                  formatAmount(Math.abs(myNet), currency)
+                }
+                color={
+                  myNet > 0 ? "#7DC59E" : myNet < 0 ? "#D9714A" : "var(--cream)"
+                }
+              />
+              <HeroChip
+                label={t("stats.expenseCount") || "Dépenses"}
+                value={String(stats.expenseCount)}
+                color="var(--saffron)"
+              />
+            </div>
+            {/* V59 — RANGE pills V45 pill animé (SegmentedControl
+                réutilisable : invariant XOR, saffron solide, jamais désélectionné) */}
+            <SegmentedControl<string>
+              value={String(range)}
+              onChange={(v) => setRange(Number(v) as Range)}
+              ariaLabel="Période d'analyse"
+              segments={[
+                { value: "6", label: "6m" },
+                { value: "12", label: "12m" },
+                { value: "24", label: "24m" },
+              ]}
+              size="sm"
+            />
+          </section>
+        </div>
+
+        {/* ============ STORY 2 — TIMELINE ============ */}
+        <div style={storyCardStyle}>
+          {stats.timeline.length > 0 ? (
+            <Timeline
+              timeline={stats.timeline}
+              currency={currency}
+              formatAmount={formatAmount}
+              t={t}
+            />
+          ) : (
+            <EmptyStoryHint
+              label={t("stats.timelineTitle") || "Évolution"}
+              hint={t("stats.tapBar") || "Pas de données"}
+            />
+          )}
+        </div>
+
+        {/* ============ STORY 3 — TOP CATÉGORIES ============ */}
+        <div style={storyCardStyle}>
+          {stats.topCategories.length > 0 ? (
+            <section>
+              <h3
+                style={{
+                  fontSize: 11,
+                  color: "var(--muted)",
+                  textTransform: "uppercase",
+                  letterSpacing: 1.4,
+                  fontWeight: 700,
+                  margin: "0 0 14px 4px",
+                }}
+              >
+                {t("stats.topCategoriesTitle") || "Top catégories"}
+              </h3>
+              <div
+                style={{
+                  padding: "14px 14px",
+                  background: "rgba(43,31,21,0.03)",
+                  border: "1px solid rgba(43,31,21,0.06)",
+                  borderRadius: 14,
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: 12,
+                }}
+              >
+                {stats.topCategories.map((c, i) => (
+                  <CategoryBar
+                    key={c.category}
+                    category={c}
+                    color={CATEGORY_COLORS[i % CATEGORY_COLORS.length]!}
+                    currency={currency}
+                    formatAmount={formatAmount}
+                  />
+                ))}
+              </div>
+            </section>
+          ) : (
+            <EmptyStoryHint
+              label={t("stats.topCategoriesTitle") || "Top catégories"}
+              hint="—"
+            />
+          )}
+        </div>
+
+        {/* ============ STORY 4 — TOP PERSONNES ============ */}
+        <div style={storyCardStyle}>
+          {stats.topPayers.length > 0 ? (
+            <section>
+              <h3
+                style={{
+                  fontSize: 11,
+                  color: "var(--muted)",
+                  textTransform: "uppercase",
+                  letterSpacing: 1.4,
+                  fontWeight: 700,
+                  margin: "0 0 14px 4px",
+                }}
+              >
+                {t("stats.topPayersTitle") || "Top personnes"}
+              </h3>
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                {stats.topPayers.slice(0, 8).map((p) => (
+                  <PayerRow
+                    key={p.userId}
+                    payer={p}
+                    currency={currency}
+                    formatAmount={formatAmount}
+                  />
+                ))}
+              </div>
+            </section>
+          ) : (
+            <EmptyStoryHint
+              label={t("stats.topPayersTitle") || "Top personnes"}
+              hint="—"
+            />
+          )}
+        </div>
+
+        {/* ============ STORY 5 — INSIGHTS (saffron-pale bg) ============ */}
+        <div
+          style={{
+            ...storyCardStyle,
+            background:
+              "var(--saffron-pale, linear-gradient(180deg, rgba(232,163,61,0.10), rgba(232,163,61,0.03)))",
+          }}
+        >
+          <section
+            style={{
+              flex: 1,
+              display: "flex",
+              flexDirection: "column",
+              justifyContent: "center",
+              gap: 16,
+            }}
+          >
+            <h3
+              style={{
+                fontSize: 11,
+                color: "var(--saffron)",
+                textTransform: "uppercase",
+                letterSpacing: 1.6,
+                fontWeight: 700,
+                margin: "0 0 4px 4px",
+              }}
+            >
+              {t("stats.insightsTitle") || "Synthèse"}
+            </h3>
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "1fr 1fr",
+                gap: 10,
+              }}
+            >
+              <InsightTile
+                label={t("stats.settledLabel") || "Réglé"}
+                value={formatAmount(stats.totalSettled, currency)}
+                accent="#7DC59E"
+              />
+              <InsightTile
+                label={t("stats.groupsLabel") || "Groupes actifs"}
+                value={String(stats.groupCount)}
+                accent="var(--saffron)"
+              />
+              <InsightTile
+                label={t("stats.expenseCount") || "Dépenses"}
+                value={String(stats.expenseCount)}
+                accent="var(--cream)"
+              />
+              <InsightTile
+                label={t("stats.myNet") || "Mon net"}
+                value={
+                  (myNet >= 0 ? "+" : "−") +
+                  formatAmount(Math.abs(myNet), currency)
+                }
+                accent={
+                  myNet > 0 ? "#7DC59E" : myNet < 0 ? "#D9714A" : "var(--cream)"
+                }
+              />
+            </div>
+          </section>
+        </div>
+      </div>
+
+      {/* === NAV discrète accessibilité === */}
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "center",
+          gap: 8,
+          padding: "10px 18px 6px",
+        }}
+      >
+        <button
+          type="button"
+          onClick={() => goToStory(currentStory - 1)}
+          disabled={currentStory === 0}
+          aria-label={t("common.previous") || "Précédent"}
+          style={{
+            padding: "6px 14px",
+            borderRadius: 999,
+            background: "rgba(43,31,21,0.04)",
+            border: "1px solid rgba(43,31,21,0.10)",
+            color: currentStory === 0 ? "var(--muted)" : "var(--cream-soft)",
+            fontSize: 11,
+            fontWeight: 700,
+            cursor: currentStory === 0 ? "default" : "pointer",
+            opacity: currentStory === 0 ? 0.4 : 1,
+            fontFamily: "inherit",
+            touchAction: "manipulation",
+          }}
+        >
+          ←
+        </button>
+        <span
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            fontSize: 10,
+            color: "var(--muted)",
+            letterSpacing: 1.2,
+            fontWeight: 700,
+            minWidth: 36,
+            justifyContent: "center",
+          }}
+        >
+          {currentStory + 1}/{STORY_COUNT}
+        </span>
+        <button
+          type="button"
+          onClick={() => goToStory(currentStory + 1)}
+          disabled={currentStory === STORY_COUNT - 1}
+          aria-label={t("common.next") || "Suivant"}
+          style={{
+            padding: "6px 14px",
+            borderRadius: 999,
+            background: "rgba(43,31,21,0.04)",
+            border: "1px solid rgba(43,31,21,0.10)",
+            color:
+              currentStory === STORY_COUNT - 1
+                ? "var(--muted)"
+                : "var(--cream-soft)",
+            fontSize: 11,
+            fontWeight: 700,
+            cursor: currentStory === STORY_COUNT - 1 ? "default" : "pointer",
+            opacity: currentStory === STORY_COUNT - 1 ? 0.4 : 1,
+            fontFamily: "inherit",
+            touchAction: "manipulation",
+          }}
+        >
+          →
+        </button>
+      </div>
+
+      {/* Cache scrollbar webkit */}
+      <style jsx>{`
+        div::-webkit-scrollbar {
+          display: none;
+        }
+      `}</style>
+    </div>
+  );
+}
+
+// ============ EMPTY STORY HINT ============
+
+function EmptyStoryHint({ label, hint }: { label: string; hint: string }) {
+  return (
+    <section
+      style={{
+        flex: 1,
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+        justifyContent: "center",
+        gap: 8,
+        color: "var(--muted)",
+        textAlign: "center",
+      }}
+    >
+      <div
+        style={{
+          fontSize: 11,
+          textTransform: "uppercase",
+          letterSpacing: 1.4,
+          fontWeight: 700,
+        }}
+      >
+        {label}
+      </div>
+      <div style={{ fontSize: 14, color: "var(--cocoa-soft, #6B5A47)" }}>{hint}</div>
+    </section>
+  );
+}
+
+// ============ HERO BRICKS ============
+
+function HeroChip({
+  label,
+  value,
+  color,
+}: {
+  label: string;
+  value: string;
+  color: string;
+}) {
+  return (
+    <div
+      style={{
+        padding: "6px 10px",
+        borderRadius: 999,
+        background: "rgba(43,31,21,0.06)",
+        border: "1px solid rgba(43,31,21,0.12)",
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 6,
+        fontSize: 11,
+        fontWeight: 700,
+        color: "var(--cocoa, #2B1F15)",
+      }}
+    >
+      <span style={{ color: "var(--cocoa-soft, #6B5A47)", opacity: 0.85 }}>{label}</span>
+      <span
+        style={{
+          color,
+          fontVariantNumeric: "tabular-nums",
+        }}
+      >
+        {value}
+      </span>
+    </div>
+  );
+}
+
+function RangePill({
+  active,
+  onClick,
+  label,
+}: {
+  active: boolean;
+  onClick: () => void;
+  label: string;
+}) {
+  return (
+    <button
+      type="button"
+      role="tab"
+      aria-selected={active}
+      onClick={onClick}
+      style={{
+        flex: 1,
+        padding: "9px 8px",
+        background: active
+          ? "linear-gradient(135deg, var(--saffron), var(--terracotta))"
+          : "transparent",
+        color: active ? "var(--night-2, #16111E)" : "var(--cream-soft)",
+        border: "none",
+        borderRadius: 10,
+        fontSize: 13,
+        fontWeight: 700,
+        cursor: "pointer",
+        fontFamily: "inherit",
+        touchAction: "manipulation",
+      }}
+    >
+      {label}
+    </button>
+  );
+}
+
+// ============ TIMELINE BARS ============
+
+function Timeline({
+  timeline,
+  currency,
+  formatAmount,
+  t,
+}: {
+  timeline: Stats["timeline"];
+  currency: string;
+  formatAmount: (a: number | string, c: string) => string;
+  t: ReturnType<typeof useT>;
+}) {
+  const max = Math.max(...timeline.map((p) => p.totalSpent), 1);
+  const [hoveredIdx, setHoveredIdx] = useState<number | null>(null);
+  const hovered = hoveredIdx !== null ? timeline[hoveredIdx] : null;
+
+  return (
+    <section>
+      <h3
+        style={{
+          fontSize: 11,
+          color: "var(--muted)",
+          textTransform: "uppercase",
+          letterSpacing: 1.4,
+          fontWeight: 700,
+          margin: "0 0 10px 4px",
+        }}
+      >
+        {t("stats.timelineTitle") || "Évolution"}
+      </h3>
+      <div
+        style={{
+          padding: "14px 12px",
+          background: "rgba(43,31,21,0.03)",
+          border: "1px solid rgba(43,31,21,0.06)",
+          borderRadius: 14,
+        }}
+      >
+        {/* Hovered detail */}
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "baseline",
+            marginBottom: 14,
+            minHeight: 32,
+          }}
+        >
+          <div>
+            <div
+              style={{
+                fontSize: 10,
+                color: "var(--muted)",
+                letterSpacing: 0.6,
+                textTransform: "uppercase",
+                fontWeight: 700,
+              }}
+            >
+              {hovered
+                ? formatPeriod(hovered.period)
+                : t("stats.tapBar") || "Tape une barre"}
+            </div>
+            <div
+              style={{
+                fontFamily: "Cormorant Garamond, serif",
+                fontSize: 22,
+                fontWeight: 700,
+                color: "var(--cocoa, #2B1F15)",
+                fontVariantNumeric: "tabular-nums",
+                lineHeight: 1.1,
+              }}
+            >
+              {hovered ? formatAmount(hovered.totalSpent, currency) : "—"}
+            </div>
+          </div>
+          {hovered && (
+            <div
+              style={{
+                fontSize: 11,
+                color: "var(--cocoa-soft, #6B5A47)",
+              }}
+            >
+              {hovered.expenseCount} {t("stats.expensesUnit") || "dépenses"}
+            </div>
+          )}
+        </div>
+
+        {/* Bars */}
+        <div
+          style={{
+            display: "flex",
+            alignItems: "flex-end",
+            gap: 4,
+            height: 100,
+          }}
+        >
+          {timeline.map((p, i) => {
+            const ratio = p.totalSpent / max;
+            const isActive = hoveredIdx === i;
+            return (
+              <button
+                key={p.period}
+                type="button"
+                onClick={() => setHoveredIdx(i)}
+                aria-label={`${p.period} : ${p.totalSpent}`}
+                style={{
+                  flex: 1,
+                  height: "100%",
+                  display: "flex",
+                  flexDirection: "column",
+                  justifyContent: "flex-end",
+                  background: "transparent",
+                  border: "none",
+                  padding: 0,
+                  cursor: "pointer",
+                  fontFamily: "inherit",
+                  touchAction: "manipulation",
+                }}
+              >
+                <div
+                  style={{
+                    width: "100%",
+                    height: `${Math.max(ratio * 100, 3)}%`,
+                    background: isActive
+                      ? "linear-gradient(180deg, var(--saffron), var(--terracotta))"
+                      : "linear-gradient(180deg, rgba(232,163,61,0.45), rgba(181,70,46,0.30))",
+                    borderRadius: 4,
+                    transition: "background 0.15s ease",
+                  }}
+                />
+              </button>
+            );
+          })}
+        </div>
+
+        {/* Axis labels (premier + dernier) */}
+        {timeline.length > 1 && (
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              fontSize: 10,
+              color: "var(--muted)",
+              marginTop: 6,
+              letterSpacing: 0.4,
+            }}
+          >
+            <span>{formatPeriod(timeline[0]!.period, true)}</span>
+            <span>
+              {formatPeriod(timeline[timeline.length - 1]!.period, true)}
+            </span>
+          </div>
+        )}
+      </div>
+    </section>
+  );
+}
+
+function formatPeriod(period: string, short = false): string {
+  // period au format "2026-04" ou similaire
+  const parts = period.split("-");
+  if (parts.length < 2) return period;
+  const monthIdx = (parseInt(parts[1]!, 10) || 1) - 1;
+  const months = short
+    ? ["jan", "fév", "mar", "avr", "mai", "juin", "juil", "août", "sep", "oct", "nov", "déc"]
+    : ["Janv.", "Févr.", "Mars", "Avr.", "Mai", "Juin", "Juil.", "Août", "Sep.", "Oct.", "Nov.", "Déc."];
+  const year = parts[0]!.slice(2);
+  return short ? `${months[monthIdx]} '${year}` : `${months[monthIdx]} 20${year}`;
+}
+
+// ============ CATEGORY BAR ============
+
+function CategoryBar({
+  category,
+  color,
+  currency,
+  formatAmount,
+}: {
+  category: Stats["topCategories"][number];
+  color: string;
+  currency: string;
+  formatAmount: (a: number | string, c: string) => string;
+}) {
+  // V52.C2 — SVG remplace EMOJI
+  const iconName = CATEGORY_ICON[category.category] ?? "tag";
+  return (
+    <div>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: 8,
+          marginBottom: 4,
+        }}
+      >
+        <span
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 6,
+            fontSize: 13,
+            fontWeight: 600,
+            color: "var(--cocoa, #2B1F15)",
+          }}
+        >
+          <span aria-hidden style={{ display: "inline-flex", color }}>
+            {/* V52.C2 — SVG remplace EMOJI */}
+            <Icon name={iconName} size={14} strokeWidth={1.6} />
+          </span>
+          <span style={{ textTransform: "capitalize" }}>
+            {category.category.toLowerCase()}
+          </span>
+        </span>
+        <span
+          style={{
+            fontSize: 12,
+            color: "var(--cocoa-soft, #6B5A47)",
+            fontVariantNumeric: "tabular-nums",
+            fontWeight: 600,
+          }}
+        >
+          {formatAmount(category.totalAmount, currency)}{" "}
+          <span style={{ color: "var(--muted)", marginLeft: 4 }}>
+            · {Math.round(category.percent)}%
+          </span>
+        </span>
+      </div>
+      <div
+        style={{
+          height: 6,
+          borderRadius: 999,
+          background: "rgba(43,31,21,0.06)",
+          overflow: "hidden",
+        }}
+      >
+        <div
+          style={{
+            width: `${Math.max(category.percent, 2)}%`,
+            height: "100%",
+            background: `linear-gradient(90deg, ${color}, ${color}AA)`,
+            borderRadius: 999,
+            transition: "width 0.3s ease",
+          }}
+        />
+      </div>
+    </div>
+  );
+}
+
+// ============ TOP PAYER ROW ============
+
+function PayerRow({
+  payer,
+  currency,
+  formatAmount,
+}: {
+  payer: Stats["topPayers"][number];
+  currency: string;
+  formatAmount: (a: number | string, c: string) => string;
+}) {
+  const net = payer.net;
+  return (
+    <div
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 10,
+        padding: "10px 12px",
+        background: "rgba(43,31,21,0.03)",
+        border: "1px solid rgba(43,31,21,0.06)",
+        borderRadius: 11,
+      }}
+    >
+      <span
+        aria-hidden
+        style={{
+          width: 32,
+          height: 32,
+          borderRadius: 10,
+          background: "rgba(232,163,61,0.15)",
+          color: "var(--saffron)",
+          display: "inline-flex",
+          alignItems: "center",
+          justifyContent: "center",
+          fontSize: 12,
+          fontWeight: 700,
+          flexShrink: 0,
+        }}
+      >
+        {payer.displayName.charAt(0).toUpperCase()}
+      </span>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div
+          style={{
+            fontSize: 13.5,
+            fontWeight: 600,
+            color: "var(--cocoa, #2B1F15)",
+            whiteSpace: "nowrap",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+          }}
+        >
+          {payer.displayName}
+        </div>
+        <div
+          style={{
+            fontSize: 11,
+            color: "var(--muted)",
+            marginTop: 1,
+          }}
+        >
+          {payer.expenseCount} {payer.expenseCount > 1 ? "dépenses" : "dépense"}
+          {" · "}
+          {formatAmount(payer.totalPaid, currency)}
+        </div>
+      </div>
+      <span
+        style={{
+          fontFamily: "Cormorant Garamond, serif",
+          fontSize: 14,
+          fontWeight: 700,
+          color:
+            net > 0
+              ? "#7DC59E"
+              : net < 0
+                ? "#D9714A"
+                : "var(--cream-soft)",
+          fontVariantNumeric: "tabular-nums",
+          flexShrink: 0,
+        }}
+      >
+        {net > 0 ? "+" : net < 0 ? "−" : ""}
+        {formatAmount(Math.abs(net), currency)}
+      </span>
+    </div>
+  );
+}
+
+// ============ INSIGHT TILE ============
+
+function InsightTile({
+  label,
+  value,
+  accent,
+}: {
+  label: string;
+  value: string;
+  accent: string;
+}) {
+  return (
+    <div
+      style={{
+        padding: "12px 14px",
+        background: "rgba(43,31,21,0.03)",
+        border: "1px solid rgba(43,31,21,0.06)",
+        borderRadius: 12,
+      }}
+    >
+      <div
+        style={{
+          fontSize: 10,
+          color: "var(--muted)",
+          letterSpacing: 1.2,
+          textTransform: "uppercase",
+          fontWeight: 700,
+        }}
+      >
+        {label}
+      </div>
+      <div
+        style={{
+          fontSize: 18,
+          fontWeight: 700,
+          color: accent,
+          marginTop: 4,
+          fontVariantNumeric: "tabular-nums",
+          fontFamily: "Cormorant Garamond, serif",
+        }}
+      >
+        {value}
+      </div>
+    </div>
+  );
+}
+
+// ============ SKELETON ============
+
+function StatsSkeleton() {
+  return (
+    <div
+      style={{
+        padding: "0 16px 80px",
+        display: "flex",
+        flexDirection: "column",
+        gap: 14,
+      }}
+    >
+      <div
+        style={{
+          height: 160,
+          borderRadius: 22,
+          background: "rgba(43,31,21,0.04)",
+          animation: "bmd-st-skel 1.2s infinite ease-in-out",
+        }}
+      />
+      <div
+        style={{
+          height: 44,
+          borderRadius: 12,
+          background: "rgba(43,31,21,0.04)",
+          animation: "bmd-st-skel 1.2s infinite ease-in-out 0.1s",
+        }}
+      />
+      {[0, 1, 2].map((i) => (
+        <div
+          key={i}
+          style={{
+            height: 60,
+            borderRadius: 12,
+            background: "rgba(43,31,21,0.04)",
+            animation: `bmd-st-skel 1.2s infinite ease-in-out ${0.2 + i * 0.05}s`,
+          }}
+        />
+      ))}
+      <style jsx>{`
+        @keyframes bmd-st-skel {
+          0%, 100% { opacity: 0.5; }
+          50% { opacity: 0.85; }
+        }
+      `}</style>
+    </div>
+  );
+}

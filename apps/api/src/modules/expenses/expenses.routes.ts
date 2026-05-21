@@ -7,6 +7,42 @@ import {
   listExpensesForGroup,
   updateExpense,
 } from "./expenses.service.js";
+import {
+  filterPhotoByPlan,
+  getPhotoVisibilityMap,
+} from "../../lib/plan-limits.js";
+
+/**
+ * V77.1 — Filtre les `paidBy.avatar` des dépenses selon le plan du payeur.
+ * Le caller voit toujours sa propre photo (cas usage : sa dépense apparaît
+ * dans la liste avec son avatar). Pour les autres payeurs : photo visible
+ * uniquement si leur plan a `profilePhotoVisible: true`.
+ *
+ * Batch : on collecte tous les userIds en un passage, on hit le cache plan
+ * une fois par user, puis on applique le filtre inline.
+ */
+async function applyPhotoVisibilityToExpenses<
+  T extends { paidBy?: { id: string; avatar: string | null } | null },
+>(items: T[], callerUserId: string): Promise<T[]> {
+  const userIds = items
+    .map((e) => e.paidBy?.id)
+    .filter((id): id is string => typeof id === "string");
+  if (userIds.length === 0) return items;
+  const map = await getPhotoVisibilityMap(userIds);
+  return items.map((e) => {
+    if (!e.paidBy) return e;
+    const isSelf = e.paidBy.id === callerUserId;
+    return {
+      ...e,
+      paidBy: {
+        ...e.paidBy,
+        avatar: isSelf
+          ? e.paidBy.avatar
+          : filterPhotoByPlan(e.paidBy.id, e.paidBy.avatar, map),
+      },
+    };
+  });
+}
 
 const createSchema = z.object({
   description: z.string().min(1).max(200),
@@ -24,6 +60,23 @@ const createSchema = z.object({
     )
     .min(1),
   occurredAt: z.string().datetime().optional(),
+  // Sprint AC-2 · Multi-payeurs (optionnel — fallback paidByUserId)
+  payers: z
+    .array(
+      z.object({
+        userId: z.string().uuid(),
+        amount: z
+          .string()
+          .regex(/^\d+(\.\d{1,4})?$/, "Amount must be a positive decimal")
+          .optional(),
+        percent: z.number().min(0).max(100).optional(),
+      }),
+    )
+    .optional(),
+  // V42 · Hash SHA-256 du fichier scan (anti-doublon facture)
+  receiptHash: z.string().length(64).optional(),
+  // V216.C · Lieu libre de la dépense (max 120 chars, optionnel)
+  location: z.string().max(120).optional(),
 });
 
 const updateSchema = z.object({
@@ -46,6 +99,22 @@ const updateSchema = z.object({
     .min(1)
     .optional(),
   occurredAt: z.string().datetime().optional(),
+  // Sprint AC-3 · Multi-payeurs en édition (peut être vide pour effacer)
+  payers: z
+    .array(
+      z.object({
+        userId: z.string().uuid(),
+        amount: z
+          .string()
+          .regex(/^\d+(\.\d{1,4})?$/, "Amount must be a positive decimal")
+          .optional(),
+        percent: z.number().min(0).max(100).optional(),
+      }),
+    )
+    .optional(),
+  // V216.C · Lieu libre de la dépense (null pour effacer, undefined pour
+  // ne pas toucher au champ — PATCH partiel).
+  location: z.string().max(120).nullable().optional(),
 });
 
 function serialize(e: any) {
@@ -55,6 +124,8 @@ function serialize(e: any) {
     amount: e.amount.toString(),
     currency: e.currency,
     category: e.category,
+    // V216.C — Lieu libre (optionnel, null si non renseigné)
+    location: e.location ?? null,
     splitMode: e.splitMode,
     occurredAt: e.occurredAt.toISOString(),
     paidBy: e.paidBy,
@@ -63,6 +134,38 @@ function serialize(e: any) {
       displayName: s.user.displayName,
       amountOwed: s.amountOwed.toString(),
     })),
+    // Sprint AC-3 · Multi-payeurs : on expose la liste des payers persistés
+    // pour que le formulaire d'édition puisse pré-remplir le mode multi.
+    payers: Array.isArray(e.payers)
+      ? e.payers.map((p: any) => ({
+          userId: p.userId,
+          amount: p.amount?.toString?.() ?? null,
+          percent: p.percent !== null && p.percent !== undefined ? Number(p.percent) : null,
+        }))
+      : [],
+    // V80.1 — Indique si la dépense a au moins un attachment (= reçu scanné).
+    // Le frontend affiche un badge "Reçu" (mini SVG trombone) dans la timeline.
+    // `_count.attachments` est populé seulement par listExpensesForGroup ;
+    // pour create/update on retombe sur false par défaut (rechargement
+    // re-fetch la liste de toute façon).
+    hasReceipt:
+      typeof e._count?.attachments === "number"
+        ? e._count.attachments > 0
+        : Array.isArray(e.attachments) && e.attachments.length > 0,
+    // V226 — Mini-liste des attachments exposée dans la liste des dépenses
+    // pour permettre au front d'afficher un badge cliquable "📎 N" directement
+    // dans la liste, et ouvrir la lightbox au clic sans charger les détails.
+    // Champs minimaux : id (clé), kind, mimeType, fileName (alt + preview).
+    // Rempli uniquement par listExpensesForGroup (qui inclut la relation).
+    // Pour createExpense/updateExpense la relation n'est pas chargée → array vide.
+    attachments: Array.isArray(e.attachments)
+      ? e.attachments.map((a: any) => ({
+          id: a.id,
+          kind: a.kind ?? "RECEIPT",
+          mimeType: a.mimeType,
+          fileName: a.fileName,
+        }))
+      : [],
   };
 }
 
@@ -72,7 +175,9 @@ export async function expensesRoutes(app: FastifyInstance): Promise<void> {
   app.get("/groups/:id/expenses", async (req) => {
     const params = z.object({ id: z.string().uuid() }).parse(req.params);
     const items = await listExpensesForGroup(params.id, req.user.sub);
-    return items.map(serialize);
+    // V77.1 — Filtre paidBy.avatar selon le plan du payeur
+    const filtered = await applyPhotoVisibilityToExpenses(items, req.user.sub);
+    return filtered.map(serialize);
   });
 
   app.post("/groups/:id/expenses", async (req, reply) => {
@@ -84,7 +189,14 @@ export async function expensesRoutes(app: FastifyInstance): Promise<void> {
       ...body,
       occurredAt: body.occurredAt ? new Date(body.occurredAt) : undefined,
     });
-    return reply.code(201).send(serialize(created));
+    // V77.1 — Le caller est le créateur ; il voit sa propre photo. Mais si
+    // la dépense a un paidBy différent (multi-payeurs / autre membre payeur),
+    // on filtre selon le plan de ce payeur.
+    const [filtered] = await applyPhotoVisibilityToExpenses(
+      [created],
+      req.user.sub,
+    );
+    return reply.code(201).send(serialize(filtered));
   });
 
   /**
@@ -186,7 +298,12 @@ export async function expensesRoutes(app: FastifyInstance): Promise<void> {
       ...body,
       occurredAt: body.occurredAt ? new Date(body.occurredAt) : undefined,
     });
-    return serialize(updated);
+    // V77.1 — Filtre paidBy.avatar selon le plan du payeur
+    const [filtered] = await applyPhotoVisibilityToExpenses(
+      [updated],
+      req.user.sub,
+    );
+    return serialize(filtered);
   });
 
   /**

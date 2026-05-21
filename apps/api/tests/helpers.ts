@@ -72,6 +72,27 @@ export async function signupViaOtp(
  * so tests can read it without bruteforce.
  */
 import { setDeliveryChannel, type DeliveryChannel } from "../src/modules/auth/otp.service.js";
+import { invalidatePlanCache } from "../src/lib/plan-limits.js";
+
+/**
+ * V86 — Upgrade un user de test vers un plan donné (par défaut PREMIUM).
+ * Indispensable pour les tests des features gated (debt-swap, export PDF,
+ * multi-currency, etc.) qui throw 402 Payment Required sur le plan FREE.
+ *
+ * Effets :
+ *  - Met à jour `User.planCode` côté Prisma
+ *  - Invalide le cache mémoire `getUserLimits` (TTL 5min sinon)
+ */
+export async function upgradeUserPlan(
+  userId: string,
+  planCode: string = "PREMIUM",
+): Promise<void> {
+  await prisma.user.update({
+    where: { id: userId },
+    data: { planCode },
+  });
+  invalidatePlanCache(userId);
+}
 
 const captured: Array<{ contactValue: string; code: string }> = [];
 
@@ -98,10 +119,37 @@ export function lastOtp(contactValue: string): string {
   throw new Error(`No OTP captured for ${contactValue}`);
 }
 
+type QuickSignupOpts = {
+  displayName: string;
+  phone?: string;
+  email?: string;
+};
+
+/**
+ * V86 — Helper signup OTP avec **double signature** rétrocompatible :
+ *   - `quickSignup(app, opts)` — ancienne (groups, auth, tontines, expenses, debt-swaps)
+ *   - `quickSignup(opts)` — nouvelle (settlements migrés)
+ *
+ * La détection se fait via `inject` (méthode propre à FastifyInstance).
+ * Si premier arg n'a pas d'inject → c'est l'objet `opts` et on récupère
+ * l'app via `getApp()`.
+ */
 export async function quickSignup(
-  app: FastifyInstance,
-  opts: { displayName: string; phone?: string; email?: string },
+  appOrOpts: FastifyInstance | QuickSignupOpts,
+  maybeOpts?: QuickSignupOpts,
 ): Promise<{ token: string; userId: string; contactValue: string }> {
+  const isFastifyApp =
+    appOrOpts !== null &&
+    typeof appOrOpts === "object" &&
+    typeof (appOrOpts as { inject?: unknown }).inject === "function";
+
+  const app: FastifyInstance = isFastifyApp
+    ? (appOrOpts as FastifyInstance)
+    : await getApp();
+  const opts: QuickSignupOpts = isFastifyApp
+    ? (maybeOpts as QuickSignupOpts)
+    : (appOrOpts as QuickSignupOpts);
+
   const contactType = opts.email ? "EMAIL" : "PHONE";
   const contactValue =
     opts.email ??

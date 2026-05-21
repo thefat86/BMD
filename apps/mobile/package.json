@@ -1,0 +1,43 @@
+{
+  "name": "@bmd/mobile",
+  "version": "0.1.0",
+  "private": true,
+  "description": "BMD · App mobile (iOS + Android) — coque Capacitor sur le client web",
+  "scripts": {
+    "sync": "cap sync",
+    "sync:ios": "cap sync ios",
+    "sync:android": "cap sync android",
+    "open:ios": "cap open ios",
+    "open:android": "cap open android",
+    "run:ios": "cap run ios",
+    "run:android": "cap run android",
+    "doctor": "cap doctor",
+    "lint": "echo 'lint skipped (no eslint config yet)'",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@bmd/shared-types": "*",
+    "@capacitor-community/contacts": "^7.2.0",
+    "@capacitor/android": "^7.0.0",
+    "@capacitor/app": "^7.0.0",
+    "@capacitor/browser": "^7.0.0",
+    "@capacitor/camera": "^7.0.0",
+    "@capacitor/core": "^7.0.0",
+    "@capacitor/device": "^7.0.0",
+    "@capacitor/haptics": "^7.0.0",
+    "@capacitor/ios": "^7.0.0",
+    "@capacitor/keyboard": "^7.0.0",
+    "@capacitor/network": "^7.0.0",
+    "@capacitor/preferences": "^7.0.0",
+    "@capacitor/push-notifications": "^7.0.0",
+    "@capacitor/share": "^7.0.0",
+    "@capacitor/splash-screen": "^7.0.0",
+    "@capacitor/status-bar": "^7.0.0",
+    "capacitor-voice-recorder": "^7.0.2"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^7.0.0",
+    "@types/node": "^20.14.0",
+    "typescript": "^5.5.0"
+  }
+}

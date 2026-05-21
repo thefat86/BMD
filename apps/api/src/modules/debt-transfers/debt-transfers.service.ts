@@ -114,12 +114,14 @@ export async function proposeDebtTransfer(input: {
     },
   });
 
-  // Notif aux 2 personnes qui doivent valider
+  // Notif aux 2 personnes qui doivent valider — V98 : on lie le sender
+  // au "proposedBy" pour que les destinataires puissent réagir/répondre.
   void notifyOne(input.assumeUserId, {
     kind: "DEBT_TRANSFER_PROPOSED",
     title: `${created.proposedBy.displayName} te propose de reprendre une dette`,
     body: `${created.fromUser.displayName} te propose de reprendre sa dette de ${created.amount.toString()} ${created.currency} envers ${created.creditor.displayName}`,
     link: `/dashboard/groups/${input.groupId}`,
+    senderUserId: created.proposedBy.id,
     payload: { transferId: created.id, groupId: input.groupId },
   });
   void notifyOne(input.creditorUserId, {
@@ -127,6 +129,7 @@ export async function proposeDebtTransfer(input: {
     title: `Transfert de dette à valider`,
     body: `${created.fromUser.displayName} veut faire reprendre sa dette de ${created.amount.toString()} ${created.currency} par ${created.assumeUser.displayName} envers toi.`,
     link: `/dashboard/groups/${input.groupId}`,
+    senderUserId: created.proposedBy.id,
     payload: { transferId: created.id, groupId: input.groupId },
   });
 
@@ -256,6 +259,8 @@ async function acceptOrReject(
         title: "Transfert de dette refusé",
         body: `${role === "ASSUMER" ? t.assumeUser.displayName : t.creditor.displayName} a refusé le transfert`,
         link: `/dashboard/groups/${t.groupId}`,
+        // V98 — Émetteur = celui qui refuse
+        senderUserId: input.actorUserId,
         payload: { transferId: t.id, groupId: t.groupId },
       });
     }
@@ -300,9 +305,10 @@ async function acceptOrReject(
           amount: t.amount,
           currency: t.currency,
           status: "CONFIRMED",
-          notes: `Transfert de dette ID ${t.id} : reprise par ${t.assumeUser.displayName}`,
-          paidAt: new Date(),
-          confirmedAt: new Date(),
+          // Schema Settlement actuel ne porte pas de champs notes/paidAt/confirmedAt.
+          // L'audit de qui a transféré quoi est tracé via DebtTransfer (id ci-dessus).
+          confirmedByPayerAt: new Date(),
+          confirmedByPayeeAt: new Date(),
         },
       }),
       // Crée la nouvelle dette C→B (PROPOSED, à régler)
@@ -314,7 +320,6 @@ async function acceptOrReject(
           amount: t.amount,
           currency: t.currency,
           status: "PROPOSED",
-          notes: `Transfert de dette ID ${t.id} : reprise de ${t.fromUser.displayName}`,
         },
       }),
     ]);
@@ -328,6 +333,8 @@ async function acceptOrReject(
         title: "Transfert de dette accepté ✓",
         body: `${t.fromUser.displayName} → ${t.assumeUser.displayName} → ${t.creditor.displayName} : ${t.amount.toString()} ${t.currency}`,
         link: `/dashboard/groups/${t.groupId}`,
+        // V98 — Émetteur = celui qui vient d'accepter (ferme la boucle)
+        senderUserId: input.actorUserId,
         payload: { transferId: t.id, groupId: t.groupId },
       });
     }
@@ -340,6 +347,8 @@ async function acceptOrReject(
       title: "Une partie du transfert a été acceptée",
       body: `${role === "ASSUMER" ? t.assumeUser.displayName : t.creditor.displayName} a accepté. Tu dois maintenant valider.`,
       link: `/dashboard/groups/${t.groupId}`,
+      // V98 — Émetteur = celui qui vient d'accepter
+      senderUserId: input.actorUserId,
       payload: { transferId: t.id, groupId: t.groupId },
     });
   }

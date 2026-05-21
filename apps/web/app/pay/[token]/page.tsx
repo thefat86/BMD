@@ -18,8 +18,10 @@ import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { api } from "../../../lib/api-client";
+import { useT } from "../../../lib/i18n/app-strings";
 
 export default function PayPage() {
+  const t = useT();
   const { token } = useParams();
   const tokenStr = token as string;
   const [info, setInfo] = useState<any | null>(null);
@@ -27,6 +29,22 @@ export default function PayPage() {
   const [loading, setLoading] = useState(true);
   const [confirming, setConfirming] = useState(false);
   const [done, setDone] = useState(false);
+
+  // V141 — Champs de déclaration (méthode + date + référence) renseignés
+  // par l'invitee avant confirmation. Pas de vault ici car la page est
+  // publique (le visiteur n'est pas connecté).
+  const [payMethod, setPayMethod] = useState<string>("cash");
+  const [payMethodOther, setPayMethodOther] = useState<string>("");
+  const [payDate, setPayDate] = useState<string>(() =>
+    new Date().toISOString().slice(0, 10),
+  );
+  const [payReference, setPayReference] = useState<string>("");
+  const maxDate = new Date().toISOString().slice(0, 10);
+  const minDate = (() => {
+    const d = new Date();
+    d.setFullYear(d.getFullYear() - 1);
+    return d.toISOString().slice(0, 10);
+  })();
 
   useEffect(() => {
     api
@@ -38,20 +56,40 @@ export default function PayPage() {
       .catch((e) => {
         setError(
           e?.code === "expired"
-            ? "Ce lien a expiré (validité 14 jours)."
+            ? t("pay.linkExpired")
             : e?.code === "already_used"
-              ? "Ce lien a déjà été utilisé."
+              ? t("pay.linkAlreadyUsed")
               : (e as Error).message,
         );
         setLoading(false);
       });
   }, [tokenStr]);
 
+  function resolvedMethodLabel(): string {
+    if (payMethod === "cash")
+      return t("payment.cashLabel") || "Espèces";
+    if (payMethod === "other") {
+      const free = payMethodOther.trim();
+      return free.length > 0
+        ? free
+        : t("payment.otherLabel") || "Autre";
+    }
+    return t("payment.otherLabel") || "Autre";
+  }
+
   async function confirm() {
     setConfirming(true);
     setError(null);
     try {
-      await api.confirmPayment(tokenStr);
+      // V141 — Convertit la date jj/mm/yyyy en ISO UTC midi (évite TZ).
+      const paidAtIso = payDate
+        ? new Date(`${payDate}T12:00:00.000Z`).toISOString()
+        : undefined;
+      await api.confirmPayment(tokenStr, {
+        paymentMethod: resolvedMethodLabel(),
+        paymentReference: payReference.trim() || null,
+        paidAt: paidAtIso,
+      });
       setDone(true);
     } catch (e) {
       setError((e as Error).message);
@@ -113,10 +151,10 @@ export default function PayPage() {
             marginBottom: 20,
           }}
         >
-          Confirmation de règlement
+          {t("pay.confirmationTitle")}
         </div>
 
-        {loading && <p style={{ color: "#E8D5B7" }}>Vérification du lien…</p>}
+        {loading && <p style={{ color: "#E8D5B7" }}>{t("common.verifyingLink")}</p>}
 
         {!loading && error && (
           <>
@@ -129,7 +167,7 @@ export default function PayPage() {
                 marginBottom: 8,
               }}
             >
-              Lien indisponible
+              {t("pay.linkUnavailable")}
             </h2>
             <p style={{ color: "#E8D5B7", fontSize: 14, lineHeight: 1.6 }}>
               {error}
@@ -142,8 +180,7 @@ export default function PayPage() {
                 lineHeight: 1.6,
               }}
             >
-              Demande à la personne qui t'a envoyé ce lien d'en générer un
-              nouveau depuis son app.
+              {t("pay.regenerateLink")}
             </p>
           </>
         )}
@@ -180,7 +217,7 @@ export default function PayPage() {
                   marginBottom: 6,
                 }}
               >
-                Tu dois payer
+                {t("pay.youOwe")}
               </div>
               <div
                 style={{
@@ -215,15 +252,199 @@ export default function PayPage() {
                 textAlign: "left",
               }}
             >
-              <strong>Instructions :</strong>
+              <strong>{t("pay.instructions")}</strong>
               <br />
-              1. Effectue le paiement par ton moyen habituel (Lydia, Wave,
-              Mobile Money, espèces, virement…)
+              {t("pay.step1")}
               <br />
-              2. Une fois fait, clique sur "J'ai payé" ci-dessous
+              {t("pay.step2")}
               <br />
-              3. {info.to} sera notifié·e et confirmera la réception
+              {t("pay.step3", { to: info.to })}
             </p>
+
+            {/* V141 — Champs de déclaration : méthode + date + référence.
+                Saisie avant clic « J'ai payé ». Tous optionnels mais aident
+                le créancier à reconnaître le paiement. */}
+            {info.status === "PROPOSED" && (
+              <div
+                style={{
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: 10,
+                  textAlign: "left",
+                  marginBottom: 14,
+                  padding: 14,
+                  background: "rgba(232,163,61,0.04)",
+                  border: "1px solid rgba(232,163,61,0.18)",
+                  borderRadius: 12,
+                }}
+              >
+                <label
+                  style={{
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: 4,
+                    fontSize: 11,
+                    color: "#C9A24A",
+                    textTransform: "uppercase",
+                    letterSpacing: 1.2,
+                    fontWeight: 700,
+                  }}
+                >
+                  {t("payment.methodLabel") || "Moyen de paiement"}
+                  <select
+                    value={payMethod}
+                    onChange={(e) => setPayMethod(e.target.value)}
+                    disabled={confirming}
+                    style={{
+                      padding: "10px 12px",
+                      background: "#1F1429",
+                      border: "1px solid rgba(232,163,61,0.25)",
+                      borderRadius: 8,
+                      color: "#F4E4C1",
+                      fontSize: 13,
+                      fontFamily: "inherit",
+                      outline: "none",
+                      letterSpacing: "normal",
+                      textTransform: "none",
+                      fontWeight: 400,
+                    }}
+                  >
+                    <option value="cash">
+                      {t("payment.cashLabel") || "Espèces"}
+                    </option>
+                    <option value="other">
+                      {t("payment.otherLabel") || "Autre"}
+                    </option>
+                  </select>
+                </label>
+
+                {payMethod === "other" && (
+                  <label
+                    style={{
+                      display: "flex",
+                      flexDirection: "column",
+                      gap: 4,
+                      fontSize: 11,
+                      color: "#C9A24A",
+                      textTransform: "uppercase",
+                      letterSpacing: 1.2,
+                      fontWeight: 700,
+                    }}
+                  >
+                    {t("pay.methodOtherLabel") || "Précise le moyen"}
+                    <input
+                      type="text"
+                      value={payMethodOther}
+                      onChange={(e) => setPayMethodOther(e.target.value)}
+                      placeholder="Ex: Wave, PayPal, virement…"
+                      maxLength={50}
+                      disabled={confirming}
+                      style={{
+                        padding: "10px 12px",
+                        background: "#1F1429",
+                        border: "1px solid rgba(232,163,61,0.25)",
+                        borderRadius: 8,
+                        color: "#F4E4C1",
+                        fontSize: 13,
+                        fontFamily: "inherit",
+                        outline: "none",
+                        letterSpacing: "normal",
+                        textTransform: "none",
+                        fontWeight: 400,
+                      }}
+                    />
+                  </label>
+                )}
+
+                <label
+                  style={{
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: 4,
+                    fontSize: 11,
+                    color: "#C9A24A",
+                    textTransform: "uppercase",
+                    letterSpacing: 1.2,
+                    fontWeight: 700,
+                  }}
+                >
+                  {t("payment.dateLabel") || "Date du paiement"}
+                  <input
+                    type="date"
+                    value={payDate}
+                    min={minDate}
+                    max={maxDate}
+                    onChange={(e) => setPayDate(e.target.value)}
+                    disabled={confirming}
+                    style={{
+                      padding: "10px 12px",
+                      background: "#1F1429",
+                      border: "1px solid rgba(232,163,61,0.25)",
+                      borderRadius: 8,
+                      color: "#F4E4C1",
+                      fontSize: 13,
+                      fontFamily: "inherit",
+                      outline: "none",
+                      letterSpacing: "normal",
+                      textTransform: "none",
+                      fontWeight: 400,
+                      colorScheme: "dark",
+                    }}
+                  />
+                </label>
+
+                <label
+                  style={{
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: 4,
+                    fontSize: 11,
+                    color: "#C9A24A",
+                    textTransform: "uppercase",
+                    letterSpacing: 1.2,
+                    fontWeight: 700,
+                  }}
+                >
+                  {t("payment.referenceLabel") || "Référence (optionnel)"}
+                  <input
+                    type="text"
+                    value={payReference}
+                    onChange={(e) => setPayReference(e.target.value)}
+                    placeholder={
+                      t("payment.referencePlaceholder") ||
+                      "N° de virement, mémo…"
+                    }
+                    maxLength={200}
+                    disabled={confirming}
+                    style={{
+                      padding: "10px 12px",
+                      background: "#1F1429",
+                      border: "1px solid rgba(232,163,61,0.25)",
+                      borderRadius: 8,
+                      color: "#F4E4C1",
+                      fontSize: 13,
+                      fontFamily: "inherit",
+                      outline: "none",
+                      letterSpacing: "normal",
+                      textTransform: "none",
+                      fontWeight: 400,
+                    }}
+                  />
+                </label>
+
+                <div
+                  style={{
+                    fontSize: 11,
+                    color: "#8A7B6B",
+                    lineHeight: 1.4,
+                    marginTop: 4,
+                  }}
+                >
+                  {t("payment.notifyHint") ||
+                    "Le destinataire recevra une notification push et un email pour confirmer la réception."}
+                </div>
+              </div>
+            )}
 
             {info.status !== "PROPOSED" && (
               <div
@@ -237,38 +458,30 @@ export default function PayPage() {
                   marginBottom: 14,
                 }}
               >
-                ✓ Statut actuel : <strong>{info.status}</strong>
+                <span
+                  dangerouslySetInnerHTML={{
+                    __html: t("pay.currentStatus", { status: info.status }),
+                  }}
+                />
               </div>
             )}
 
             <button
-              onClick={confirm}
-              disabled={confirming || info.status !== "PROPOSED"}
-              style={{
-                width: "100%",
-                padding: 16,
-                background:
-                  info.status === "PROPOSED"
-                    ? "linear-gradient(135deg, #E8A33D, #B5462E)"
-                    : "rgba(255,255,255,0.05)",
-                color:
-                  info.status === "PROPOSED" ? "#16111E" : "#8A7B6B",
-                border: "none",
-                borderRadius: 12,
-                fontWeight: 700,
-                fontSize: 15,
-                cursor:
-                  confirming || info.status !== "PROPOSED"
-                    ? "not-allowed"
-                    : "pointer",
-                minHeight: 52,
+              onClick={() => {
+                if (typeof navigator !== "undefined" && navigator.vibrate) {
+                  try { navigator.vibrate([10, 30, 10]); } catch { /* ignore */ }
+                }
+                void confirm();
               }}
+              disabled={confirming || info.status !== "PROPOSED"}
+              className="bmd-pay-cta"
+              data-active={info.status === "PROPOSED" ? "true" : "false"}
             >
               {confirming
-                ? "Confirmation…"
+                ? t("common.confirming")
                 : info.status === "PROPOSED"
-                  ? "✓ J'ai payé"
-                  : "Déjà confirmé"}
+                  ? t("pay.iPaid")
+                  : t("pay.alreadyConfirmed")}
             </button>
           </>
         )}
@@ -284,7 +497,7 @@ export default function PayPage() {
                 marginBottom: 8,
               }}
             >
-              Merci !
+              {t("pay.thankYou")}
             </h2>
             <p
               style={{
@@ -292,31 +505,75 @@ export default function PayPage() {
                 color: "#E8D5B7",
                 lineHeight: 1.6,
               }}
-            >
-              <strong>{info?.to}</strong> a été notifié·e que tu as payé.
-              <br />
-              Tu peux fermer cette page.
-            </p>
+              dangerouslySetInnerHTML={{
+                __html: t("pay.successMessage", { to: info?.to ?? "" }),
+              }}
+            />
             <Link
               href="/"
-              style={{
-                display: "inline-block",
-                marginTop: 18,
-                padding: "12px 24px",
-                background: "rgba(255,255,255,0.04)",
-                border: "1px solid rgba(244,228,193,0.08)",
-                color: "#F4E4C1",
-                borderRadius: 10,
-                textDecoration: "none",
-                fontSize: 13,
-                fontWeight: 600,
-              }}
+              className="bmd-pay-discover"
             >
-              Découvrir BMD →
+              {t("app.discoverBmd")}
             </Link>
           </>
         )}
       </div>
+
+      <style jsx>{`
+        .bmd-pay-cta {
+          width: 100%;
+          padding: 16px 28px;
+          background: rgba(255, 255, 255, 0.05);
+          color: #8a7b6b;
+          border: none;
+          border-radius: 999px;
+          font-weight: 700;
+          font-size: 16px;
+          font-family: inherit;
+          cursor: not-allowed;
+          min-height: 56px;
+          -webkit-tap-highlight-color: transparent;
+          touch-action: manipulation;
+          transition: transform 0.1s, box-shadow 0.2s, opacity 0.2s;
+        }
+        .bmd-pay-cta[data-active="true"] {
+          background: linear-gradient(135deg, #E8A33D 0%, #B5462E 100%);
+          color: #16111e;
+          cursor: pointer;
+          box-shadow: 0 8px 24px rgba(232, 163, 61, 0.35);
+        }
+        .bmd-pay-cta[data-active="true"]:active {
+          transform: scale(0.97);
+          box-shadow: 0 4px 14px rgba(232, 163, 61, 0.28);
+        }
+        @media (hover: hover) and (pointer: fine) {
+          .bmd-pay-cta[data-active="true"]:hover {
+            box-shadow: 0 10px 30px rgba(232, 163, 61, 0.45);
+          }
+        }
+
+        .bmd-pay-discover {
+          display: inline-block;
+          margin-top: 18px;
+          padding: 13px 24px;
+          background: rgba(255, 255, 255, 0.04);
+          border: 1px solid rgba(244, 228, 193, 0.12);
+          color: #f4e4c1;
+          border-radius: 999px;
+          text-decoration: none;
+          font-size: 13px;
+          font-weight: 600;
+          font-family: inherit;
+          -webkit-tap-highlight-color: transparent;
+          touch-action: manipulation;
+          transition: background 0.2s, border-color 0.2s, transform 0.1s;
+        }
+        .bmd-pay-discover:active {
+          background: rgba(232, 163, 61, 0.08);
+          border-color: rgba(232, 163, 61, 0.35);
+          transform: scale(0.98);
+        }
+      `}</style>
     </div>
   );
 }

@@ -1,0 +1,49 @@
+{
+  "name": "@bmd/api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "lint": "echo 'lint skipped (no eslint config yet)'",
+    "typecheck": "tsc --noEmit",
+    "typecheck:tests": "tsc --noEmit -p tsconfig.test.json",
+    "db:generate": "prisma generate",
+    "db:migrate": "prisma migrate dev",
+    "db:reset": "prisma migrate reset --force",
+    "make-admin": "tsx scripts/make-admin.ts",
+    "seed-demo": "tsx scripts/seed-demo.ts"
+  },
+  "dependencies": {
+    "@bmd/shared-types": "*",
+    "@fastify/compress": "^7.0.3",
+    "@fastify/cors": "^9.0.1",
+    "@fastify/jwt": "^8.0.0",
+    "@fastify/multipart": "^8.3.0",
+    "@prisma/client": "^5.18.0",
+    "@simplewebauthn/server": "^10.0.1",
+    "argon2": "^0.40.3",
+    "decimal.js": "^10.4.3",
+    "fastify": "^4.28.0",
+    "pdf-lib": "^1.17.1",
+    "pdf-parse": "^1.1.1",
+    "pino-pretty": "^11.2.0",
+    "stripe": "^17.0.0",
+    "tesseract.js": "^5.1.1",
+    "zod": "^3.23.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "@vitest/coverage-v8": "^2.0.0",
+    "prisma": "^5.18.0",
+    "tsx": "^4.16.0",
+    "typescript": "^5.5.0",
+    "vitest": "^2.0.0"
+  }
+}

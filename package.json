@@ -8,16 +8,36 @@
     "packages/*"
   ],
   "scripts": {
+    "up": "bash scripts/dev-up.sh",
+    "reload": "bash scripts/dev-reload.sh",
+    "mobile": "bash scripts/dev-mobile.sh",
     "dev": "turbo run dev",
     "build": "turbo run build",
-    "test": "turbo run test",
+    "test": "bash scripts/run-tests-safe.sh",
+    "test:unsafe": "turbo run test",
     "lint": "turbo run lint",
     "typecheck": "turbo run typecheck",
     "db:up": "docker compose up -d db",
     "db:migrate": "cd apps/api && npx prisma migrate dev",
-    "db:reset": "cd apps/api && npx prisma migrate reset --force"
+    "db:deploy": "cd apps/api && npx prisma migrate deploy && npx prisma generate",
+    "db:reset": "cd apps/api && npx prisma migrate reset --force",
+    "db:backup": "bash scripts/backup-db.sh",
+    "db:restore": "bash scripts/restore-db.sh",
+    "db:init-test": "bash scripts/init-test-db.sh",
+    "mobile:sync": "cd apps/mobile && npx cap sync",
+    "mobile:sync:ios": "cd apps/mobile && npx cap sync ios",
+    "mobile:sync:android": "cd apps/mobile && npx cap sync android",
+    "mobile:open:ios": "cd apps/mobile && npx cap open ios",
+    "mobile:open:android": "cd apps/mobile && npx cap open android",
+    "mobile:doctor": "cd apps/mobile && npx cap doctor",
+    "mobile:fresh": "bash scripts/mobile-fresh.sh",
+    "test:e2e": "playwright test",
+    "test:e2e:mobile": "playwright test --project='iPhone 13' --project='Pixel 5'",
+    "test:e2e:ui": "playwright test --ui",
+    "test:e2e:install": "playwright install chromium webkit"
   },
   "devDependencies": {
+    "@playwright/test": "^1.59.1",
     "turbo": "^2.0.0",
     "typescript": "^5.5.0"
   },

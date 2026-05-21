@@ -2,9 +2,11 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { ContactType } from "@prisma/client";
 import { prisma } from "../../lib/db.js";
-import { requestOtp, verifyOtp } from "./otp.service.js";
+import { deletePhoto, storePhoto } from "../../lib/photo-storage.js";
+import { requestOtp, verifyOtp, getLastDevOtp } from "./otp.service.js";
+import { loadEnv } from "../../lib/env.js";
 import { verifyAndIssue } from "./auth.service.js";
-import { revokeSession } from "./jwt.service.js";
+import { issueToken, revokeSession } from "./jwt.service.js";
 import { Errors } from "../../lib/errors.js";
 import { validateContact } from "../../lib/validators.js";
 import {
@@ -12,6 +14,24 @@ import {
   generateTotpSecret,
   verifyTotpCode,
 } from "../../lib/totp.js";
+import { assertFeatureEnabled } from "../../lib/plan-limits.js";
+import {
+  buildAuthorizationUrl,
+  buildState,
+  exchangeCodeForClaims,
+  isGoogleSsoConfigured,
+  verifyState,
+} from "../../lib/google-oauth.js";
+import {
+  buildAppleAuthorizationUrl,
+  buildAppleState,
+  exchangeAppleCodeForClaims,
+  isAppleSsoConfigured,
+  verifyAppleState,
+} from "../../lib/apple-oauth.js";
+import { extractCountryFromHeaders } from "../../lib/ua-parser.js";
+import { markContactsChanged } from "../sim-swap/sim-swap.service.js";
+import { cacheDel } from "../../lib/cache.js";
 
 /**
  * Refine Zod : on appelle nos validators partagés (E.164, RFC 5322 simplifié)
@@ -20,10 +40,10 @@ import {
  *   - "  Foo@Bar.COM " → "foo@bar.com"
  * sont les seules valeurs qui atteignent la couche service.
  */
-function refineContactValue(
-  schema: z.ZodObject<any>,
-): z.ZodEffects<typeof schema> {
-  return schema.superRefine((data, ctx) => {
+function refineContactValue<T extends z.ZodObject<any>>(
+  schema: T,
+): z.ZodEffects<T> {
+  return schema.superRefine((data: any, ctx) => {
     const r = validateContact(data.contactType, data.contactValue);
     if (!r.ok) {
       ctx.addIssue({
@@ -55,11 +75,36 @@ const verifyOtpSchema = refineContactValue(
   }),
 );
 
+// V37 — Photo de profil sync serveur : on accepte 3 formes d'avatar
+//   1. URL HTTPS classique (CDN externe) : ex. "https://...storage.../photo.jpg"
+//   2. Data URL base64 (MVP self-hosted) : "data:image/jpeg;base64,..."
+//   3. null (suppression de la photo)
+// Limite 1 Mo pour éviter de gonfler la BDD ou faire crash le parser JSON.
+// Le front est censé pré-compresser à ~500 Ko via canvas avant envoi.
+const PHOTO_MAX_BYTES = 1_000_000;
+const avatarSchema = z
+  .string()
+  .max(PHOTO_MAX_BYTES, "Photo trop lourde (max 1 Mo après compression)")
+  .refine(
+    (s) =>
+      s.startsWith("http://") ||
+      s.startsWith("https://") ||
+      /^data:image\/(png|jpeg|webp);base64,/.test(s),
+    "Format d'avatar invalide (URL http/https ou data:image/*;base64 attendu)",
+  )
+  .nullable()
+  .optional();
+
 const updateMeSchema = z.object({
   displayName: z.string().min(1).max(80).optional(),
+  /// V144 — Pseudo optionnel. Vide ou null = pas de pseudo, on retombe sur
+  /// displayName. Max 80 chars comme displayName pour cohérence UI.
+  nickname: z.string().max(80).nullable().optional(),
+  /// V144 — Comment l'user veut être vu par les autres : NAME ou NICKNAME.
+  displayPreference: z.enum(["NAME", "NICKNAME"]).optional(),
   defaultCurrency: z.string().length(3).optional(),
   defaultLocale: z.string().min(2).max(8).optional(),
-  avatar: z.string().url().nullable().optional(),
+  avatar: avatarSchema,
   /// Tonalité des rappels (spec §3.8) : sympa | ferme | humour | pro
   reminderTone: z.enum(["sympa", "ferme", "humour", "pro"]).optional(),
 });
@@ -91,6 +136,289 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
     const result = await requestOtp(body);
     return reply.code(202).send(result);
   });
+
+  /**
+   * V214 — GET /auth/test-mode-gate (PUBLIC, sans auth)
+   *
+   * Léger gate qui retourne `{ enabled: boolean }` selon SiteConfig.testModeEnabled.
+   * Appelé par la page /login pour décider d'afficher le bouton « Se
+   * connecter directement ». DOIT être public car le user n'a pas encore
+   * de token à ce stade. Aucun secret n'est exposé — juste un booléen.
+   */
+  app.get("/auth/test-mode-gate", async () => {
+    const config = await (prisma as any).siteConfig.findUnique({
+      where: { id: "default" },
+      select: { testModeEnabled: true },
+    });
+    return { enabled: Boolean(config?.testModeEnabled) };
+  });
+
+  /**
+   * V214 — POST /auth/test-login (BYPASS OTP)
+   *
+   * TEMPORAIRE — Connexion directe sans recevoir de code OTP. Réservé à la
+   * phase de test interne. Le user est créé s'il n'existe pas (isTestUser
+   * laissé tel quel pour les vrais comptes, true seulement si nouveau).
+   *
+   * Gate : SiteConfig.testModeEnabled = true sinon 403.
+   * À retirer une fois la phase de test terminée.
+   */
+  app.post("/auth/test-login", async (req, reply) => {
+    const body = z
+      .object({
+        contactType: z.enum(["EMAIL", "PHONE"]),
+        contactValue: z.string().min(3).max(120),
+        displayName: z.string().min(1).max(60).optional(),
+      })
+      .parse(req.body);
+
+    // Gate global testMode.
+    const config = await (prisma as any).siteConfig.findUnique({
+      where: { id: "default" },
+      select: { testModeEnabled: true },
+    });
+    if (!config?.testModeEnabled) {
+      return reply.code(403).send({
+        error: "test_mode_disabled",
+        message:
+          "Le mode test est désactivé. Active-le dans /admin/feature-flags pour utiliser la connexion directe.",
+      });
+    }
+
+    const value = body.contactValue.trim().toLowerCase();
+
+    // Cherche le contact (user existant) ou crée tout.
+    let userId: string;
+    const existing = await prisma.userContact.findUnique({
+      where: { type_value: { type: body.contactType, value } },
+      include: { user: true },
+    });
+
+    if (existing) {
+      userId = existing.userId;
+      if (!existing.isVerified) {
+        await prisma.userContact.update({
+          where: { id: existing.id },
+          data: { isVerified: true, verifiedAt: new Date() },
+        });
+      }
+    } else {
+      // Crée un user de test avec un displayName auto-dérivé si manquant.
+      let displayName = (body.displayName ?? "").trim();
+      if (!displayName) {
+        if (body.contactType === "EMAIL") {
+          const local = value.split("@")[0] ?? "";
+          const cleaned = local.replace(/[._-]+/g, " ").trim();
+          displayName = cleaned
+            ? cleaned.charAt(0).toUpperCase() + cleaned.slice(1).toLowerCase()
+            : "Testeur";
+        } else {
+          const digits = value.replace(/\D/g, "");
+          displayName = digits.slice(-4)
+            ? `Testeur ${digits.slice(-4)}`
+            : "Testeur";
+        }
+      }
+      const user = await (prisma as any).user.create({
+        data: {
+          displayName,
+          isTestUser: true,
+          planCode: "FREE",
+          contacts: {
+            create: {
+              type: body.contactType,
+              value,
+              isVerified: true,
+              isPrimary: true,
+              verifiedAt: new Date(),
+            },
+          },
+        },
+      });
+      userId = user.id;
+    }
+
+    const { token, expiresAt } = await issueToken(
+      app,
+      userId,
+      req.headers["user-agent"] ?? undefined,
+      extractCountryFromHeaders(req.headers as any),
+      {
+        contactType: body.contactType,
+        contactValue: value,
+      },
+    );
+
+    const user = await prisma.user.findUniqueOrThrow({
+      where: { id: userId },
+      select: {
+        id: true,
+        displayName: true,
+        avatar: true,
+        defaultCurrency: true,
+        defaultLocale: true,
+        createdAt: true,
+      },
+    });
+
+    return reply.send({
+      token,
+      expiresAt: expiresAt.toISOString(),
+      user: {
+        ...user,
+        createdAt: user.createdAt.toISOString(),
+      },
+    });
+  });
+
+  /**
+   * GET /auth/dev/last-otp?contact=xxx
+   *
+   * DEV ONLY — récupère le dernier code OTP en clair émis pour un contact.
+   * Utilisé EXCLUSIVEMENT par les tests E2E Playwright qui ont besoin de
+   * compléter le flow login sans dépendre d'un vrai canal SMS/email.
+   *
+   * Sécurité : refuse en mode production (renvoie 404 silencieux pour ne
+   * pas divulguer l'existence de la route).
+   */
+  app.get(
+    "/auth/dev/last-otp",
+    { config: { skipAuth: true } as any },
+    async (req, reply) => {
+      const env = loadEnv();
+      if (env.NODE_ENV !== "development") {
+        return reply.code(404).send({ error: "not_found" });
+      }
+      const q = z
+        .object({ contact: z.string().min(1).max(200) })
+        .parse(req.query);
+      const result = getLastDevOtp(q.contact);
+      if (!result) {
+        return reply
+          .code(404)
+          .send({ error: "no_otp_for_contact", contact: q.contact });
+      }
+      return result;
+    },
+  );
+
+  // ============================================================
+  // WhatsApp Login (spec §7.2 — "WhatsApp natif · zéro friction")
+  // ============================================================
+
+  /**
+   * POST /auth/whatsapp/start
+   * Génère un code de login + URL wa.me préformulée. L'utilisateur
+   * touche le lien → WhatsApp s'ouvre avec un message pré-rempli
+   * "BMD-LOGIN-XXXX" → il send → notre webhook reconnaît + lie le numéro.
+   *
+   * Réponse : { code, waUrl, expiresAt }
+   * Si WHATSAPP_BUSINESS_NUMBER non configuré → 503 (méthode désactivée).
+   */
+  app.post(
+    "/auth/whatsapp/start",
+    { config: { skipAuth: true } as any },
+    async (req, reply) => {
+      const env = await import("../../lib/env.js").then((m) => m.loadEnv());
+      if (!env.WHATSAPP_BUSINESS_NUMBER) {
+        return reply
+          .code(503)
+          .send({ error: "whatsapp_login_disabled", message: "WhatsApp Business non configuré côté serveur." });
+      }
+      const { generateLoginCode } = await import(
+        "../../lib/whatsapp-login.js"
+      );
+      const ip =
+        (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() ??
+        req.ip;
+      const { code, expiresAt } = generateLoginCode({ initiatorIp: ip });
+      const waUrl = `https://wa.me/${env.WHATSAPP_BUSINESS_NUMBER}?text=${encodeURIComponent(`BMD-LOGIN-${code}`)}`;
+      return {
+        code,
+        waUrl,
+        expiresAt: expiresAt.toISOString(),
+      };
+    },
+  );
+
+  /**
+   * GET /auth/whatsapp/check?code=XXXX
+   * Polling du frontend pour savoir si le user a envoyé le message.
+   * Si ready → on récupère son numéro, crée/retrouve le user, et émet un JWT.
+   * Sinon : { ready: false }.
+   */
+  app.get(
+    "/auth/whatsapp/check",
+    { config: { skipAuth: true } as any },
+    async (req, reply) => {
+      const { code } = z
+        .object({ code: z.string().length(8) })
+        .parse(req.query);
+      const { consumeReadyCode } = await import(
+        "../../lib/whatsapp-login.js"
+      );
+      const r = consumeReadyCode(code);
+      if (!r.ready) {
+        return reply.send({ ready: false });
+      }
+      // Trouve ou crée l'utilisateur via le numéro WhatsApp (bind UserContact)
+      const phone = r.phoneE164;
+      const contact = await prisma.userContact.findUnique({
+        where: { type_value: { type: "PHONE", value: phone } },
+      });
+      let userId: string;
+      if (contact) {
+        userId = contact.userId;
+      } else {
+        // Création à la volée — pas de displayName demandé (l'utilisateur
+        // pourra le compléter ensuite dans son profil).
+        const created = await prisma.user.create({
+          data: {
+            displayName: `Nouveau ·${phone.slice(-4)}`,
+            contacts: {
+              create: {
+                type: "PHONE",
+                value: phone,
+                isVerified: true,
+                isPrimary: true,
+                verifiedAt: new Date(),
+              },
+            },
+          },
+        });
+        userId = created.id;
+      }
+      // Émet un JWT comme pour OTP
+      const ua = req.headers["user-agent"] ?? undefined;
+      const country = (
+        (req.headers["cf-ipcountry"] as string | undefined) ?? "??"
+      )
+        .slice(0, 2)
+        .toUpperCase();
+      const { issueToken } = await import("./jwt.service.js");
+      const tokenIssued = await issueToken(app, userId, ua, country, {
+        contactType: "PHONE",
+        contactValue: phone,
+      });
+      const user = await prisma.user.findUniqueOrThrow({
+        where: { id: userId },
+        select: {
+          id: true,
+          displayName: true,
+          avatar: true,
+          defaultCurrency: true,
+          defaultLocale: true,
+          createdAt: true,
+        },
+      });
+      return reply.send({
+        ready: true,
+        token: tokenIssued.token,
+        expiresAt: tokenIssued.expiresAt.toISOString(),
+        user: { ...user, createdAt: user.createdAt.toISOString() },
+      });
+    },
+  );
 
   /**
    * POST /auth/magic-link/request (spec §7.2)
@@ -138,6 +466,7 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
     const result = await verifyAndIssue(app, {
       ...body,
       device: req.headers["user-agent"] ?? undefined,
+      country: extractCountryFromHeaders(req.headers as any),
     });
 
     const user = await prisma.user.findUniqueOrThrow({
@@ -148,13 +477,17 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
         avatar: true,
         defaultCurrency: true,
         defaultLocale: true,
+        createdAt: true,
       },
     });
 
     return reply.send({
       token: result.token,
       expiresAt: result.expiresAt.toISOString(),
-      user,
+      user: {
+        ...user,
+        createdAt: user.createdAt.toISOString(),
+      },
     });
   });
 
@@ -180,7 +513,18 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
         },
       },
     });
-    return { user };
+    // Spec §7.3 : flag de "fraîcheur" de la vérification — > 6 mois = stale.
+    // Le frontend affiche un badge ⚠ à côté pour inciter à re-vérifier.
+    const sixMonthsAgo = new Date();
+    sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6);
+    const contactsWithStale = user.contacts.map((c) => ({
+      ...c,
+      stale:
+        c.isVerified &&
+        c.verifiedAt !== null &&
+        c.verifiedAt < sixMonthsAgo,
+    }));
+    return { user: { ...user, contacts: contactsWithStale } };
   });
 
   /**
@@ -189,24 +533,156 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
    */
   app.patch("/auth/me", { onRequest: [app.authenticate] }, async (req) => {
     const body = updateMeSchema.parse(req.body);
+
+    // V37 — Si l'utilisateur change/supprime sa photo, on passe par le module
+    // photo-storage qui décide auto entre stockage inline (MVP) et Cloudinary
+    // (prod, si CLOUDINARY_URL set). En cas de suppression, on clean l'ancienne
+    // photo Cloudinary aussi pour ne pas accumuler les orphelines.
+    let resolvedAvatar: string | null | undefined = undefined;
+    if (body.avatar !== undefined) {
+      // Récupère l'ancien avatar pour cleanup éventuel
+      const before = await prisma.user.findUnique({
+        where: { id: req.user.sub },
+        select: { avatar: true },
+      });
+      if (body.avatar === null) {
+        // Suppression : on tente de cleaner Cloudinary, on persiste null
+        await deletePhoto(before?.avatar ?? null);
+        resolvedAvatar = null;
+      } else {
+        // Upload : storePhoto retourne l'URL finale (data URL ou Cloudinary)
+        resolvedAvatar = await storePhoto(body.avatar, req.user.sub);
+        // Si on a basculé vers Cloudinary et qu'il y avait une ancienne URL
+        // différente, on supprime l'ancienne pour économiser l'espace.
+        if (
+          before?.avatar &&
+          before.avatar !== resolvedAvatar &&
+          before.avatar.startsWith("http")
+        ) {
+          await deletePhoto(before.avatar);
+        }
+      }
+    }
+
     const user = await prisma.user.update({
       where: { id: req.user.sub },
       data: {
         ...(body.displayName && { displayName: body.displayName.trim() }),
+        // V144 — nickname accepte null explicite (= effacer le pseudo).
+        // String vide après trim = null aussi pour rester clean en BDD.
+        ...(body.nickname !== undefined && {
+          nickname:
+            body.nickname === null || body.nickname.trim() === ""
+              ? null
+              : body.nickname.trim(),
+        }),
+        // V144 — displayPreference change comment les autres me voient.
+        ...(body.displayPreference && {
+          displayPreference: body.displayPreference,
+        }),
         ...(body.defaultCurrency && { defaultCurrency: body.defaultCurrency.toUpperCase() }),
         ...(body.defaultLocale && { defaultLocale: body.defaultLocale.toLowerCase() }),
-        ...(body.avatar !== undefined && { avatar: body.avatar }),
+        ...(resolvedAvatar !== undefined && { avatar: resolvedAvatar }),
       },
       select: {
         id: true,
         displayName: true,
+        // V144 — Retourner nickname + displayPreference pour que le front
+        // puisse pré-remplir le formulaire et invalider ses caches.
+        nickname: true,
+        displayPreference: true,
         avatar: true,
         defaultCurrency: true,
         defaultLocale: true,
-      },
+      } as any,
     });
+
+    // V38 — Si la devise a changé, on invalide les caches dépendant de
+    // `User.defaultCurrency`. Sinon la vue "par personne" et le solde global
+    // continueraient à afficher les montants dans l'ancienne devise jusqu'au
+    // TTL (30 s). Réf demande utilisateur : "Les montants ne sont pas
+    // convertis dans ma devise après changement."
+    //
+    // V144 — Si displayName / nickname / displayPreference change, on doit
+    // ÉGALEMENT invalider les caches qui contiennent le nom affiché de cet
+    // user pour les autres membres (groupes, soldes par personne, etc.).
+    // Sinon les autres membres voient l'ancien nom jusqu'à expiration TTL.
+    const nameChanged =
+      body.displayName !== undefined ||
+      body.nickname !== undefined ||
+      body.displayPreference !== undefined;
+    if (body.defaultCurrency || nameChanged) {
+      await Promise.all([
+        cacheDel(`person-balances:${req.user.sub}`),
+        cacheDel(`global-balance:${req.user.sub}`),
+      ]).catch(() => undefined);
+    }
+    if (nameChanged) {
+      // V144 — Invalide tous les caches de groupes/tontines où l'user apparaît.
+      // On purge agressivement : tous les groupes dont l'user est membre, plus
+      // les caches per-user (person-balances) déjà gérés ci-dessus.
+      try {
+        const memberships = await prisma.groupMember.findMany({
+          where: { userId: req.user.sub },
+          select: { groupId: true },
+        });
+        await Promise.all(
+          memberships.flatMap((m) => [
+            cacheDel(`group:${m.groupId}:full`),
+            cacheDel(`group:${m.groupId}:members`),
+            cacheDel(`group:${m.groupId}:balance`),
+            cacheDel(`tontine:${m.groupId}`),
+          ]),
+        );
+        // Caches per-user de l'auteur (listing groups peut contenir nos co-membres)
+        await cacheDel(`groups-list:${req.user.sub}`);
+      } catch (e) {
+        // best-effort : si l'invalidation cache rate, le TTL prendra le relais
+        console.warn("[updateMe] cache invalidation failed", e);
+      }
+    }
     return { user };
   });
+
+  /**
+   * POST /auth/me/plan
+   * Change le forfait de l'utilisateur courant.
+   *
+   * MVP : pas de paiement réel. On valide juste que le plan demandé existe
+   * et est actif, puis on met à jour User.planCode. L'intégration Stripe
+   * (spec §6.3) sera branchée plus tard ; à ce moment-là on remplacera ce
+   * handler par un POST qui crée une session de checkout et qui ne
+   * change le planCode qu'au webhook `invoice.payment_succeeded`.
+   *
+   * Pour l'instant on permet le changement direct pour pouvoir tester
+   * tout le gating (limites, dialogs d'upgrade) en local.
+   */
+  app.post(
+    "/auth/me/plan",
+    { onRequest: [app.authenticate] },
+    async (req) => {
+      const body = z
+        .object({ planCode: z.string().min(1).max(40) })
+        .parse(req.body);
+      const code = body.planCode.toUpperCase();
+
+      const plan = await prisma.plan.findUnique({ where: { code } });
+      if (!plan || !plan.isActive) {
+        throw Errors.notFound("Ce forfait n'existe pas ou n'est plus actif.");
+      }
+
+      const user = await prisma.user.update({
+        where: { id: req.user.sub },
+        data: { planCode: code },
+        select: {
+          id: true,
+          displayName: true,
+          planCode: true,
+        },
+      });
+      return { user, plan: { code: plan.code, name: plan.name } };
+    },
+  );
 
   /**
    * POST /auth/contacts/add
@@ -226,9 +702,17 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
       });
       if (existing) {
         if (existing.userId === req.user.sub) {
-          throw Errors.conflict("Tu as déjà ce contact dans ton profil");
+          throw Errors.alreadyExists({
+            what: "Ce contact est déjà sur ton profil",
+            tip: "Tu peux le retrouver dans la liste de tes contacts vérifiés.",
+          });
         }
-        throw Errors.conflict("Ce contact appartient déjà à un autre utilisateur");
+        throw Errors.conflict(
+          "Ce contact est déjà rattaché à un autre compte 🤔",
+          {
+            tip: "Si c'est toi, connecte-toi avec ce contact-là — sinon, utilise un autre email/numéro.",
+          },
+        );
       }
 
       // Limites : 3 contacts max de chaque type par compte
@@ -237,7 +721,12 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
       });
       if (sameTypeCount >= 3) {
         throw Errors.badRequest(
-          `Maximum 3 ${body.contactType === "PHONE" ? "numéros" : "emails"} par compte`,
+          `Tu as déjà 3 ${body.contactType === "PHONE" ? "numéros" : "emails"} sur ton compte 📱`,
+          {
+            tip: `On limite à 3 par compte pour la sécurité. Supprime-en un avant d'en ajouter un nouveau.`,
+            actionHref: "/dashboard/profile",
+            action: "Voir mes contacts",
+          },
         );
       }
 
@@ -272,7 +761,15 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
         code: body.code,
       });
       if (!otpResult.valid) {
-        throw Errors.unauthorized(`OTP invalide : ${otpResult.reason}`);
+        const niceReason =
+          otpResult.reason === "expired"
+            ? "Ce code a expiré ⏰ — demande-en un nouveau."
+            : otpResult.reason === "max_attempts"
+              ? "Trop de tentatives 🚫 — demande un nouveau code."
+              : otpResult.reason === "invalid_code"
+                ? "Le code ne correspond pas — vérifie et retente."
+                : "Code invalide.";
+        throw Errors.unauthorized(niceReason);
       }
 
       // Créer le contact attaché au user
@@ -294,6 +791,8 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
           verifiedAt: true,
         },
       });
+      // Track la modif pour le scoring SIM swap (spec §7.5)
+      void markContactsChanged(req.user.sub);
       return { contact };
     },
   );
@@ -310,7 +809,7 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
 
       const contact = await prisma.userContact.findUnique({ where: { id } });
       if (!contact || contact.userId !== req.user.sub) {
-        throw Errors.notFound("Contact introuvable");
+        throw Errors.notFound("Ce contact est introuvable 🔍");
       }
 
       // Empêche de supprimer le dernier contact vérifié
@@ -319,7 +818,10 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
       });
       if (contact.isVerified && verifiedCount <= 1) {
         throw Errors.badRequest(
-          "Tu ne peux pas supprimer ton seul contact vérifié",
+          "Impossible de supprimer ton dernier contact vérifié 🔒",
+          {
+            tip: "Sans contact vérifié, tu ne pourrais plus te reconnecter ! Ajoute-en un autre d'abord, puis tu pourras supprimer celui-ci.",
+          },
         );
       }
 
@@ -341,6 +843,7 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
       }
 
       await prisma.userContact.delete({ where: { id } });
+      void markContactsChanged(req.user.sub);
       return reply.code(204).send();
     },
   );
@@ -357,11 +860,14 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
 
       const contact = await prisma.userContact.findUnique({ where: { id } });
       if (!contact || contact.userId !== req.user.sub) {
-        throw Errors.notFound("Contact introuvable");
+        throw Errors.notFound("Ce contact est introuvable 🔍");
       }
       if (!contact.isVerified) {
         throw Errors.badRequest(
-          "Vérifie d'abord ce contact avant de le marquer principal",
+          "Ce contact n'est pas encore vérifié 🔐",
+          {
+            tip: "Pour le passer en principal, vérifie-le d'abord avec le code reçu.",
+          },
         );
       }
 
@@ -376,6 +882,7 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
           data: { isPrimary: true },
         }),
       ]);
+      void markContactsChanged(req.user.sub);
       return { ok: true };
     },
   );
@@ -473,6 +980,8 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
     "/auth/2fa/setup",
     { onRequest: [app.authenticate] },
     async (req) => {
+      // Spec §7.5 : 2FA réservée Premium / Communauté
+      await assertFeatureEnabled(req.user.sub, "twoFactor");
       const user = await prisma.user.findUniqueOrThrow({
         where: { id: req.user.sub },
         select: {
@@ -486,9 +995,10 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
         },
       });
       if (user.twoFactorEnabledAt) {
-        throw Errors.badRequest(
-          "2FA déjà activée. Désactive-la d'abord pour générer un nouveau secret.",
-        );
+        throw Errors.alreadyExists({
+          what: "La double authentification est déjà active sur ton compte 🔐",
+          tip: "Pour générer un nouveau secret, désactive-la d'abord depuis ton profil — un nouveau QR sera alors disponible.",
+        });
       }
       const secret = generateTotpSecret();
       // Le label est l'identifiant principal (téléphone ou email)
@@ -512,6 +1022,8 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
     "/auth/2fa/enable",
     { onRequest: [app.authenticate] },
     async (req, reply) => {
+      // Spec §7.5 : 2FA réservée Premium / Communauté
+      await assertFeatureEnabled(req.user.sub, "twoFactor");
       const body = z
         .object({
           secret: z.string().min(16).max(64),
@@ -521,7 +1033,11 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
       if (!verifyTotpCode(body.secret, body.code)) {
         return reply.code(400).send({
           error: "invalid_code",
-          message: "Code TOTP invalide. Vérifie l'horloge de ton téléphone.",
+          message: "Ce code à 6 chiffres ne correspond pas ⌛",
+          details: {
+            severity: "warning",
+            tip: "Vérifie que l'horloge de ton téléphone est synchronisée — un décalage suffit à invalider le code. Attends le prochain code et retente.",
+          },
         });
       }
       await prisma.user.update({
@@ -551,12 +1067,20 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
         select: { twoFactorSecret: true },
       });
       if (!user.twoFactorSecret) {
-        throw Errors.badRequest("2FA non activée");
+        throw Errors.invalidState({
+          what: "La double authentification",
+          currentState: "déjà désactivée",
+          tip: "Tu peux la réactiver depuis ton profil quand tu veux 🔐",
+        });
       }
       if (!verifyTotpCode(user.twoFactorSecret, body.code)) {
         return reply.code(400).send({
           error: "invalid_code",
-          message: "Code TOTP invalide",
+          message: "Le code à 6 chiffres ne correspond pas à ce moment-ci ⌛",
+          details: {
+            severity: "warning",
+            tip: "Vérifie que l'horloge de ton téléphone est synchronisée — un décalage de 30 secondes suffit à invalider le code. Sinon, attends le prochain code (toutes les 30s).",
+          },
         });
       }
       await prisma.user.update({
@@ -606,23 +1130,51 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
    * POST /auth/qr-login/start (PAS d'auth — appelé par un browser non connecté)
    * Crée une demande de QR login. TTL 90s. Retourne le token à inclure
    * dans le QR code.
+   *
+   * Configuration :
+   *  - skipAuth : oui (pas de JWT, par design — c'est l'étape avant login)
+   *  - body parsing : on ignore le body (rien à valider) pour éviter les
+   *    400 "Body cannot be empty when content-type is application/json".
    */
-  app.post("/auth/qr-login/start", async (req) => {
-    const { randomBytes } = await import("crypto");
-    const token = randomBytes(24).toString("base64url");
-    const expiresAt = new Date(Date.now() + 90_000);
-    await prisma.qrLoginRequest.create({
-      data: {
-        token,
-        expiresAt,
-        device: req.headers["user-agent"] ?? null,
-      },
-    });
-    return {
-      token,
-      expiresAt: expiresAt.toISOString(),
-    };
-  });
+  app.post(
+    "/auth/qr-login/start",
+    {
+      config: { skipAuth: true } as any,
+      // Schema vide → pas de validation body requise
+      schema: { body: { type: "object", additionalProperties: true } as any },
+    },
+    async (req, reply) => {
+      try {
+        const { randomBytes } = await import("crypto");
+        const token = randomBytes(24).toString("base64url");
+        const expiresAt = new Date(Date.now() + 90_000);
+        await prisma.qrLoginRequest.create({
+          data: {
+            token,
+            expiresAt,
+            device: (req.headers["user-agent"] as string | undefined) ?? null,
+          },
+        });
+        return {
+          token,
+          expiresAt: expiresAt.toISOString(),
+        };
+      } catch (err) {
+        // Si le schema Prisma n'a pas encore la table QrLoginRequest, on
+        // renvoie une erreur explicite plutôt qu'un crash silencieux.
+        // eslint-disable-next-line no-console
+        console.error("[qr-login/start] prisma error:", err);
+        return reply.code(500).send({
+          error: "qr_login_unavailable",
+          message:
+            "La connexion par QR n'est pas encore disponible — relance une migration de base de données.",
+          details: {
+            tip: "Côté serveur : `npx prisma migrate dev` pour créer la table QrLoginRequest.",
+          },
+        });
+      }
+    },
+  );
 
   /**
    * GET /auth/qr-login/status/:token (PAS d'auth)
@@ -646,10 +1198,12 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
     if (r.status === "APPROVED" && r.userId) {
       // Émission du JWT et marquage USED (one-shot)
       const { issueToken } = await import("./jwt.service.js");
+      const country = extractCountryFromHeaders(req.headers as any);
       const { token: jwt, expiresAt } = await issueToken(
         app,
         r.userId,
         r.device ?? undefined,
+        country,
       );
       await prisma.qrLoginRequest.update({
         where: { id: r.id },
@@ -704,4 +1258,203 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
       return { approved: true };
     },
   );
+
+  // ============================================================
+  // SSO Google (spec §7.2)
+  //
+  // /auth/google/config  → public · indique au front si le SSO est activé
+  // /auth/google/start   → public · retourne l'URL d'autorisation + state
+  // /auth/google/callback → public · échange le code, crée/connecte le user,
+  //                          retourne un JWT BMD
+  // ============================================================
+
+  app.get("/auth/google/config", async () => ({
+    enabled: isGoogleSsoConfigured(),
+  }));
+
+  app.post("/auth/google/start", async () => {
+    const state = buildState();
+    const url = await buildAuthorizationUrl(state);
+    return { url, state };
+  });
+
+  app.post("/auth/google/callback", async (req) => {
+    const body = z
+      .object({
+        code: z.string().min(10),
+        state: z.string().min(10),
+      })
+      .parse(req.body);
+
+    if (!verifyState(body.state)) {
+      throw Errors.unauthorized(
+        "La connexion Google a expiré ou a été altérée 🛡️",
+        {
+          tip: "Reclique sur « Se connecter avec Google » pour repartir d'une nouvelle session sécurisée.",
+        },
+      );
+    }
+
+    const claims = await exchangeCodeForClaims(body.code);
+    const email = claims.email.toLowerCase().trim();
+
+    // Cherche un contact email déjà rattaché à un user
+    let userId: string;
+    const existingContact = await prisma.userContact.findUnique({
+      where: { type_value: { type: "EMAIL", value: email } },
+      include: { user: true },
+    });
+
+    if (existingContact) {
+      userId = existingContact.userId;
+      // Si le compte est suspendu, on bloque proprement
+      if (existingContact.user.suspendedAt) throw Errors.suspended();
+      // Marque le contact comme vérifié si pas déjà
+      if (!existingContact.isVerified) {
+        await prisma.userContact.update({
+          where: { id: existingContact.id },
+          data: { isVerified: true, verifiedAt: new Date() },
+        });
+      }
+    } else {
+      // Création d'un nouveau compte BMD à partir des infos Google
+      const displayName =
+        (claims.name?.trim() ?? "") ||
+        email.split("@")[0]!.replace(/[._-]+/g, " ");
+      const created = await prisma.user.create({
+        data: {
+          displayName,
+          avatar: claims.picture ?? null,
+          contacts: {
+            create: {
+              type: "EMAIL",
+              value: email,
+              isVerified: true,
+              isPrimary: true,
+              verifiedAt: new Date(),
+            },
+          },
+        },
+      });
+      userId = created.id;
+    }
+
+    const ua = req.headers["user-agent"];
+    const country = extractCountryFromHeaders(req.headers as any);
+    const session = await issueToken(
+      app,
+      userId,
+      typeof ua === "string" ? ua.slice(0, 200) : undefined,
+      country,
+    );
+    return {
+      token: session.token,
+      expiresAt: session.expiresAt.toISOString(),
+      userId,
+    };
+  });
+
+  // ============================================================
+  // SSO Apple Sign In (spec §7.2)
+  //
+  // Apple impose `response_mode=form_post` → le callback est POSTé par Apple.
+  // On accepte aussi GET pour le développement local.
+  // Le user/name n'est envoyé QU'À LA PREMIÈRE connexion (Apple ne le
+  // renvoie plus jamais après) — le frontend doit donc le repasser au
+  // backend dans le body POST /auth/apple/callback s'il est dispo.
+  // ============================================================
+
+  app.get("/auth/apple/config", async () => ({
+    enabled: isAppleSsoConfigured(),
+  }));
+
+  app.post("/auth/apple/start", async () => {
+    const state = buildAppleState();
+    const url = buildAppleAuthorizationUrl(state);
+    return { url, state };
+  });
+
+  app.post("/auth/apple/callback", async (req) => {
+    const body = z
+      .object({
+        code: z.string().min(10),
+        state: z.string().min(10),
+        // user.name (optionnel) — Apple ne le renvoie qu'à la 1ère connexion
+        userName: z.string().max(80).optional(),
+      })
+      .parse(req.body);
+
+    if (!verifyAppleState(body.state)) {
+      throw Errors.unauthorized(
+        "La connexion Apple a expiré ou a été altérée 🛡️",
+        {
+          tip: "Reclique sur « Se connecter avec Apple » pour repartir d'une nouvelle session sécurisée.",
+        },
+      );
+    }
+
+    const claims = await exchangeAppleCodeForClaims(body.code);
+    const email = claims.email?.toLowerCase().trim();
+
+    let userId: string;
+    if (email) {
+      const existingContact = await prisma.userContact.findUnique({
+        where: { type_value: { type: "EMAIL", value: email } },
+        include: { user: true },
+      });
+      if (existingContact) {
+        userId = existingContact.userId;
+        if (existingContact.user.suspendedAt) throw Errors.suspended();
+        if (!existingContact.isVerified) {
+          await prisma.userContact.update({
+            where: { id: existingContact.id },
+            data: { isVerified: true, verifiedAt: new Date() },
+          });
+        }
+      } else {
+        const displayName =
+          (body.userName?.trim() || "") ||
+          email.split("@")[0]!.replace(/[._-]+/g, " ");
+        const created = await prisma.user.create({
+          data: {
+            displayName,
+            contacts: {
+              create: {
+                type: "EMAIL",
+                value: email,
+                isVerified: true,
+                isPrimary: true,
+                verifiedAt: new Date(),
+              },
+            },
+          },
+        });
+        userId = created.id;
+      }
+    } else {
+      // Apple Hide My Email avec relais opaque + on n'a pas (ou plus) accès à l'email
+      // → on identifie l'utilisateur par le `sub` Apple stocké dans User.contacts ?
+      // Pour l'instant on bloque proprement avec un message explicite.
+      throw Errors.unauthorized(
+        "Apple n'a pas partagé d'email cette fois 🤔",
+        {
+          tip: "Lors de la connexion avec Apple, choisis « Partager mon adresse email » plutôt que « Masquer mon adresse ».",
+        },
+      );
+    }
+
+    const ua = req.headers["user-agent"];
+    const country = extractCountryFromHeaders(req.headers as any);
+    const session = await issueToken(
+      app,
+      userId,
+      typeof ua === "string" ? ua.slice(0, 200) : undefined,
+      country,
+    );
+    return {
+      token: session.token,
+      expiresAt: session.expiresAt.toISOString(),
+      userId,
+    };
+  });
 }

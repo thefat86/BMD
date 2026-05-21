@@ -1,0 +1,16 @@
+{
+  "_comment": "V132 — Placeholder. Remplace ce fichier par le vrai google-services.json téléchargé depuis Firebase Console pour activer les push FCM Android.",
+  "_setup": [
+    "1. Va sur https://console.firebase.google.com → crée un projet 'BMD' (ou utilise un existant)",
+    "2. Add app → Android → packageName = com.backmesdo.bmd → register",
+    "3. Download google-services.json → place-le dans apps/mobile/android/app/ (renommé sans .example)",
+    "4. Rebuild Android : `cd apps/mobile && npx cap sync android && cd android && ./gradlew clean assembleDebug`",
+    "5. Côté backend : Firebase Console → Project Settings → Service accounts → Generate new private key → JSON",
+    "6. Copie le JSON ENTIER dans la variable d'env FIREBASE_SERVICE_ACCOUNT_JSON (côté API)",
+    "7. Restart l'API. Les push Android sont maintenant actifs."
+  ],
+  "project_info": {
+    "project_id": "REPLACE-ME",
+    "project_number": "REPLACE-ME"
+  }
+}

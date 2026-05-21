@@ -19,14 +19,20 @@
 import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import { api, getToken, isUnauthorized } from "../../../../../lib/api-client";
+import { useT } from "../../../../../lib/i18n/app-strings";
+// V108 — Barre d'actions sticky (back + imprimer + enregistrer PDF).
+import { PrintActionBar } from "../../../../../lib/ui/print-action-bar";
 
 export default function PrintGroupPage() {
+  const t = useT();
   const { id } = useParams();
   const groupId = id as string;
   const [group, setGroup] = useState<any>(null);
   const [expenses, setExpenses] = useState<any[]>([]);
   const [balance, setBalance] = useState<any>(null);
 
+  // V108 — Plus d'auto-print : l'utilisateur a le temps de lire le document
+  // et déclenche l'impression manuellement via la barre d'actions en haut.
   useEffect(() => {
     if (!getToken()) {
       window.location.href = "/login";
@@ -41,9 +47,6 @@ export default function PrintGroupPage() {
         setGroup(g);
         setExpenses(e);
         setBalance(b);
-        // Petit délai pour que le DOM soit complètement rendu
-        // avant de déclencher l'impression auto
-        setTimeout(() => window.print(), 600);
       })
       .catch((err) => {
         if (isUnauthorized(err)) window.location.href = "/login";
@@ -75,8 +78,13 @@ export default function PrintGroupPage() {
             background: #fff !important;
             color: #000 !important;
           }
-          .no-print {
+          .no-print,
+          .print-action-bar {
             display: none !important;
+          }
+          .bmd-print-doc {
+            padding: 0 !important;
+            max-width: none !important;
           }
         }
         body {
@@ -88,46 +96,28 @@ export default function PrintGroupPage() {
         }
       `}</style>
 
+      {/* V108 — Barre d'actions sticky en haut (Back / Imprimer / PDF).
+          Masquée à l'impression via la classe print-action-bar. */}
+      <PrintActionBar
+        title={t("print.recapTitle") || "Récap du groupe"}
+        subtitle={group.name}
+        backHref={`/dashboard/groups/${groupId}`}
+      />
+
+      {/* Conteneur responsive : padding réduit sur mobile, max-width A4 sur
+          desktop. À l'impression on retire padding et max-width pour laisser
+          le navigateur gérer les marges via @page. */}
       <div
+        className="bmd-print-doc"
         style={{
           maxWidth: 780,
           margin: "0 auto",
-          padding: 32,
+          padding: "clamp(16px, 4vw, 32px)",
           color: "#16111e",
           fontSize: 13,
           lineHeight: 1.6,
         }}
       >
-        {/* Bouton imprimer (caché à l'impression) */}
-        <div className="no-print" style={{ marginBottom: 20 }}>
-          <button
-            onClick={() => window.print()}
-            style={{
-              background: "linear-gradient(135deg, #E8A33D, #B5462E)",
-              color: "#fff",
-              border: "none",
-              padding: "12px 24px",
-              borderRadius: 10,
-              fontWeight: 700,
-              cursor: "pointer",
-              fontSize: 14,
-            }}
-          >
-            🖨 Imprimer / Enregistrer en PDF
-          </button>
-          <a
-            href={`/dashboard/groups/${groupId}`}
-            style={{
-              marginLeft: 12,
-              color: "#666",
-              textDecoration: "none",
-              fontSize: 13,
-            }}
-          >
-            ← Retour au groupe
-          </a>
-        </div>
-
         {/* En-tête : logo + meta */}
         <div
           style={{
@@ -166,7 +156,7 @@ export default function PrintGroupPage() {
             </div>
           </div>
           <div style={{ marginLeft: "auto", textAlign: "right", fontSize: 11, color: "#666" }}>
-            <div>Document généré le</div>
+            <div>{t("print.documentGeneratedOn")}</div>
             <div style={{ fontWeight: 600, color: "#16111e" }}>
               {new Date().toLocaleDateString("fr-FR", {
                 day: "numeric",
@@ -203,12 +193,12 @@ export default function PrintGroupPage() {
           }}
         >
           <Stat
-            label="Total dépensé"
+            label={t("print.totalSpent")}
             value={`${totalAmount.toFixed(2)} ${group.defaultCurrency}`}
           />
-          <Stat label="Dépenses" value={String(expenses.length)} />
+          <Stat label={t("print.expenses")} value={String(expenses.length)} />
           <Stat
-            label="Règlements à effectuer"
+            label={t("print.settlementsToPerform")}
             value={String(balance.suggestions.length)}
           />
         </div>
@@ -409,7 +399,7 @@ export default function PrintGroupPage() {
           }}
         >
           Document généré par BMD · L'argent partagé. L'amitié protégée. ·
-          bmd.app
+          backmesdo.com
         </div>
       </div>
     </>

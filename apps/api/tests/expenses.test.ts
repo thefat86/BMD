@@ -47,7 +47,10 @@ describe("M06 · Expenses · split modes (pure logic)", () => {
           { userId: "b", share: 30 },
         ],
       ),
-    ).toThrowError(/Percentages must sum to 100/);
+      // V86 — Le message a été migré en FR user-friendly :
+      // « On n'a pas pu valider le partage en pourcentages 🧮 ».
+      // L'assert porte sur la sémantique du message, pas le wording exact.
+    ).toThrowError(/partage en pourcentages/);
   });
 
   it("T33 · UNEQUAL : sum of shares must equal amount", () => {
@@ -73,7 +76,8 @@ describe("M06 · Expenses · split modes (pure logic)", () => {
           { userId: "b", share: 30 },
         ],
       ),
-    ).toThrowError(/Sum of shares.*must equal/);
+      // V86 — Message FR : « On n'a pas pu valider le partage en montants exacts 🧮 ».
+    ).toThrowError(/partage en montants/);
   });
 });
 

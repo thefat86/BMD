@@ -146,26 +146,42 @@ describe("M14 · receipt-parser · extractDate", () => {
 });
 
 describe("M14 · receipt-parser · guessCategory", () => {
+  // V83 · Valeurs canoniques shared-types (lowercase) — avant V83 ces tests
+  // attendaient "Restaurant" / "Courses" / "Transport" titre case.
   it("T95 · catégorise correctement un restaurant", () => {
-    expect(guessCategory("Le Petit Mboa Restaurant", "")).toBe("Restaurant");
+    expect(guessCategory("Le Petit Mboa Restaurant", "")).toBe("resto");
   });
 
   it("T96 · catégorise un supermarché", () => {
-    expect(guessCategory("MONOPRIX", "Pain Lait Beurre")).toBe("Courses");
-    expect(guessCategory(null, "Carrefour Market")).toBe("Courses");
+    expect(guessCategory("MONOPRIX", "Pain Lait Beurre")).toBe("courses");
+    expect(guessCategory(null, "Carrefour Market")).toBe("courses");
   });
 
   it("T97 · catégorise un transport", () => {
-    expect(guessCategory("UBER Trip", "")).toBe("Transport");
-    expect(guessCategory("SNCF", "TGV Paris-Lyon")).toBe("Transport");
+    expect(guessCategory("UBER Trip", "")).toBe("transport");
+    expect(guessCategory("SNCF", "TGV Paris-Lyon")).toBe("transport");
   });
 
   it("T98 · catégorise une charge de logement", () => {
-    expect(guessCategory("EDF facture", "")).toBe("Logement");
+    expect(guessCategory("EDF facture", "")).toBe("logement");
   });
 
   it("T99 · retourne null si rien ne matche", () => {
     expect(guessCategory("Boutique inconnue", "produit XYZ")).toBeNull();
+  });
+
+  // V83 · Voyage/hôtel sont désormais classés en "loisirs" (dépense
+  // partagée typique BMD : weekends, vacances entre amis).
+  it("T95b · classe un voyage / hôtel sous loisirs", () => {
+    expect(guessCategory("Airbnb Lisbonne", "")).toBe("loisirs");
+    expect(guessCategory("Hôtel Royal", "")).toBe("loisirs");
+    expect(guessCategory(null, "Ryanair Paris-Faro")).toBe("loisirs");
+  });
+
+  // V83 · "autres" n'est jamais retourné par guessCategory (pas de
+  // keywords positifs — c'est un bucket de fallback côté UI).
+  it("T95c · ne retourne JAMAIS 'autres' (fallback UI uniquement)", () => {
+    expect(guessCategory("Random thing", "qwerty zzz")).toBeNull();
   });
 });
 
@@ -190,7 +206,8 @@ describe("M14 · receipt-parser · pipeline complet (parseReceipt)", () => {
     expect(r.merchant).toBe("Le Petit Mboa");
     expect(r.amount).toBe("27.50");
     expect(r.currency).toBe("EUR");
-    expect(r.category).toBe("Restaurant");
+    // V83 · valeur canonique shared-types (avant : "Restaurant" titre case)
+    expect(r.category).toBe("resto");
     expect(r.date).not.toBeNull();
     expect(r.confidence).toBeGreaterThan(0.7);
   });
@@ -207,7 +224,8 @@ describe("M14 · receipt-parser · pipeline complet (parseReceipt)", () => {
     const r = parseReceipt(text);
     expect(r.merchant).toBe("Monoprix");
     expect(r.amount).toBe("5.55");
-    expect(r.category).toBe("Courses");
+    // V83 · valeur canonique shared-types
+    expect(r.category).toBe("courses");
   });
 
   it("T102 · texte vide ou pourri retourne quand même un objet structuré", () => {

@@ -1,0 +1,70 @@
+# =============================================================================
+# .dockerignore racine — appliqué à tous les builds Docker depuis ce monorepo.
+# =============================================================================
+# Réduit le contexte envoyé au Docker daemon (gain énorme sur les rebuilds).
+# Les Dockerfiles eux-mêmes COPY explicitement ce dont ils ont besoin.
+# =============================================================================
+
+# Node
+**/node_modules
+**/npm-debug.log
+**/.pnp
+**/.pnp.js
+
+# Next.js
+**/.next
+**/out
+**/.vercel
+
+# Tests / coverage
+**/coverage
+**/.nyc_output
+**/*.test.ts
+**/*.spec.ts
+**/__tests__
+**/test-results
+**/playwright-report
+**/playwright/.cache
+
+# Env files (secrets — JAMAIS dans une image)
+**/.env
+**/.env.local
+**/.env.*.local
+**/.env.production
+# .env.example reste inclus (il sert de doc)
+
+# Build artifacts
+**/dist
+**/build
+**/.turbo
+**/.cache
+**/tsconfig.tsbuildinfo
+
+# Git / IDE
+.git
+.gitignore
+.github
+.vscode
+.idea
+**/*.swp
+**/.DS_Store
+
+# Docs (pas besoin dans l'image)
+*.md
+!apps/api/README.md
+!apps/web/README.md
+
+# CI / config dev
+.github
+docker-compose.yml
+docker-compose.*.yml
+setup.sh
+setup.ps1
+
+# Logs
+**/*.log
+logs/
+
+# Misc
+**/.eslintcache
+**/.stylelintcache

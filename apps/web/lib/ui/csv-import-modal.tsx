@@ -17,6 +17,8 @@
 import { useRef, useState } from "react";
 import { api } from "../api-client";
 import { useToast } from "./toast";
+import { useT } from "../i18n/app-strings";
+import { BottomSheet } from "./bottom-sheet";
 
 interface ParsedRow {
   description: string;
@@ -39,12 +41,14 @@ export function CsvImportModal({
   onImported,
 }: Props): JSX.Element | null {
   const toast = useToast();
+  const t = useT();
   const [rows, setRows] = useState<ParsedRow[]>([]);
   const [importing, setImporting] = useState(false);
   const [report, setReport] = useState<any | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
-  if (!open) return null;
+  // Le composant retourne toujours un BottomSheet ; il gère lui-même
+  // l'absence d'affichage si `open` est false.
 
   function handleFile(file: File) {
     const reader = new FileReader();
@@ -74,7 +78,7 @@ export function CsvImportModal({
         onImported();
       }
       if (r.failed === r.total) {
-        toast.error("Aucune dépense n'a pu être importée. Vérifie le format.");
+        toast.error(t("csvImport.noExpensesImported"));
       }
     } catch (e) {
       toast.error(e);
@@ -84,79 +88,26 @@ export function CsvImportModal({
   }
 
   return (
-    <div
-      role="dialog"
-      aria-modal="true"
-      style={{
-        position: "fixed",
-        inset: 0,
-        background: "rgba(14,11,20,0.85)",
-        backdropFilter: "blur(6px)",
-        WebkitBackdropFilter: "blur(6px)",
-        zIndex: 9990,
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        padding:
-          "calc(env(safe-area-inset-top, 0) + 16px) 16px calc(env(safe-area-inset-bottom, 0) + 16px)",
-        overflowY: "auto",
-      }}
+    <BottomSheet
+      open={open}
+      onClose={onClose}
+      title={t("csvImport.title")}
     >
-      <div
+      <p
         style={{
-          background: "linear-gradient(180deg, #16111E 0%, #1F1429 100%)",
-          border: "1px solid rgba(232,163,61,0.18)",
-          borderRadius: 18,
-          maxWidth: 560,
-          width: "100%",
-          padding: 20,
-          color: "#F4E4C1",
-          maxHeight: "calc(100dvh - 32px)",
-          overflowY: "auto",
+          fontSize: 12,
+          color: "var(--cream-soft)",
+          marginTop: 0,
+          marginBottom: 12,
+          lineHeight: 1.5,
         }}
       >
-        <div
-          style={{
-            display: "flex",
-            justifyContent: "space-between",
-            alignItems: "center",
-            marginBottom: 12,
-          }}
-        >
-          <h2
-            style={{
-              fontFamily: "'Cormorant Garamond', serif",
-              fontSize: 22,
-              margin: 0,
-            }}
-          >
-            📥 Importer depuis CSV
-          </h2>
-          <button
-            onClick={onClose}
-            aria-label="Fermer"
-            style={{
-              width: 32,
-              height: 32,
-              borderRadius: "50%",
-              background: "rgba(255,255,255,0.05)",
-              border: "none",
-              color: "#F4E4C1",
-              cursor: "pointer",
-              fontSize: 16,
-            }}
-          >
-            ✕
-          </button>
-        </div>
-
-        <p style={{ fontSize: 12, color: "#E8D5B7", marginBottom: 12 }}>
-          Format : <code>description,amount,occurredAt,category</code>
-          <br />
-          Une ligne par dépense. Les dépenses seront créées en mode{" "}
-          <strong>égal entre tous les membres</strong> avec toi comme payeur.
-          Tu pourras ensuite ajuster chacune.
-        </p>
+        {t("csvImport.formatHint")}
+        <br />
+        <code style={{ color: "var(--cream)", fontSize: 11 }}>
+          description,amount,occurredAt,category
+        </code>
+      </p>
 
         <input
           ref={fileRef}
@@ -344,8 +295,7 @@ export function CsvImportModal({
             </button>
           </>
         )}
-      </div>
-    </div>
+    </BottomSheet>
   );
 }
 

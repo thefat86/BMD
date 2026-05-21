@@ -16,45 +16,72 @@ import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { api, getToken, isUnauthorized } from "../api-client";
 import { useToast } from "./toast";
+import { useMyEvents } from "../use-realtime";
+import { useT } from "../i18n/app-strings";
+// V52.C3 — SVG remplace EMOJI (icon registry V45)
+import { Icon, type IconName } from "./icons";
 
-const POLL_INTERVAL_MS = 30_000;
+// Polling fallback ralenti (60s au lieu de 30s) — le SSE prend désormais le
+// relais pour le temps réel, on ne poll que pour les cas où SSE coupe.
+const POLL_INTERVAL_MS = 60_000;
 
-const KIND_ICONS: Record<string, string> = {
-  GROUP_INVITED: "👋",
-  MEMBER_JOINED: "🧑",
-  EXPENSE_ADDED: "💸",
-  EXPENSE_UPDATED: "✏️",
-  EXPENSE_DELETED: "🗑",
-  SETTLEMENT_PROPOSED: "💳",
-  SETTLEMENT_CONFIRMED: "✅",
-  TONTINE_CREATED: "🪙",
-  TONTINE_ACTIVATED: "🚀",
-  TONTINE_TURN_DUE: "⏰",
-  TONTINE_TURN_DISTRIBUTED: "🎉",
-  TONTINE_DATE_CHANGED: "📅",
-  SWAP_PROPOSED: "🔄",
-  SWAP_ACCEPTED: "✅",
-  SWAP_REJECTED: "✗",
-  DEBT_TRANSFER_PROPOSED: "↔",
-  DEBT_TRANSFER_ACCEPTED: "✅",
-  DEBT_TRANSFER_REJECTED: "✗",
-  ROLE_CHANGED: "🛡",
-  GROUP_DELETED: "🗑",
-  ATTACHMENT_ADDED: "📎",
+// V52.C3 — SVG remplace EMOJI : map kind → IconName du registry V45 outline.
+// Tout emoji présent au rendu doit avoir un équivalent SVG.
+const KIND_ICONS: Record<string, IconName> = {
+  GROUP_INVITED: "users",
+  MEMBER_JOINED: "user",
+  EXPENSE_ADDED: "receipt",
+  EXPENSE_UPDATED: "pencil",
+  EXPENSE_DELETED: "trash-2",
+  SETTLEMENT_PROPOSED: "credit-card",
+  SETTLEMENT_CONFIRMED: "check",
+  TONTINE_CREATED: "coins",
+  TONTINE_ACTIVATED: "sparkles",
+  TONTINE_TURN_DUE: "bell",
+  TONTINE_TURN_DISTRIBUTED: "party-popper",
+  TONTINE_DATE_CHANGED: "rotate-cw",
+  SWAP_PROPOSED: "repeat",
+  SWAP_ACCEPTED: "check",
+  SWAP_REJECTED: "x",
+  DEBT_TRANSFER_PROPOSED: "arrow-right",
+  DEBT_TRANSFER_ACCEPTED: "check",
+  DEBT_TRANSFER_REJECTED: "x",
+  ROLE_CHANGED: "shield",
+  GROUP_DELETED: "trash-2",
+  ATTACHMENT_ADDED: "paperclip",
 };
 
 export function NotificationBell(): JSX.Element | null {
   const router = useRouter();
   const toast = useToast();
+  const t = useT();
   const [unreadCount, setUnreadCount] = useState(0);
   const [open, setOpen] = useState(false);
   const [items, setItems] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const pollRef = useRef<number | null>(null);
 
-  // Polling du badge
+  // V118.B — SSE temps réel : dès qu'une nouvelle notif est créée côté
+  // serveur, on incrémente le badge instantanément + on reload la liste
+  // si elle est ouverte. Le `connected` retourné par le hook nous sert
+  // à pauser le polling fallback : tant que la connexion SSE tient, on
+  // évite la requête HTTP toutes les 60s (gain réseau + batterie mobile).
+  const { connected: sseConnected } = useMyEvents((event) => {
+    if (event.kind === "notification.created") {
+      setUnreadCount((c) => c + 1);
+      if (open) void loadItems();
+    }
+  });
+
+  // Polling du badge — fallback uniquement quand SSE n'est PAS connecté.
+  // Avant V118.B : `setInterval(tick, 60_000)` tournait en permanence
+  // même quand le SSE recevait les events en temps réel → 1 requête
+  // HTTP réseau toutes les 60s pour rien. Désormais l'effet se
+  // désabonne dès que sseConnected passe à true, et se réabonne si
+  // la connexion SSE coupe.
   useEffect(() => {
     if (!getToken()) return;
+    if (sseConnected) return; // SSE OK → pas de polling fallback
     let cancelled = false;
 
     async function tick() {
@@ -81,7 +108,7 @@ export function NotificationBell(): JSX.Element | null {
       if (pollRef.current != null) clearInterval(pollRef.current);
       document.removeEventListener("visibilitychange", onVisibility);
     };
-  }, []);
+  }, [sseConnected]);
 
   async function loadItems() {
     setLoading(true);
@@ -137,13 +164,12 @@ export function NotificationBell(): JSX.Element | null {
     <div style={{ position: "relative", display: "inline-block" }}>
       <button
         onClick={toggleOpen}
-        aria-label={`Notifications (${unreadCount} non-lues)`}
-        title="Notifications"
+        aria-label={`${t("notif.title")} (${unreadCount} non-lues)`}
+        title={t("notif.title")}
         style={{
           position: "relative",
           background: "transparent",
           border: "none",
-          fontSize: 22,
           cursor: "pointer",
           padding: 8,
           minHeight: 44,
@@ -154,7 +180,16 @@ export function NotificationBell(): JSX.Element | null {
           color: "inherit",
         }}
       >
-        {unreadCount > 0 ? "🔔" : "🔕"}
+        {/* V52.C3 — SVG remplace EMOJI (🔔 / 🔕). Quand pas de non-lues on
+            réduit légèrement l'opacité pour signifier "muet" plutôt que de
+            charger une icône bell-off non disponible au registry. */}
+        <Icon
+          name="bell"
+          size={22}
+          color="currentColor"
+          strokeWidth={1.6}
+          style={{ opacity: unreadCount > 0 ? 1 : 0.55 }}
+        />
         {unreadCount > 0 && (
           <span
             style={{
@@ -202,10 +237,11 @@ export function NotificationBell(): JSX.Element | null {
               maxWidth: 420,
               marginLeft: "auto",
               maxHeight: "70vh",
-              background: "#fff",
-              color: "#111827",
+              background: "linear-gradient(180deg, #2A2244 0%, #1E1830 100%)",
+              color: "var(--cream, #F4E4C1)",
+              border: "1px solid rgba(232,163,61,0.20)",
               borderRadius: 12,
-              boxShadow: "0 12px 40px rgba(0,0,0,0.25)",
+              boxShadow: "0 12px 40px rgba(0,0,0,0.45)",
               zIndex: 1001,
               display: "flex",
               flexDirection: "column",
@@ -222,7 +258,7 @@ export function NotificationBell(): JSX.Element | null {
               }}
             >
               <strong style={{ fontSize: 15 }}>
-                Notifications {unreadCount > 0 && `(${unreadCount})`}
+                {t("notif.title")} {unreadCount > 0 && `(${unreadCount})`}
               </strong>
               {unreadCount > 0 && (
                 <button
@@ -236,7 +272,7 @@ export function NotificationBell(): JSX.Element | null {
                     padding: 4,
                   }}
                 >
-                  Tout marquer lu
+                  {t("notif.markAllRead")}
                 </button>
               )}
             </div>
@@ -250,7 +286,7 @@ export function NotificationBell(): JSX.Element | null {
                     fontSize: 14,
                   }}
                 >
-                  Chargement…
+                  {t("common.loading")}
                 </p>
               )}
               {!loading && items.length === 0 && (
@@ -262,7 +298,7 @@ export function NotificationBell(): JSX.Element | null {
                     fontSize: 14,
                   }}
                 >
-                  Aucune notification
+                  {t("notif.empty")}
                 </p>
               )}
               {!loading &&
@@ -283,10 +319,21 @@ export function NotificationBell(): JSX.Element | null {
                       alignItems: "flex-start",
                     }}
                   >
+                    {/* V52.C3 — SVG remplace EMOJI. Fallback bell si kind inconnu. */}
                     <span
-                      style={{ fontSize: 20, flexShrink: 0, lineHeight: 1 }}
+                      style={{
+                        flexShrink: 0,
+                        lineHeight: 1,
+                        display: "inline-flex",
+                        color: "var(--saffron, #e8a33d)",
+                      }}
                     >
-                      {KIND_ICONS[n.kind] ?? "•"}
+                      <Icon
+                        name={KIND_ICONS[n.kind] ?? "bell"}
+                        size={20}
+                        color="currentColor"
+                        strokeWidth={1.6}
+                      />
                     </span>
                     <span style={{ flex: 1, minWidth: 0 }}>
                       <span

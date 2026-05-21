@@ -1,0 +1,2166 @@
+// Prisma schema · BMD backend
+// docs : https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================================
+// USERS & AUTH
+// ============================================================
+
+model User {
+  id              String   @id @default(uuid())
+  displayName     String
+  avatar          String?
+  defaultCurrency String   @default("EUR")
+  defaultLocale   String   @default("fr")
+  isSuperAdmin    Boolean  @default(false)
+  suspendedAt     DateTime?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  contacts               UserContact[]
+  groupMemberships       GroupMember[]
+  expensesPaid           Expense[]              @relation("ExpensePaidBy")
+  expenseShares          ExpenseShare[]
+  sessions               Session[]
+  settlementsFrom        Settlement[]           @relation("SettlementFrom")
+  settlementsTo          Settlement[]           @relation("SettlementTo")
+  /// V30 — règlements multi-groupe (cross-group settlements)
+  crossSettlementsFrom   CrossGroupSettlement[] @relation("CrossSettlementFrom")
+  crossSettlementsTo     CrossGroupSettlement[] @relation("CrossSettlementTo")
+  tontineContributions   TontineContribution[]
+  tontineTurns           TontineTurn[]          @relation("TurnBeneficiary")
+  debtSwapParticipations DebtSwapParticipant[]
+  inviteTokensCreated    GroupInviteToken[]     @relation("InviteTokensCreatedBy")
+  activitiesGenerated    ActivityLog[]          @relation("ActivityActor")
+  attachmentsUploaded    ExpenseAttachment[]    @relation("AttachmentUploader")
+  notifications          Notification[]
+  tontineTurnAcks        TontineTurnAck[]       @relation("TontineTurnAck")
+  debtTransfersProposed  DebtTransfer[]         @relation("DebtTransferProposer")
+  debtTransfersFrom      DebtTransfer[]         @relation("DebtTransferFrom")
+  debtTransfersAssumer   DebtTransfer[]         @relation("DebtTransferAssumer")
+  debtTransfersCreditor  DebtTransfer[]         @relation("DebtTransferCreditor")
+  expenseItemClaims      ExpenseItemClaim[]     @relation("ExpenseItemClaim")
+  /// Plan tarifaire de l'utilisateur (spec §6.3) — null = Découverte par défaut
+  planCode               String                 @default("FREE")
+  /// Sprint AB · Trial 14 jours Premium (one-shot par user, anti-fraude).
+  /// `trialPlanCode` = code du plan offert (ex: "PREMIUM"), null si pas de
+  /// trial actif. `trialEndsAt` = date d'expiration du trial. `trialUsedAt` =
+  /// date à laquelle le user a déjà utilisé son trial (pour empêcher de le
+  /// réactiver une 2e fois). Quand `trialEndsAt < now()`, getUserLimits()
+  /// ignore le trial et revient au plan de base (lazy revert, pas de cron).
+  trialPlanCode          String?
+  trialEndsAt            DateTime?
+  trialUsedAt            DateTime?
+  /// Tonalité des rappels (spec §3.8) : sympa | ferme | humour | pro
+  reminderTone           String                 @default("sympa")
+  /// Secret TOTP base32 si 2FA activée (spec §7.5). Null si désactivée.
+  twoFactorSecret        String?
+  /// Date d'activation 2FA — null = pas activée
+  twoFactorEnabledAt     DateTime?
+  qrLoginsApproved       QrLoginRequest[]       @relation("QrLoginUser")
+  /// Code du rôle admin custom (spec §6.10) — null = pas de rôle particulier.
+  /// Si défini, donne des permissions spécifiques en plus de isSuperAdmin.
+  adminRoleCode          String?
+  tontineBids            TontineBid[]           @relation("BidderUser")
+  paymentTokensCreated   SettlementPaymentToken[] @relation("PaymentTokenCreator")
+  pushSubscriptions      PushSubscription[]     @relation("UserPushSubs")
+  loginFingerprints      LoginFingerprint[]     @relation("UserLoginFingerprints")
+  /// Code de parrainage personnel (généré à la 1ère utilisation)
+  referralCode           String?                @unique
+  /// User qui m'a parrainé (rempli au moment de la saisie du code)
+  referredById           String?
+  referredBy             User?                  @relation("UserReferrer", fields: [referredById], references: [id], onDelete: SetNull)
+  referrals              User[]                 @relation("UserReferrer")
+  promoRedemptions       PromoRedemption[]      @relation("PromoUser")
+  /// Date à laquelle le filleul a été rattaché à son parrain (referredById set).
+  /// Sert à appliquer la limite temporelle (ex: code valable 30j après inscription).
+  referredAt             DateTime?
+  /// Crédit BMD accumulé via le programme de parrainage (en centimes EUR pivot).
+  /// Le commercial / parrain peut l'utiliser pour payer son propre abonnement
+  /// ou demander un virement (>= seuil min).
+  referralCreditCents    Int                    @default(0)
+  /// True si l'utilisateur est un commercial (peut générer un code AFF-XXXX et
+  /// recevoir des commissions multi-niveaux). Géré par les admins via la
+  /// console — pas une auto-promotion.
+  isAffiliate            Boolean                @default(false)
+  /// Code commercial AFF-XXXXXX (généré si isAffiliate=true). Différent du
+  /// referralCode standard pour bien tracer les commissions.
+  affiliateCode          String?                @unique
+  /// État KYC du commercial : pas de versement de commissions tant que
+  /// status != "VERIFIED" (anti-fraude).
+  affiliateKycStatus     String                 @default("NONE")
+  /// Stripe customer ID (créé à la 1ère souscription via Checkout).
+  /// Persisté pour pouvoir renouveler / annuler / changer de plan sans
+  /// recréer un customer à chaque fois.
+  stripeCustomerId       String?                @unique
+  /// Stripe Connect account ID (pour les commerciaux qui reçoivent des
+  /// payouts via Stripe Connect Express). Null tant que pas onboardé.
+  stripeConnectAccountId String?                @unique
+  /// État de l'abonnement (ACTIVE / GRACE / DOWNGRADED). Cf. SubscriptionState.
+  subscription           SubscriptionState?     @relation("UserSubscription")
+  /// Commissions reçues en tant qu'apporteur d'affaires multi-niveaux
+  affiliateCommissionsAsBeneficiary AffiliateCommission[] @relation("CommissionBeneficiary")
+  /// Paiements ayant généré des commissions pour mon réseau (en tant que payeur)
+  affiliateCommissionsAsPayer       AffiliateCommission[] @relation("CommissionPayer")
+  /// Récompenses de parrainage simple (jalons / bonus filleul)
+  referralRewardsAsParent           ReferralReward[] @relation("ReferralRewardParent")
+  referralRewardsAsChild            ReferralReward[] @relation("ReferralRewardChild")
+  /// Date de la dernière modification d'un contact (ajout, vérif, suppression).
+  /// Sert au scoring SIM swap : un OTP demandé après un changement récent
+  /// est plus suspect (spec §7.5).
+  contactsLastChangedAt  DateTime?
+  simSwapEvents          SimSwapEvent[]         @relation("UserSimSwapEvents")
+  paymentMethods         PaymentMethod[]        @relation("UserPaymentMethods")
+  /// Passkeys WebAuthn (Touch ID / Face ID / clé USB) — spec §7.5.
+  /// Plusieurs passkeys par user (un par device).
+  passkeys               Passkey[]              @relation("UserPasskeys")
+  /// Challenge WebAuthn courant (random base64url, 32 bytes).
+  /// Stocké le temps d'un round-trip register/login. TTL implicite via
+  /// `passkeyChallengeAt` : si > 5min, on refuse.
+  passkeyChallenge       String?
+  passkeyChallengeAt     DateTime?
+  /// Sprint AC-2 · Multi-payeurs : avances faites par cet utilisateur
+  expensePaymentsMade    ExpensePayer[]    @relation("ExpensePayerUser")
+  /// Sprint AC-2 · Réunions créées par cet utilisateur (secrétaire/trésorier)
+  meetingsCreated        MeetingRecord[]   @relation("MeetingCreator")
+}
+
+/// Rôle custom pour les admins (spec §6.10).
+/// Permet de créer des rôles avec des permissions précises (ex: support
+/// peut suspendre des utilisateurs mais pas modifier des plans).
+///
+/// Permissions stockées en JSON pour configurabilité sans migration.
+/// Format : { plans: ["read","write","delete"], users: ["read","suspend"] }
+///
+/// Le superadmin (User.isSuperAdmin) garde TOUS les droits — ce système
+/// de rôles est pour les admins de niveau 2 (support, modération, compta).
+model AdminRole {
+  /// Code stable (ex: "SUPPORT", "ACCOUNTANT", "MODERATOR")
+  code        String   @id
+  name        String
+  description String?
+  /// Permissions JSON : { resource: ["read","write","delete","suspend",...] }
+  permissions Json
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+/// Token public d'un Settlement permettant de confirmer un paiement sans
+/// créer de compte (mode invité — spec §3.2 §7.6).
+///
+/// Workflow :
+///  1. L'admin du groupe génère un token pour un Settlement existant
+///  2. L'admin partage le lien /pay/<token> via WhatsApp/SMS
+///  3. L'invité clique, voit le détail (montant, à qui), confirme par OTP de son numéro
+///  4. À confirmation, le Settlement passe en PAID puis CONFIRMED
+///
+/// Sécurité : token URL-safe 24 octets random, TTL 14 jours, usage unique.
+model SettlementPaymentToken {
+  id            String     @id @default(uuid())
+  /// Token URL-safe (24 bytes random base64url)
+  token         String     @unique
+  settlementId  String
+  settlement    Settlement @relation(fields: [settlementId], references: [id], onDelete: Cascade)
+  /// Créateur du lien (admin du groupe)
+  createdById   String
+  createdBy     User       @relation("PaymentTokenCreator", fields: [createdById], references: [id])
+  expiresAt     DateTime
+  usedAt        DateTime?
+  createdAt     DateTime   @default(now())
+
+  @@index([token])
+  @@index([settlementId])
+}
+
+/// Enchère pour un tour de tontine (Hui / 標會 — spec §3.4).
+///
+/// Workflow :
+///  1. Le tour est ouvert à enchères (status PENDING) — chaque membre peut faire une mise
+///  2. La mise = somme acceptée d'être perdue si on gagne le pot ce mois-ci
+///     Plus la mise est haute, plus on s'engage à donner aux autres en "intérêts"
+///  3. À la clôture : le plus offrant gagne le tour, sa mise est répartie entre les autres
+///  4. Le bénéficiaire effectif du tour devient le gagnant (override beneficiaryUserId du turn)
+///
+/// Une seule enchère par membre par tour (clé unique). On peut updater son enchère
+/// tant que le tour est en PENDING.
+model TontineBid {
+  id          String      @id @default(uuid())
+  turnId      String
+  turn        TontineTurn @relation("TurnBids", fields: [turnId], references: [id], onDelete: Cascade)
+  bidderId    String
+  bidder      User        @relation("BidderUser", fields: [bidderId], references: [id], onDelete: Cascade)
+  /// Montant de la mise en devise du tour. > 0
+  amount      Decimal     @db.Decimal(14, 4)
+  /// Si true : ce bid a remporté l'enchère du tour (un seul gagnant par tour)
+  won         Boolean     @default(false)
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  @@unique([turnId, bidderId])
+  @@index([turnId, amount])
+}
+
+/// Configuration centrale des publicités (spec §6.4).
+/// Singleton (une seule ligne avec id="default").
+///
+/// Toutes les pubs s'affichent SEULEMENT pour les utilisateurs sur plan
+/// FREE. Premium et Communauté n'en voient jamais (limites.adsEnabled=false).
+/// Configuration publique du site (singleton, id="default") — éditable
+/// depuis la console admin. Sert pour les valeurs paramétrables qui
+/// apparaissent côté public (footer, FAQ, contact). Cachée 5min en lecture
+/// pour éviter les hits DB inutiles.
+model SiteConfig {
+  id            String   @id @default("default")
+  /// Email de contact général affiché dans la FAQ, footer, etc.
+  supportEmail  String   @default("hello@backmesdo.com")
+  /// Email dédié RGPD / vie privée
+  privacyEmail  String   @default("privacy@backmesdo.com")
+  /// Email dédié sécurité (CVE / responsible disclosure)
+  securityEmail String   @default("security@backmesdo.com")
+  /// Numéro WhatsApp de support (E.164 sans +, ex: 33612345678).
+  /// Affiché dans le bouton "Contact WhatsApp" si renseigné.
+  whatsappNumber String? @default("")
+  /// URL canonique du site (ex: https://www.backmesdo.com). Utilisée
+  /// pour les liens absolus dans les emails et OG tags.
+  siteUrl       String   @default("https://www.backmesdo.com")
+  updatedAt     DateTime @updatedAt
+}
+
+model AdsConfig {
+  id              String   @id @default("default")
+  /// Master switch global — si false, aucune pub n'est diffusée même en FREE
+  enabled         Boolean  @default(false)
+  /// Régies activées : ex ["admob", "meta_audience", "diaspora_partners"]
+  enabledNetworks Json     @default("[]")
+  /// Catégories autorisées : ex ["voyage", "mode", "telcos", "banques"]
+  allowedCategories Json   @default("[]")
+  /// Catégories bloquées (toujours, même si autorisées par défaut)
+  blockedCategories Json   @default("[\"crypto\",\"gambling\",\"predatory_credit\",\"alcohol\"]")
+  /// Plafond quotidien par utilisateur (3 = max 3 pubs/jour vues)
+  maxPerUserPerDay Int     @default(3)
+  /// Frequency cap interstitiel (ex: une fois toutes les 5 sessions)
+  interstitialEverySessions Int @default(5)
+  /// Formats activés : ["banner","interstitial","video","native"]
+  enabledFormats  Json     @default("[\"banner\"]")
+  updatedAt       DateTime @updatedAt
+}
+
+/// Connexion par scan QR depuis le mobile (spec §8.5).
+/// Le desktop crée une demande, le mobile scanne et approuve, le
+/// desktop échange contre un JWT. TTL 90s pour limiter les risques.
+model QrLoginRequest {
+  id          String    @id @default(uuid())
+  /// Token public court inclus dans le QR (32 bytes URL-safe)
+  token       String    @unique
+  /// User qui a approuvé (null tant que PENDING)
+  userId      String?
+  user        User?     @relation("QrLoginUser", fields: [userId], references: [id], onDelete: SetNull)
+  /// PENDING / APPROVED / USED / EXPIRED
+  status      String    @default("PENDING")
+  /// User-agent du device qui a créé la demande
+  device      String?
+  expiresAt   DateTime
+  approvedAt  DateTime?
+  usedAt      DateTime?
+  createdAt   DateTime  @default(now())
+
+  @@index([token])
+  @@index([expiresAt])
+}
+
+enum ContactType {
+  PHONE
+  EMAIL
+}
+
+model UserContact {
+  id          String      @id @default(uuid())
+  userId      String
+  user        User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type        ContactType
+  value       String
+  isVerified  Boolean     @default(false)
+  isPrimary   Boolean     @default(false)
+  verifiedAt  DateTime?
+  createdAt   DateTime    @default(now())
+
+  @@unique([type, value])
+  @@index([userId])
+}
+
+model OtpCode {
+  id           String      @id @default(uuid())
+  contactType  ContactType
+  contactValue String
+  codeHash     String
+  attempts     Int         @default(0)
+  expiresAt    DateTime
+  consumedAt   DateTime?
+  createdAt    DateTime    @default(now())
+
+  @@index([contactType, contactValue, consumedAt])
+}
+
+/// Passkey (FIDO2 / WebAuthn) — spec §7.5.
+///
+/// Une passkey = une paire de clés cryptographiques générée par le device
+/// (Touch ID / Face ID / Windows Hello / clé USB Yubikey…). On stocke
+/// uniquement la clé publique. La clé privée reste sur le device.
+///
+/// Le credentialId est l'identifiant que le navigateur renvoie au moment
+/// du login (le serveur dit "voici la liste des credentials autorisés
+/// pour ce user, lequel veux-tu utiliser ?"). On l'index pour les lookups.
+///
+/// `counter` (signature counter) : protection anti-replay. Le device
+/// incrémente ce compteur à chaque utilisation. Si on voit un counter
+/// inférieur ou égal au précédent, c'est un signe de clone potentiel.
+model Passkey {
+  id              String   @id @default(uuid())
+  userId          String
+  user            User     @relation("UserPasskeys", fields: [userId], references: [id], onDelete: Cascade)
+  /// credentialId du WebAuthn (base64url, ~64 bytes typiquement)
+  credentialId    String   @unique
+  /// Clé publique au format COSE base64url
+  publicKey       String
+  /// Compteur de signature (anti-replay)
+  counter         BigInt   @default(0)
+  /// Algorithme COSE utilisé (-7 = ES256, -257 = RS256, -8 = EdDSA…)
+  algorithm       Int      @default(-7)
+  /// Transports supportés (usb / nfc / ble / internal / hybrid) — sérialisé CSV
+  transports      String?
+  /// Nom donné par l'utilisateur ("iPhone de Marie", "MacBook Pro", "Yubikey perso")
+  deviceName      String   @default("Passkey")
+  /// AAGUID du authenticator (16 bytes hex) — utile pour identifier le modèle.
+  /// Optionnel : pas tous les authenticators l'exposent.
+  aaguid          String?
+  createdAt       DateTime @default(now())
+  lastUsedAt      DateTime?
+
+  @@index([userId])
+}
+
+model Session {
+  id        String    @id @default(uuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String    @unique
+  device    String?
+  expiresAt DateTime
+  createdAt DateTime  @default(now())
+  revokedAt DateTime?
+}
+
+// ============================================================
+// GROUPS
+// ============================================================
+
+enum GroupType {
+  TONTINE
+  COLOC
+  TRAVEL
+  EVENT
+  CLUB
+  PARISH
+  GENERIC
+}
+
+enum MemberRole {
+  ADMIN
+  TREASURER
+  MEMBER
+  OBSERVER
+}
+
+model Group {
+  id              String    @id @default(uuid())
+  name            String
+  type            GroupType
+  defaultCurrency String    @default("EUR")
+  createdById     String
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  members        GroupMember[]
+  expenses       Expense[]
+  settlements    Settlement[]
+  tontine        Tontine?
+  debtSwaps      DebtSwap[]
+  splitPresets   SplitPreset[]
+  inviteTokens   GroupInviteToken[]
+  activityLogs   ActivityLog[]
+  debtTransfers  DebtTransfer[]
+  categoryRules  GroupCategoryRule[]
+  theme          GroupTheme?
+  /// Sprint AC-2 · Réunions enregistrées (procès-verbaux audio)
+  meetings       MeetingRecord[]    @relation("GroupMeetings")
+}
+
+model GroupMember {
+  id       String     @id @default(uuid())
+  groupId  String
+  group    Group      @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  userId   String
+  user     User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role     MemberRole @default(MEMBER)
+  joinedAt DateTime   @default(now())
+  /// Mode "Ne pas déranger" pour ce groupe (spec §3.12).
+  /// Si true, le membre ne reçoit pas de notification pour les évènements
+  /// du groupe (sauf SETTLEMENT_PROPOSED qui le concerne directement).
+  doNotDisturb Boolean @default(false)
+
+  expenseShares ExpenseShare[]
+
+  @@unique([groupId, userId])
+  @@index([userId])
+}
+
+/// Réponse NPS (Net Promoter Score) d'un user (spec §9.3).
+/// "Sur une échelle de 0 à 10, à quel point recommanderais-tu BMD ?"
+/// + un commentaire libre optionnel.
+///
+/// Trigger : composant in-app qui s'affiche tous les ~30 jours pour les
+/// users actifs (5+ dépenses créées dans le mois). Ne se redemande pas
+/// avant 90 jours après une réponse pour ne pas spammer.
+///
+/// Score NPS = % promoteurs (9-10) − % détracteurs (0-6). Calcul mensuel.
+model NpsResponse {
+  id        String   @id @default(uuid())
+  userId    String
+  /// Note 0-10
+  score     Int
+  /// Commentaire libre (raison du score)
+  comment   String?
+  /// Source : "in_app" / "email" / "post_action" (après une grosse action)
+  source    String   @default("in_app")
+  /// Plan du user au moment de la réponse (pour segmenter)
+  planCode  String
+  createdAt DateTime @default(now())
+
+  @@index([userId, createdAt])
+  @@index([createdAt])
+}
+
+/// A/B testing pour les templates de notifications (spec §6.9).
+/// Permet à l'admin de créer plusieurs variantes d'un template (ex: subject
+/// d'email, body de push) et de les distribuer aléatoirement aux users
+/// pour mesurer laquelle convertit le mieux.
+///
+/// Workflow :
+///  1. Admin crée un test "weekly_summary_subject_test_2026_05" avec
+///     2 variants A et B (poids 50/50)
+///  2. À chaque envoi via le scheduler weeklySummary, le code appelle
+///     `assignVariant(testCode, userId)` qui retourne A ou B en hash stable
+///     (le même user voit toujours le même variant pour ce test)
+///  3. Si l'user clique le lien dans l'email/notif → `recordConversion()`
+///     enregistre l'attribution
+///  4. Admin voit dans `/admin/ab-tests/:code` le taux de conversion par variant
+model AbTest {
+  id          String     @id @default(uuid())
+  /// Code stable du test (ex: "weekly_summary_subject_2026_05") — unique
+  code        String     @unique
+  /// Description humaine (ce qu'on teste, hypothèse)
+  description String?
+  /// Statut : "draft" / "running" / "paused" / "completed"
+  status      String     @default("draft")
+  /// Date de démarrage (null si pas encore lancé)
+  startedAt   DateTime?
+  /// Date de fin (null si pas encore terminé)
+  completedAt DateTime?
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+
+  variants    AbTestVariant[]
+  assignments AbTestAssignment[]
+}
+
+model AbTestVariant {
+  id          String   @id @default(uuid())
+  testId      String
+  test        AbTest   @relation(fields: [testId], references: [id], onDelete: Cascade)
+  /// Identifiant du variant ("A", "B", "control", "treatment_long_subject"…)
+  code        String
+  /// Contenu du variant en JSON libre (ex: { subject: "...", body: "..." })
+  payload     Json     @default("{}")
+  /// Poids relatif pour la distribution (par défaut 1 = équipartition)
+  weight      Int      @default(1)
+  /// Compteur de conversions (incrémenté à chaque recordConversion)
+  conversions Int      @default(0)
+  createdAt   DateTime @default(now())
+
+  assignments AbTestAssignment[]
+
+  @@unique([testId, code])
+}
+
+/// Assignation d'un user à un variant — sticky (le même user voit toujours
+/// le même variant). Permet aussi de calculer le taux de conversion :
+/// conversions / assignments.
+model AbTestAssignment {
+  id           String        @id @default(uuid())
+  testId       String
+  test         AbTest        @relation(fields: [testId], references: [id], onDelete: Cascade)
+  variantId    String
+  variant      AbTestVariant @relation(fields: [variantId], references: [id], onDelete: Cascade)
+  userId       String
+  /// True si l'user a converti (cliqué le CTA du variant)
+  converted    Boolean       @default(false)
+  convertedAt  DateTime?
+  assignedAt   DateTime      @default(now())
+
+  @@unique([testId, userId])
+  @@index([variantId])
+}
+
+/// Tracking d'impressions/clics publicitaires (spec §6.4).
+/// Permet à l'admin de mesurer eCPM par catégorie/régie + corréler
+/// l'exposition aux pubs avec le taux de churn / conversion premium.
+///
+/// Insertion fire-and-forget depuis le frontend (route `/ads/track`).
+/// Volume potentiel : très élevé (1 ligne par pub vue) — partition par date
+/// possible plus tard si besoin (pour MVP : pas d'index complexe).
+model AdImpression {
+  id          String   @id @default(uuid())
+  /// User exposé (peut être null pour les pubs anonymes hors-app)
+  userId      String?
+  /// Régie publicitaire : "admob", "meta", "diaspora_partner_xyz"
+  network     String
+  /// Catégorie (ex: "voyage", "telco", "banque", "mode")
+  category    String
+  /// Format : "banner", "interstitial", "video", "native"
+  format      String
+  /// Type d'événement : "impression" (vue) | "click" (clic) | "close" (fermé sans click)
+  event       String
+  /// Revenu estimé en centimes EUR pivot (renvoyé par la régie au moment de l'impression)
+  revenueCents Int     @default(0)
+  /// Pays détecté (CF-IPCountry header) — utile pour eCPM par région
+  country     String?
+  createdAt   DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([network, createdAt])
+  @@index([category, createdAt])
+}
+
+/// Token API pour intégrations tierces (spec §6.10).
+/// Permet à un partenaire (banque, paroisse, asso, autre app) de lire/écrire
+/// des données via l'API publique BMD avec un token Bearer.
+///
+/// Scopes : champ JSON listant les permissions accordées :
+///   ["groups:read", "expenses:read", "tontines:read", "expenses:write", ...]
+///
+/// Sécurité : on stocke le hash SHA-256 du token, pas la valeur claire.
+/// Au moment de la création on retourne UNE FOIS la valeur claire au partenaire.
+/// Si perdu, il doit en générer un nouveau.
+model PartnerApiToken {
+  id          String    @id @default(uuid())
+  /// Nom humain (ex: "Intégration paroisse Saint-Martin")
+  name        String
+  /// Hash SHA-256 du token clair (la valeur claire n'est jamais stockée)
+  tokenHash   String    @unique
+  /// Préfixe public visible pour identifier le token (ex: "bmd_pk_a1b2c3")
+  /// Permet à l'admin de retrouver un token sans révéler la valeur complète.
+  tokenPrefix String
+  /// Scopes : tableau de strings ex ["groups:read", "expenses:read"]
+  scopes      Json      @default("[]")
+  /// User qui a créé le token (audit)
+  createdById String
+  /// Date d'expiration optionnelle (null = pas d'expiration)
+  expiresAt   DateTime?
+  /// Date de la dernière utilisation (debug + audit)
+  lastUsedAt  DateTime?
+  /// IP du dernier appel (audit)
+  lastUsedIp  String?
+  /// Date de révocation (null = actif)
+  revokedAt   DateTime?
+  createdAt   DateTime  @default(now())
+
+  webhooks    PartnerWebhook[]
+
+  @@index([createdById])
+  @@index([revokedAt])
+}
+
+/// Webhook sortant pour notifier un partenaire d'un événement (spec §6.10).
+/// Liés à un `PartnerApiToken` — quand le token est révoqué, les webhooks
+/// associés sont aussi désactivés. Les events publiés sont signés HMAC pour
+/// que le partenaire puisse vérifier l'authenticité.
+model PartnerWebhook {
+  id          String          @id @default(uuid())
+  tokenId     String
+  token       PartnerApiToken @relation(fields: [tokenId], references: [id], onDelete: Cascade)
+  /// URL de destination (https requis en prod)
+  url         String
+  /// Secret HMAC SHA-256 partagé avec le partenaire (header X-BMD-Signature)
+  secret      String
+  /// Liste des events qui déclenchent ce webhook (ex: ["expense.created", "settlement.confirmed"])
+  events      Json            @default("[]")
+  /// Date de la dernière livraison réussie
+  lastDeliveryAt DateTime?
+  /// Code HTTP de la dernière livraison (200/4xx/5xx)
+  lastStatus  Int?
+  /// Compteur d'échecs consécutifs (>= 5 → désactivation auto)
+  failureCount Int            @default(0)
+  /// True si désactivé (après trop d'échecs ou par admin)
+  disabled    Boolean         @default(false)
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+
+  @@index([tokenId])
+}
+
+/// Charte graphique propre à un groupe (spec §6.8).
+/// Permet à une paroisse / association de personnaliser les couleurs pour
+/// que ses utilisateurs reconnaissent immédiatement leur communauté
+/// (ex: paroisse Saint-Martin → couleurs liturgiques violet/or).
+///
+/// Le frontend lit ces variables et les applique en CSS custom properties
+/// au scope du groupe (pas globalement, pour ne pas casser le reste de l'app).
+model GroupTheme {
+  id            String   @id @default(uuid())
+  groupId       String   @unique
+  group         Group    @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  /// Couleur primaire (hex avec #) utilisée pour CTA, icônes, accents.
+  primaryColor  String   @default("#e8a33d")
+  /// Couleur d'accent secondaire (hover, badges, sub-CTA).
+  accentColor   String   @default("#b54732")
+  /// URL de logo personnalisé (servi via /api/files ou CDN externe).
+  /// Si null → logo BMD par défaut.
+  logoUrl       String?
+  /// Mode d'affichage : light / dark / system. Default = inherits user pref.
+  preferredMode String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+}
+
+/// Règle de partage par catégorie (spec §3.7).
+/// Permet à l'admin du groupe de définir, pour une catégorie de dépense
+/// donnée, le mode de partage par défaut + les participants par défaut.
+/// Exemple : « toutes les dépenses de transport sont partagées entre tous ».
+/// Le frontend pré-remplit le form au moment de la création d'une dépense
+/// si la catégorie sélectionnée a une règle.
+model GroupCategoryRule {
+  id                String  @id @default(uuid())
+  groupId           String
+  group             Group   @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  /// Catégorie ciblée (resto / courses / transport / logement / loisirs / autres)
+  category          String
+  /// Mode de partage par défaut pour cette catégorie (mêmes valeurs que SplitMode).
+  defaultSplitMode  String  @default("EQUAL")
+  /// UserIds des participants par défaut (sérialisé JSON pour flexibilité).
+  /// Si null/[], utilise tous les membres du groupe.
+  defaultParticipantUserIds Json @default("[]")
+  /// UserId du payeur par défaut (null = créateur de la dépense).
+  defaultPaidByUserId String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@unique([groupId, category])
+  @@index([groupId])
+}
+
+// ============================================================
+// EXPENSES
+// ============================================================
+
+enum SplitMode {
+  EQUAL
+  UNEQUAL
+  PERCENTAGE
+  /// Chaque ligne du ticket est attribuée individuellement.
+  /// Le total à payer par membre = somme des items qu'il a réclamés
+  /// (avec partage possible si plusieurs réclament la même ligne).
+  ITEMIZED
+}
+
+model Expense {
+  id          String    @id @default(uuid())
+  groupId     String
+  group       Group     @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  description String
+  amount      Decimal   @db.Decimal(14, 4)
+  currency    String
+  category    String?
+  /// Payeur principal (rétro-compat — toujours rempli pour les vieux flows).
+  /// Si plusieurs personnes ont avancé, voir `payers ExpensePayer[]` (AC-2).
+  paidById    String
+  paidBy      User      @relation("ExpensePaidBy", fields: [paidById], references: [id])
+  splitMode   SplitMode @default(EQUAL)
+  occurredAt  DateTime  @default(now())
+  createdAt   DateTime  @default(now())
+  /// Sprint AC-2 · Si non-null, cette dépense a été créée automatiquement
+  /// depuis une réunion (procès-verbal de tontine). Sert à l'audit trail
+  /// et à empêcher la double-application de la même réunion.
+  meetingRecordId String?
+  meetingRecord   MeetingRecord? @relation("MeetingExpenses", fields: [meetingRecordId], references: [id], onDelete: SetNull)
+
+  shares      ExpenseShare[]
+  attachments ExpenseAttachment[]
+  items       ExpenseItem[]
+  /// Sprint AC-2 · Multi-payeurs (plusieurs personnes ont avancé).
+  /// Vide → le payeur unique est `paidById` (mode rétro-compat).
+  /// Si rempli, la somme des `amount` de payers DOIT == `amount` de Expense
+  /// (validation côté service).
+  payers      ExpensePayer[]
+
+  @@index([groupId, occurredAt])
+  @@index([meetingRecordId])
+}
+
+/// Sprint AC-2 · Multi-payeurs pour une dépense.
+///
+/// Cas d'usage : 3 personnes ont chacune avancé une partie du repas
+/// (Karim 30€, Linda 50€, Yacine 20€ pour un total de 100€). On enregistre
+/// chacun individuellement avec son montant ou son pourcentage, et le
+/// service de balance les crédite tous proportionnellement.
+///
+/// Règles :
+///   - Si `amount` est rempli, on l'utilise directement (somme = total expense).
+///   - Sinon, `percent` est utilisé (somme = 100, calcul à partir du total).
+///   - On ne peut pas mixer les deux modes dans la même dépense.
+///   - Au moins 1 ExpensePayer requis si on active le mode multi-payeurs.
+model ExpensePayer {
+  id        String  @id @default(uuid())
+  expenseId String
+  expense   Expense @relation(fields: [expenseId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User    @relation("ExpensePayerUser", fields: [userId], references: [id])
+  /// Montant avancé par cet utilisateur (devise de la dépense).
+  /// Mutuellement exclusif avec `percent`.
+  amount    Decimal? @db.Decimal(14, 4)
+  /// Pourcentage du total avancé par cet utilisateur (0-100).
+  /// Mutuellement exclusif avec `amount`.
+  percent   Decimal? @db.Decimal(6, 3)
+
+  @@unique([expenseId, userId])
+  @@index([userId])
+}
+
+/// Ligne d'un ticket : un item consommé (entrée, plat, boisson, etc.).
+/// Détecté par OCR ou saisi manuellement. Chaque membre peut "réclamer"
+/// les items qu'il a consommés via ExpenseItemClaim.
+///
+/// La somme des totalPrice DOIT correspondre au montant de la dépense
+/// (validation côté service). Sinon, on saisit l'écart en "frais partagés"
+/// (split equal entre tous).
+model ExpenseItem {
+  id          String   @id @default(uuid())
+  expenseId   String
+  expense     Expense  @relation(fields: [expenseId], references: [id], onDelete: Cascade)
+  /// Position dans le ticket (pour l'ordre d'affichage)
+  position    Int
+  description String
+  /// Quantité (par défaut 1 ; ex: "2 cafés")
+  quantity    Decimal  @default(1) @db.Decimal(8, 3)
+  /// Prix unitaire HT/TTC selon le ticket (le service est neutre, tout est traité comme TTC)
+  unitPrice   Decimal  @db.Decimal(14, 4)
+  /// Prix total ligne = quantity × unitPrice (stocké pour éviter drifts d'arrondi)
+  totalPrice  Decimal  @db.Decimal(14, 4)
+  /// Catégorie inférée par l'IA (boisson, plat, dessert…) pour stats
+  category    String?
+  createdAt   DateTime @default(now())
+
+  claims      ExpenseItemClaim[]
+
+  @@index([expenseId, position])
+}
+
+/// Réclamation d'une portion d'un item par un membre.
+/// share = 1.0 par défaut (tout l'item) ; si plusieurs membres réclament
+/// le même item, on divise (ex: 0.5 chacun pour partage à 2).
+/// La somme des shares d'un même item DOIT être = 1.0 (sinon on rembourse
+/// le reste équitablement entre tous les claimants — règle fail-safe).
+model ExpenseItemClaim {
+  id     String      @id @default(uuid())
+  itemId String
+  item   ExpenseItem @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  userId String
+  user   User        @relation("ExpenseItemClaim", fields: [userId], references: [id], onDelete: Cascade)
+  /// Fraction réclamée (0 < share <= 1.0).
+  share  Decimal     @default(1) @db.Decimal(5, 4)
+  createdAt DateTime @default(now())
+
+  @@unique([itemId, userId])
+  @@index([userId])
+}
+
+/// Pièce jointe à une dépense (justificatif).
+/// Tous les membres du groupe peuvent VOIR et TÉLÉCHARGER les pièces jointes
+/// (transparence). Seul le payeur (créateur) ou un admin du groupe peut
+/// ajouter ou supprimer une pièce jointe.
+///
+/// Le fichier physique est stocké en local sur le disque de l'API (champ
+/// storageKey = chemin relatif à apps/api/uploads/). En prod on pourra
+/// basculer vers S3/R2 sans changer le schéma.
+/// Sprint AC-2 · Distingue les types de pièces jointes pour qu'on puisse
+/// rendre l'UI différemment (un audio se joue dans un lecteur, un reçu
+/// s'affiche en image, etc.) et pour que le matching OCR ne traite pas
+/// les audios comme s'ils étaient des images.
+enum AttachmentKind {
+  RECEIPT      // Photo / scan d'un ticket de caisse, facture
+  PHOTO        // Photo libre (objet acheté, lieu, etc.)
+  AUDIO_PROOF  // Enregistrement vocal — preuve de dépense (marché Afrique)
+  DOCUMENT     // PDF / autres
+}
+
+model ExpenseAttachment {
+  id           String   @id @default(uuid())
+  expenseId    String
+  expense      Expense  @relation(fields: [expenseId], references: [id], onDelete: Cascade)
+  uploadedById String
+  uploadedBy   User     @relation("AttachmentUploader", fields: [uploadedById], references: [id])
+  fileName     String   // nom original (pour l'affichage et le download)
+  mimeType     String
+  sizeBytes    Int
+  storageKey   String   // chemin relatif disque (uploads/<uuid>.<ext>)
+  createdAt    DateTime @default(now())
+  /// Sprint AC-2 · Type de pièce jointe (RECEIPT par défaut pour rétro-compat).
+  /// Pour AUDIO_PROOF on rend un lecteur audio + transcription dans l'UI.
+  kind         AttachmentKind @default(RECEIPT)
+  /// Sprint AC-2 · Transcription Whisper du fichier audio (preuve de dépense).
+  /// Rempli uniquement si kind = AUDIO_PROOF. Stocké pour l'affichage et la
+  /// recherche, sans avoir à re-transcrire à chaque consultation.
+  transcript   String?
+  /// Langue détectée par Whisper (code ISO 2 lettres) — info debug.
+  transcriptLanguage String?
+
+  @@index([expenseId])
+  @@index([expenseId, kind])
+}
+
+model ExpenseShare {
+  id            String      @id @default(uuid())
+  expenseId     String
+  expense       Expense     @relation(fields: [expenseId], references: [id], onDelete: Cascade)
+  groupMemberId String
+  groupMember   GroupMember @relation(fields: [groupMemberId], references: [id], onDelete: Cascade)
+  userId        String
+  user          User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  amountOwed    Decimal     @db.Decimal(14, 4)
+
+  @@index([expenseId])
+  @@index([userId])
+}
+
+// ============================================================
+// SETTLEMENTS
+// ============================================================
+
+enum SettlementStatus {
+  PROPOSED
+  PAID
+  CONFIRMED
+  CANCELLED
+}
+
+model Settlement {
+  id                 String           @id @default(uuid())
+  groupId            String
+  group              Group            @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  fromUserId         String
+  fromUser           User             @relation("SettlementFrom", fields: [fromUserId], references: [id])
+  toUserId           String
+  toUser             User             @relation("SettlementTo", fields: [toUserId], references: [id])
+  amount             Decimal          @db.Decimal(14, 4)
+  currency           String
+  status             SettlementStatus @default(PROPOSED)
+  proposedAt         DateTime         @default(now())
+  confirmedByPayerAt DateTime?
+  confirmedByPayeeAt DateTime?
+  paymentTokens      SettlementPaymentToken[]
+  /// V30 — Si non-null, ce settlement est un "child" d'une CrossGroupSettlement
+  /// (règlement en 1 tap qui solde plusieurs groupes simultanément). Les enfants
+  /// voient leur status passer atomiquement quand le parent change d'état.
+  /// Null pour les settlements traditionnels (un seul groupe à la fois).
+  crossGroupId       String?
+  crossGroup         CrossGroupSettlement? @relation("CrossGroupChildren", fields: [crossGroupId], references: [id], onDelete: SetNull)
+
+  @@index([crossGroupId])
+}
+
+// ============================================================
+// V30 · CROSS-GROUP SETTLEMENTS (règlement multi-groupe en 1 tap)
+// ============================================================
+
+/// Un règlement "parent" qui solde plusieurs dettes éparpillées sur N groupes
+/// en une seule transaction externe (Mobile Money, virement, espèces).
+///
+/// Cas d'usage : Karim doit 80€ à Alice sur Voyage Lisbonne, 100€ sur Coloc
+/// Bordeaux, et Alice doit 37,50€ à Karim sur Tontine Noël. Net = +142,50€
+/// que Karim doit à Alice. Au lieu de créer 3 settlements séparés, on crée
+/// un CrossGroupSettlement de 142,50€ avec 3 children attachés (un par groupe
+/// affecté). Quand Alice confirme la réception → tous les enfants passent
+/// CONFIRMED en 1 transaction Prisma → les 3 soldes de groupes vont à 0.
+///
+/// `totalAmount` = montant net en devise utilisateur (ce qui circule réellement
+/// en cash entre les 2 personnes). Les enfants gardent leur amount d'origine
+/// dans la devise du groupe — la conversion FX a été faite au moment de la
+/// négociation.
+model CrossGroupSettlement {
+  id                 String           @id @default(uuid())
+  /// Le débiteur net — celui qui paye réellement le `totalAmount`.
+  fromUserId         String
+  fromUser           User             @relation("CrossSettlementFrom", fields: [fromUserId], references: [id])
+  /// Le créancier net — celui qui reçoit `totalAmount`.
+  toUserId           String
+  toUser             User             @relation("CrossSettlementTo", fields: [toUserId], references: [id])
+  /// Montant net échangé dans la transaction externe (devise utilisateur).
+  totalAmount        Decimal          @db.Decimal(14, 4)
+  /// Devise dans laquelle `totalAmount` est exprimé.
+  currency           String
+  /// Suit le même cycle que Settlement : PROPOSED → PAID → CONFIRMED.
+  status             SettlementStatus @default(PROPOSED)
+  proposedAt         DateTime         @default(now())
+  confirmedByPayerAt DateTime?
+  confirmedByPayeeAt DateTime?
+  /// Note libre du créancier (ex : "Mobile Money MoMo référence ABC123").
+  memo               String?
+  /// Children — créés au même moment que le parent (FK back).
+  children           Settlement[]     @relation("CrossGroupChildren")
+
+  @@index([fromUserId])
+  @@index([toUserId])
+  @@index([status])
+}
+
+// ============================================================
+// TONTINES (M08) — épargne collective rotative
+// ============================================================
+
+enum TontineFrequency {
+  WEEKLY
+  BIWEEKLY
+  MONTHLY
+}
+
+enum TontineStatus {
+  DRAFT       // configurée mais pas encore lancée
+  ACTIVE      // en cours
+  COMPLETED   // tous les tours réalisés
+  CANCELLED
+}
+
+enum BeneficiaryOrderMode {
+  RANDOM      // ordre tiré au sort à la création
+  MANUAL      // ordre défini par l'admin
+  AUCTION     // enchères type Hui (à venir)
+}
+
+model Tontine {
+  id                    String                @id @default(uuid())
+  groupId               String                @unique
+  group                 Group                 @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  contributionAmount    Decimal               @db.Decimal(14, 4)
+  currency              String
+  frequency             TontineFrequency
+  startDate             DateTime
+  status                TontineStatus         @default(DRAFT)
+  orderMode             BeneficiaryOrderMode  @default(MANUAL)
+  centralizedPot        Boolean               @default(true)  // true = cagnotte centralisée, false = paiements directs au bénéficiaire
+  notes                 String?
+  createdAt             DateTime              @default(now())
+  updatedAt             DateTime              @updatedAt
+  cancelledAt           DateTime?
+  completedAt           DateTime?
+
+  turns TontineTurn[]
+}
+
+enum TurnStatus {
+  PENDING       // pas encore commencé
+  IN_PROGRESS   // ouvert aux cotisations
+  DISTRIBUTED   // pot remis au bénéficiaire
+  CANCELLED
+}
+
+model TontineTurn {
+  id                String      @id @default(uuid())
+  tontineId         String
+  tontine           Tontine     @relation(fields: [tontineId], references: [id], onDelete: Cascade)
+  turnNumber        Int
+  beneficiaryUserId String
+  beneficiary       User        @relation("TurnBeneficiary", fields: [beneficiaryUserId], references: [id])
+  /// Date initiale calculée d'après startDate + frequency (modifiable par le bénéficiaire dans son mois)
+  dueDate           DateTime
+  /// Date exacte choisie par le bénéficiaire dans la fenêtre du mois (peut être null si non encore fixée)
+  scheduledDate     DateTime?
+  /// Date où le bénéficiaire a fixé scheduledDate (pour les notifs)
+  scheduledAt       DateTime?
+  distributedAt     DateTime?
+  status            TurnStatus  @default(PENDING)
+
+  contributions     TontineContribution[]
+  /// Accusés de réception des autres membres après que le bénéficiaire a fixé sa date
+  acknowledgments   TontineTurnAck[]
+  /// Enchères posées par les membres pour ce tour (mode AUCTION — Hui)
+  bids              TontineBid[]   @relation("TurnBids")
+
+  @@unique([tontineId, turnNumber])
+  @@index([beneficiaryUserId])
+}
+
+/// Accusé de réception de la date choisie par le bénéficiaire d'un tour.
+/// Une fois que le bénéficiaire fixe scheduledDate, chaque autre membre
+/// doit "accuser réception" pour confirmer qu'il a noté la date.
+model TontineTurnAck {
+  id              String      @id @default(uuid())
+  turnId          String
+  turn            TontineTurn @relation(fields: [turnId], references: [id], onDelete: Cascade)
+  userId          String
+  user            User        @relation("TontineTurnAck", fields: [userId], references: [id], onDelete: Cascade)
+  acknowledgedAt  DateTime    @default(now())
+
+  @@unique([turnId, userId])
+}
+
+enum ContributionStatus {
+  PENDING       // attendue, pas encore versée
+  PAID          // l'utilisateur dit avoir payé
+  CONFIRMED     // bénéficiaire/admin a confirmé la réception
+  MISSED        // n'a pas payé (anti-fraude)
+}
+
+model TontineContribution {
+  id                String              @id @default(uuid())
+  turnId            String
+  turn              TontineTurn         @relation(fields: [turnId], references: [id], onDelete: Cascade)
+  contributorUserId String
+  contributor       User                @relation(fields: [contributorUserId], references: [id])
+  amount            Decimal             @db.Decimal(14, 4)
+  status            ContributionStatus  @default(PENDING)
+  paidAt            DateTime?
+  confirmedAt       DateTime?
+  paymentMethod     String?             // ex: "Wave", "Lydia", "Cash"
+  paymentReference  String?
+
+  @@unique([turnId, contributorUserId])
+  @@index([contributorUserId])
+}
+
+// ============================================================
+// MEETINGS (AC-2) — procès-verbaux de réunions de tontine
+// ============================================================
+//
+// Cas d'usage cible : les tontines de la diaspora se tiennent en réunion
+// physique ou audio (zoom, salon de coiffure, paroisse). Pendant la séance
+// quelqu'un parle, dit qui a payé combien à qui, qui touche le pot, qui
+// doit X à Y. Aujourd'hui ces décisions vivent dans des cahiers manuscrits
+// et finissent en disputes 6 mois plus tard.
+//
+// Le flow :
+//   1. Pendant la réunion, l'organisateur enregistre l'audio (téléphone posé).
+//   2. À la fin, il upload le fichier — le serveur transcrit (Whisper).
+//   3. Un LLM extrait les "décisions" (cotisations encaissées, dettes,
+//      remboursements, prochain bénéficiaire…) en JSON structuré.
+//   4. L'organisateur valide / corrige chaque ligne dans une UI.
+//   5. À la validation, on crée les Expenses / Settlements / TontineContribution
+//      correspondants en base, avec un lien `meetingRecordId` pour audit.
+//
+// Limitation par plan :
+//   FREE       — 0 (feature désactivée, paywall direct)
+//   PREMIUM    — 1 réunion / mois incluse, 2,99 € l'addon
+//   COMMUNITY  — 4 réunions / mois incluses, 1,99 € l'addon
+//   PARISH     — illimité
+//   EVENT      — 2 réunions incluses sur les 30j, 2,99 € l'addon
+
+enum MeetingStatus {
+  /// Audio uploadé, en file d'attente Whisper
+  PENDING
+  /// Whisper en cours
+  TRANSCRIBING
+  /// Whisper OK, LLM en cours
+  EXTRACTING
+  /// LLM OK, en attente de validation manuelle
+  REVIEW
+  /// Organisateur a validé → toutes les lignes ont été appliquées en base
+  APPLIED
+  /// Annulée (avant ou après extraction)
+  CANCELLED
+  /// Erreur fatale (transcription/extraction impossible)
+  FAILED
+}
+
+model MeetingRecord {
+  id              String         @id @default(uuid())
+  groupId         String
+  group           Group          @relation("GroupMeetings", fields: [groupId], references: [id], onDelete: Cascade)
+  /// Personne qui a uploadé l'enregistrement (généralement le secrétaire / trésorier)
+  createdById     String
+  createdBy       User           @relation("MeetingCreator", fields: [createdById], references: [id])
+  /// Titre choisi par l'organisateur (ex: "Réunion mensuelle mai 2026")
+  title           String
+  /// Date à laquelle la réunion a eu lieu (par défaut maintenant — modifiable)
+  occurredAt      DateTime       @default(now())
+  status          MeetingStatus  @default(PENDING)
+  /// Storage key du fichier audio (uploads/<uuid>.<ext>)
+  audioStorageKey String
+  /// Mime type de l'audio (audio/webm, audio/mp4, etc.)
+  audioMimeType   String
+  audioSizeBytes  Int
+  /// Durée en secondes (renseigné après Whisper)
+  durationSeconds Int?
+  /// Transcription brute (texte intégral du Whisper)
+  transcript      String?
+  /// Langue détectée (ISO 2 lettres)
+  language        String?
+  /// JSON brut renvoyé par le LLM (décisions extraites avant validation)
+  /// Format : { decisions: [{ kind: "EXPENSE"|"SETTLEMENT"|"TONTINE_CONTRIBUTION"|"NOTE", ... }], summary: "..." }
+  /// On le persiste pour pouvoir réafficher la review sans rappeler le LLM.
+  extractedJson   Json?
+  /// Résumé court (1-2 phrases) pour l'affichage liste
+  summary         String?
+  /// Coût total (centimes EUR) de cette réunion (Whisper + LLM tokens),
+  /// pour que les admins puissent suivre la rentabilité du forfait.
+  costCents       Int            @default(0)
+  /// Si > 0, l'organisateur a payé un addon "réunion supplémentaire" pour ce mois
+  /// (ex: 299 = 2,99 € pour PREMIUM). 0 = inclus dans son forfait mensuel.
+  addonCents      Int            @default(0)
+  /// Stripe payment intent ID si addon facturé (pour réconciliation)
+  addonStripeId   String?
+  errorMessage    String?
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+  appliedAt       DateTime?
+
+  /// Dépenses créées depuis cette réunion (pour audit + rollback éventuel)
+  expenses        Expense[]      @relation("MeetingExpenses")
+
+  @@index([groupId, occurredAt])
+  @@index([createdById])
+  @@index([status])
+}
+
+// ============================================================
+// DEBT SWAP (M09) — compensation triangulaire / N-aire
+// ============================================================
+
+enum DebtSwapStatus {
+  PROPOSED    // proposition active, en attente d'acceptations
+  ACCEPTED    // toutes les parties ont accepté → compensation effective
+  REJECTED    // au moins une partie a refusé
+  EXPIRED     // pas accepté dans les 48h
+  CANCELLED   // proposeur a annulé
+}
+
+model DebtSwap {
+  id            String          @id @default(uuid())
+  groupId       String
+  group         Group           @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  proposedById  String
+  status        DebtSwapStatus  @default(PROPOSED)
+  description   String?         // ex: "Simplification de 3 dettes croisées"
+  totalSavedAmount Decimal      @db.Decimal(14, 4)  // montant total compensé (combien d'argent évite de circuler)
+  expiresAt     DateTime
+  createdAt     DateTime        @default(now())
+  resolvedAt    DateTime?
+
+  participants DebtSwapParticipant[]
+  legs         DebtSwapLeg[]
+
+  @@index([groupId, status])
+}
+
+model DebtSwapParticipant {
+  id          String          @id @default(uuid())
+  swapId      String
+  swap        DebtSwap        @relation(fields: [swapId], references: [id], onDelete: Cascade)
+  userId      String
+  user        User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  acceptedAt  DateTime?       // null = pas encore répondu
+  rejectedAt  DateTime?
+
+  @@unique([swapId, userId])
+}
+
+// "leg" = un transfert virtuel résultant du swap (qui doit payer combien à qui APRÈS la compensation)
+model DebtSwapLeg {
+  id           String   @id @default(uuid())
+  swapId       String
+  swap         DebtSwap @relation(fields: [swapId], references: [id], onDelete: Cascade)
+  fromUserId   String
+  toUserId     String
+  amount       Decimal  @db.Decimal(14, 4)
+  currency     String
+}
+
+// ============================================================
+// SPLIT PRESETS (M10) — modèles de partage réutilisables par groupe
+// ============================================================
+
+model SplitPreset {
+  id          String   @id @default(uuid())
+  groupId     String
+  group       Group    @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  name        String              // ex: "Couple seul", "Comité salle (8 personnes)", "Famille 60% / amis 40%"
+  splitMode   SplitMode
+  // structure : { participants: [{userId, share}], paidByUserId? }
+  // stockée en JSON pour flexibilité
+  config      Json
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([groupId])
+}
+
+// ============================================================
+// GROUP INVITE TOKENS — pour partager un lien rejoignable
+// ============================================================
+
+model GroupInviteToken {
+  id          String    @id @default(uuid())
+  token       String    @unique // chaîne URL-safe utilisée dans le lien
+  groupId     String
+  group       Group     @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  createdById String
+  createdBy   User      @relation("InviteTokensCreatedBy", fields: [createdById], references: [id])
+  maxUses     Int?      // null = illimité
+  uses        Int       @default(0)
+  expiresAt   DateTime?
+  createdAt   DateTime  @default(now())
+  revokedAt   DateTime?
+
+  outreaches  InvitationOutreach[]
+
+  @@index([groupId])
+  @@index([token])
+}
+
+/// Suivi d'une invitation envoyée à un contact spécifique (spec §7.6).
+/// Permet à l'organisateur de voir : envoyée, ouverte, acceptée, payée +
+/// permet au scheduler de déclencher des relances auto J+2 / J+5 / J+10
+/// si le destinataire n'a pas rejoint.
+model InvitationOutreach {
+  id              String           @id @default(uuid())
+  inviteTokenId   String
+  inviteToken     GroupInviteToken @relation(fields: [inviteTokenId], references: [id], onDelete: Cascade)
+  /// Contact destinataire (PHONE ou EMAIL)
+  contactType     ContactType
+  contactValue    String
+  /// Canal d'envoi initial : "WHATSAPP", "SMS", "EMAIL"
+  channel         String
+  /// Tonalité utilisée pour le 1er envoi (sympa / ferme / humour / pro)
+  tone            String           @default("sympa")
+  /// Statut : SENT (envoyée), OPENED (lien cliqué), JOINED (a rejoint le groupe), CANCELLED
+  status          String           @default("SENT")
+  /// Nombre de relances déjà envoyées (max 3 = J+2 + J+5 + J+10)
+  remindersSent   Int              @default(0)
+  /// Date de la dernière action (envoi ou relance)
+  lastSentAt      DateTime         @default(now())
+  /// Date d'ouverture du lien si trackée (peut être null)
+  openedAt        DateTime?
+  /// Date de jointure effective (si l'invité a rejoint)
+  joinedAt        DateTime?
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+
+  @@index([inviteTokenId])
+  @@index([contactValue])
+  @@index([status, lastSentAt])
+}
+
+// ============================================================
+// ACTIVITY LOG — fil d'événements par groupe (qui a fait quoi quand)
+// ============================================================
+
+enum ActivityKind {
+  GROUP_CREATED
+  MEMBER_JOINED
+  MEMBER_LEFT
+  MEMBER_REMOVED
+  ROLE_CHANGED
+  EXPENSE_ADDED
+  EXPENSE_UPDATED
+  EXPENSE_DELETED
+  TONTINE_CREATED
+  TONTINE_TURN_DISTRIBUTED
+  SWAP_PROPOSED
+  SWAP_ACCEPTED
+  SWAP_REJECTED
+  GROUP_RENAMED
+  GROUP_DELETED
+  INVITE_LINK_CREATED
+}
+
+model ActivityLog {
+  id        String       @id @default(uuid())
+  groupId   String
+  group     Group        @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  actorId   String?
+  actor     User?        @relation("ActivityActor", fields: [actorId], references: [id], onDelete: SetNull)
+  kind      ActivityKind
+  // Champ libre pour le contexte (description de la dépense, nom du membre, etc.)
+  payload   Json?
+  createdAt DateTime     @default(now())
+  /// Hash SHA-256 de l'entrée précédente du groupe (chaîne immuable, spec §3.6 §9.1).
+  /// Permet de détecter toute modification a posteriori : si on altère une
+  /// entrée, son hash change et toutes les suivantes deviennent invalides.
+  prevHash  String?
+  /// Hash SHA-256 de cette entrée elle-même = sha256(prevHash + id + groupId + actorId + kind + payload + createdAt).
+  /// Calculé à l'insertion et stocké pour vérification ultérieure.
+  selfHash  String?
+
+  @@index([groupId, createdAt])
+}
+
+// ============================================================
+// NOTIFICATIONS — informer les membres des événements impactants
+// ============================================================
+//
+// Chaque membre d'un groupe reçoit des notifications in-app pour les
+// événements qui le concernent : invitation, dépense ajoutée, swap
+// proposé, tontine activée, etc.
+//
+// Stratégie anti-spam :
+//  - Une seule notification par événement (pas de doublons)
+//  - L'utilisateur ne reçoit pas de notif pour ses propres actions
+//  - Possibilité d'ignorer/marquer-lu en bulk
+//  - link = URL relative à ouvrir au clic ("/dashboard/groups/xyz")
+//
+
+enum NotificationKind {
+  GROUP_INVITED            // tu as été ajouté à un groupe
+  MEMBER_JOINED            // un nouveau membre a rejoint un groupe dont tu fais partie
+  EXPENSE_ADDED            // nouvelle dépense dans un groupe dont tu fais partie
+  EXPENSE_UPDATED          // une dépense où tu es participant a changé
+  EXPENSE_DELETED          // une dépense où tu étais participant a été supprimée
+  SETTLEMENT_PROPOSED      // un règlement t'est demandé
+  SETTLEMENT_CONFIRMED     // un règlement que tu as fait a été confirmé
+  TONTINE_CREATED          // une tontine a démarré dans un groupe
+  TONTINE_ACTIVATED        // l'ordre des bénéficiaires est validé
+  TONTINE_TURN_DUE         // c'est ton tour de cotiser
+  TONTINE_TURN_DISTRIBUTED // tu as reçu ton tour
+  TONTINE_DATE_CHANGED     // un membre a fixé sa date dans le mois
+  SWAP_PROPOSED            // un swap te concerne et attend ta validation
+  SWAP_ACCEPTED            // un swap auquel tu participais a été accepté par tous
+  SWAP_REJECTED            // un swap a été refusé
+  DEBT_TRANSFER_PROPOSED   // un transfert de dette bilateral t'attend
+  DEBT_TRANSFER_ACCEPTED   // un transfert de dette a été accepté
+  DEBT_TRANSFER_REJECTED   // un transfert de dette a été refusé
+  ROLE_CHANGED             // ton rôle dans un groupe a changé
+  GROUP_DELETED            // un groupe dont tu faisais partie a été supprimé
+  ATTACHMENT_ADDED         // une pièce jointe a été ajoutée à une dépense
+  NEW_DEVICE_LOGIN         // une connexion depuis un nouvel appareil a été détectée (spec §7.5)
+  WEEKLY_SUMMARY           // résumé hebdomadaire d'un groupe (spec §3.12)
+  TONTINE_TURN_REMINDER    // rappel J-7 / J-3 / J-1 d'une cotisation (spec §3.4)
+  MEETING_READY            // Sprint AC-2 : une réunion est prête à être validée
+  MEETING_APPLIED          // Sprint AC-2 : les décisions d'une réunion ont été appliquées au groupe
+}
+
+model Notification {
+  id        String           @id @default(uuid())
+  userId    String
+  user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  kind      NotificationKind
+  title     String           // texte court visible dans la liste
+  body      String?          // texte plus long, affiché en expand
+  link      String?          // route relative à ouvrir au clic
+  /// Contexte structuré (ex: groupId, expenseId, actorName) pour rendu riche
+  payload   Json?
+  readAt    DateTime?
+  createdAt DateTime         @default(now())
+
+  @@index([userId, readAt])
+  @@index([userId, createdAt])
+}
+
+// ============================================================
+// DEBT TRANSFER — transfert bilatéral d'une dette dans un groupe
+// ============================================================
+//
+// Différent du DebtSwap multi-parties :
+//   A doit X à B → A demande à C de prendre sa dette → si C accepte
+//   ET B confirme, alors :
+//     - dette A→B annulée (settlement virtuel)
+//     - dette C→B créée (settlement virtuel)
+//
+// Workflow :
+//   1. proposer (status=PROPOSED, fromUser=A, assumeUser=C, creditor=B, amount, currency)
+//      → notif à C et B (validation requise des 2)
+//   2. C accepte (acceptedByAssumer=true)
+//   3. B accepte (acceptedByCreditor=true)
+//   4. Quand les 2 ont accepté → status=ACTIVE, settlements virtuels créés
+//   5. Si l'un refuse → status=REJECTED
+//   6. Quiconque peut CANCEL avant ACTIVE
+//
+
+enum DebtTransferStatus {
+  PROPOSED
+  ACTIVE
+  REJECTED
+  CANCELLED
+}
+
+model DebtTransfer {
+  id                  String              @id @default(uuid())
+  groupId             String
+  group               Group               @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  proposedById        String
+  proposedBy          User                @relation("DebtTransferProposer", fields: [proposedById], references: [id])
+  /// L'utilisateur qui a la dette (le débiteur originel)
+  fromUserId          String
+  fromUser            User                @relation("DebtTransferFrom", fields: [fromUserId], references: [id])
+  /// L'utilisateur qui prend la dette (le nouveau débiteur)
+  assumeUserId        String
+  assumeUser          User                @relation("DebtTransferAssumer", fields: [assumeUserId], references: [id])
+  /// L'utilisateur à qui la dette est due (le créancier)
+  creditorUserId      String
+  creditor            User                @relation("DebtTransferCreditor", fields: [creditorUserId], references: [id])
+  amount              Decimal             @db.Decimal(14, 4)
+  currency            String
+  reason              String?
+  status              DebtTransferStatus  @default(PROPOSED)
+  acceptedByAssumer   DateTime?
+  acceptedByCreditor  DateTime?
+  rejectedBy          String?
+  rejectedAt          DateTime?
+  /// Délai d'expiration de la proposition (spec §3.6 : 48h par défaut).
+  /// Si dépassé sans validation des 2 parties, le statut passe à CANCELLED.
+  expiresAt           DateTime?
+  createdAt           DateTime            @default(now())
+  activatedAt         DateTime?
+
+  @@index([groupId, status])
+}
+
+// ============================================================
+// PLANS (spec §6.3) — configurables depuis la console admin
+// ============================================================
+//
+// 3 plans seedés au démarrage :
+//   FREE       (Découverte) — 2 groupes, 8 membres/groupe, 5 OCR/mois
+//   PREMIUM    — illimité, swap, multi-devises (2.99 €/mois)
+//   COMMUNITY  — Premium + admin client + reçus fiscaux (10 €/mois)
+//
+// Les limites sont stockées en JSON pour permettre des modifications en
+// temps réel depuis la console admin sans migration de schéma.
+
+model Plan {
+  /// Code stable utilisé en référence (FREE, PREMIUM, COMMUNITY)
+  code         String   @id
+  /// Nom commercial affiché (peut être traduit)
+  name         String
+  /// Prix mensuel en centimes EUR (0 pour gratuit) — TARIF DE BASE (zone Europe).
+  /// Pour des prix régionalisés (PPA), voir PlanPriceTier ci-dessous.
+  priceCents   Int      @default(0)
+  /// Tarif annuel en centimes (offre groupée — null si pas de tarif annuel)
+  priceCentsYearly Int?
+  /// Limites configurables : { maxGroups, maxMembersPerGroup, ocrPerMonth, ... }
+  limits       Json
+  /// Description marketing courte (peut être traduite)
+  description  String?
+  /// Ordre d'affichage dans le pricing (1 = premier)
+  displayOrder Int      @default(0)
+  /// Si false, le plan n'est plus offert aux nouveaux utilisateurs
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  /// Tarifs régionalisés (PPA) — relation 1-N avec PlanPriceTier
+  priceTiers   PlanPriceTier[]
+}
+
+// ============================================================
+// PRICING RÉGIONALISÉ (PPA) — spec §6.3
+// ============================================================
+//
+// On applique le modèle Spotify/Netflix : un même plan a des prix
+// différents selon la zone géographique du visiteur, calculés sur l'indice
+// de pouvoir d'achat (PPA Banque Mondiale).
+//
+// Quatre régions de référence :
+//   EUROPE_NA  — Tier 1 (€/£/$/CHF/CAD/AUD/JPY) — prix plein
+//   AFRICA_FR  — Tier 2 (XAF/XOF/MAD/DZD/TND/MGA/MUR/CDF) — ~36% prix plein
+//   AFRICA_EN  — Tier 3 (NGN/KES/GHS/ZAR/UGX/TZS/ETB) — ~18% prix plein
+//   ASIA_PPP   — Tier 4 (CNY/INR/IDR/PHP/VND/BDT/PKR) — ~22% prix plein
+//
+// Détection région : header CF-IPCountry (Cloudflare) → fallback Accept-Language.
+// Anti-abus : pays verrouillé après le 1er paiement, vérification CB pays-matchant.
+//
+// Si aucun tier n'existe pour une région demandée, on tombe sur Plan.priceCents
+// (en EUR) comme prix par défaut, converti à la volée dans la devise locale via
+// le service FX.
+
+model Region {
+  /// Code stable (EUROPE_NA, AFRICA_FR, AFRICA_EN, ASIA_PPP, ...)
+  code            String   @id
+  /// Nom affiché en admin (ex: "Europe & Amérique du Nord")
+  name            String
+  /// Devise par défaut affichée dans cette région (ex: "EUR" pour EUROPE_NA)
+  defaultCurrency String
+  /// Liste des codes pays ISO-3166-1 alpha-2 inclus (ex: ["FR", "BE", "DE", ...])
+  /// On stocke en JSON pour faciliter l'édition admin (matrix UI).
+  countryCodes    Json
+  /// Description / notes admin (ex: "Tier 1 — prix plein")
+  description     String?
+  /// Indice PPA approximatif (% du tier de référence). 100 = prix plein.
+  /// Sert d'aide à l'admin pour choisir des prix cohérents (informatif).
+  ppaIndex        Int      @default(100)
+  /// Ordre d'affichage admin (1 = tier le plus haut)
+  displayOrder    Int      @default(0)
+  /// Si false, la région n'est pas utilisée pour la résolution des prix
+  isActive        Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  priceTiers      PlanPriceTier[]
+}
+
+model PlanPriceTier {
+  id              String  @id @default(uuid())
+  /// Plan auquel s'applique ce prix régional
+  planCode        String
+  plan            Plan    @relation(fields: [planCode], references: [code], onDelete: Cascade)
+  /// Région concernée
+  regionCode      String
+  region          Region  @relation(fields: [regionCode], references: [code], onDelete: Cascade)
+  /// Devise affichée à l'utilisateur (ex: "XAF", "NGN")
+  currency        String
+  /// Prix mensuel exprimé en plus petite unité de la devise (centimes EUR,
+  /// ou CFA tels quels car decimals=0 pour XAF/XOF).
+  /// On stocke un Int pour éviter les pbs de virgule flottante.
+  priceCents      Int
+  /// Prix annuel optionnel (pour offre engagement annuel)
+  priceCentsYearly Int?
+  /// Stripe Price ID pour le tarif mensuel (ex: "price_1QXxxx")
+  /// Configuré en admin après création du Price dans Stripe Dashboard.
+  stripePriceId       String?
+  /// Stripe Price ID pour le tarif annuel
+  stripePriceIdYearly String?
+  /// Notes admin (ex: "appliqué depuis 01/2026 suite à Naira devalué")
+  notes           String?
+  /// Sprint AC-3 · Override régional des limites du plan.
+  ///
+  /// Si non-null, ce JSON est mergé sur Plan.limits pour les utilisateurs
+  /// dans cette région. Permet d'adapter les quotas à la réalité économique
+  /// locale (ex: en Afrique de l'Ouest le pouvoir d'achat est ~3× plus bas,
+  /// donc on offre 4 réunions / mois au lieu de 1 pour le même prix).
+  ///
+  /// Format identique à Plan.limits : {"meetingsPerMonth": 4, "ocrPerMonth": 20, ...}
+  /// Les clés non-spécifiées héritent du plan parent (deep merge).
+  limitsOverride  Json?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  /// Un seul prix par (plan, région) — la combinaison est unique.
+  @@unique([planCode, regionCode])
+  @@index([regionCode])
+}
+
+// ============================================================
+// WEB PUSH (spec §8.5 §3.12)
+// ============================================================
+//
+// Abonnements push web standard W3C (Push API + VAPID).
+// Chaque user peut avoir plusieurs subscriptions (un par device/navigateur).
+// Le payload est chiffré côté serveur avec la clé publique du subscriber.
+//
+// Lors d'un envoi, on supprime automatiquement les subscriptions
+// retournées en 404/410 par le push provider (= désinscrites navigateur).
+
+model PushSubscription {
+  id          String   @id @default(uuid())
+  userId      String
+  user        User     @relation("UserPushSubs", fields: [userId], references: [id], onDelete: Cascade)
+  /// Endpoint unique du provider (Mozilla / FCM / Apple)
+  endpoint    String   @unique
+  /// Clé publique p256dh du client (base64url)
+  p256dh      String
+  /// Authentifiant secret partagé (base64url)
+  auth        String
+  /// User-agent au moment de l'inscription (pour aider l'utilisateur à identifier le device)
+  userAgent   String?
+  createdAt   DateTime @default(now())
+  /// Dernière fois qu'un push a été délivré avec succès (pour pruning manuel si jamais utilisé)
+  lastSuccessAt DateTime?
+
+  @@index([userId])
+}
+
+// ============================================================
+// CURRENCIES (spec §4) — table de référence des devises supportées
+// ============================================================
+//
+// 25 devises seedées au démarrage : 18 africaines + 7 majeures internationales.
+// L'admin peut activer/désactiver chaque devise depuis la console.
+//
+// Pour les zones CFA (XAF, XOF), `fixedRateToEur` est non-null
+// (parité fixe historique 1 EUR = 655.957 CFA — ancrage Trésor français).
+// Pour les autres devises, le taux vient du provider FX (cache 60s).
+
+model Currency {
+  /// Code ISO 4217 — clé primaire (XAF, EUR, USD, NGN…)
+  code           String   @id
+  /// Nom complet (ex: "Franc CFA BEAC")
+  name           String
+  /// Symbole d'affichage (ex: "€", "$", "FCFA")
+  symbol         String
+  /// Si non-null : taux fixe par rapport à EUR (zone CFA = 655.957). Sinon : taux dynamique via provider.
+  fixedRateToEur Decimal? @db.Decimal(18, 8)
+  /// Pays / zone principale (ex: "CEMAC", "France", "Nigeria")
+  region         String?
+  /// Émoji drapeau pour affichage (ex: "🇨🇲")
+  flag           String?
+  /// Nombre de décimales d'affichage (2 par défaut, 0 pour XAF/XOF)
+  decimals       Int      @default(2)
+  /// Si false, la devise est masquée des sélecteurs (admin peut désactiver via console §6.5)
+  isActive       Boolean  @default(true)
+  /// Ordre d'affichage dans les sélecteurs (devises majeures en premier)
+  displayOrder   Int      @default(100)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+}
+
+// ============================================================
+// FX RATES CACHE (spec §4.1)
+// ============================================================
+//
+// Cache des taux de change tirés du provider externe (XE / OpenExchangeRates).
+// On stocke les paires "X → EUR" (EUR pivot). Pour convertir A → B :
+//   amount × (rateA / rateB)
+//
+// Refresh auto toutes les 60s par le scheduler. Surcharge manuelle possible
+// depuis la console admin (spec §6.5 — non implémenté UI).
+
+model FxRate {
+  /// Code ISO 4217 (clé primaire — un seul taux par devise)
+  code        String   @id
+  /// Combien d'unités de cette devise vaut 1 EUR (ex: 656 pour XAF, 1.073 pour USD)
+  rateToEur   Decimal  @db.Decimal(18, 8)
+  /// Source du taux : "provider", "fixed" (CFA), "manual_override"
+  source      String   @default("provider")
+  fetchedAt   DateTime @default(now())
+
+  /// Si ce taux a été surchargé manuellement par un admin (spec §6.5),
+  /// on garde l'historique des modifications pour audit. Le scheduler
+  /// FX vérifie `source = "manual_override"` et NE remplace PAS la valeur.
+  history     FxRateHistory[]
+}
+
+/// Historique des modifications d'un taux FX (spec §6.5).
+/// Chaque ligne = un changement de taux (provider auto OU surcharge admin).
+/// Permet à la console admin de retracer toutes les modifications, qui les
+/// a faites, et de revenir en arrière si besoin.
+model FxRateHistory {
+  id           String   @id @default(uuid())
+  code         String
+  rate         FxRate   @relation(fields: [code], references: [code], onDelete: Cascade)
+  /// Taux précédent (avant le changement)
+  previousRate Decimal  @db.Decimal(18, 8)
+  /// Nouveau taux (après le changement)
+  newRate      Decimal  @db.Decimal(18, 8)
+  /// Source du changement : "provider", "manual_override", "fixed"
+  source       String
+  /// User qui a fait la modification (null si automatique provider)
+  actorId      String?
+  /// Note optionnelle expliquant pourquoi (ex: "panne provider, taux relevé manuellement BCEAO 13/05")
+  note         String?
+  changedAt    DateTime @default(now())
+
+  @@index([code, changedAt])
+}
+
+// ============================================================
+// TRADUCTIONS (spec §6.6) — édition ligne par ligne admin
+// ============================================================
+//
+// Chaque (key, locale) = 1 ligne traduite. Clé hiérarchique :
+//   "marketing.hero.headline", "ui.button.save"…
+//
+// L'admin peut modifier directement depuis /admin/translations.
+// Les valeurs hardcodées dans le code (marketing-translations.ts) servent
+// de défaut ; les overrides admin les remplacent à chaud (TTL cache 5min).
+
+model Translation {
+  /// Code unique de la chaîne (ex: "marketing.hero.headline")
+  key         String
+  /// Code de langue (fr, en, es, pt, ar, sw, zh, wo, am, ln, pcm)
+  locale      String
+  /// Texte traduit (peut contenir du markdown léger)
+  value       String
+  /// Note interne pour le traducteur (contexte d'usage, longueur max…)
+  context     String?
+  /// User qui a fait la dernière modification (pour audit)
+  updatedById String?
+  updatedAt   DateTime @updatedAt
+  createdAt   DateTime @default(now())
+
+  @@id([key, locale])
+  @@index([locale])
+}
+
+// ============================================================
+// LOCALES (spec §6.6) — activation/désactivation des langues
+// ============================================================
+//
+// Liste des langues supportées par BMD. L'admin peut activer/désactiver
+// une langue depuis la console — les langues désactivées disparaissent
+// du sélecteur côté front mais leurs traductions restent en base.
+
+model Locale {
+  /// Code ISO 639-1 (ex: "fr", "en", "ar") — clé primaire
+  code         String   @id
+  /// Nom natif de la langue (ex: "Français", "العربية")
+  name         String
+  /// Émoji drapeau pour identification visuelle (ex: "🇫🇷")
+  flag         String
+  /// True = langue affichée dans les sélecteurs ; false = masquée
+  isActive     Boolean  @default(true)
+  /// Sens de lecture : "ltr" (défaut) ou "rtl" (pour ar, am, he, fa…)
+  direction    String   @default("ltr")
+  /// Ordre d'affichage dans les sélecteurs (FR=1, EN=2…)
+  displayOrder Int      @default(100)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
+// ============================================================
+// USER LOGIN ATTEMPT TRACKING (spec §7.5 §8.6)
+// ============================================================
+//
+// Permet de détecter "nouveau navigateur + nouveau pays" pour notifier
+// l'utilisateur. On stocke uniquement un fingerprint léger (pas l'IP brute,
+// RGPD-friendly) : le navigateur (Chrome/Firefox/...) et le pays (CF-IPCountry).
+
+model LoginFingerprint {
+  id          String   @id @default(uuid())
+  userId      String
+  user        User     @relation("UserLoginFingerprints", fields: [userId], references: [id], onDelete: Cascade)
+  /// Famille du navigateur (Chrome, Firefox, Safari, Edge, Opera, Other)
+  browser     String
+  /// Système d'exploitation (macOS, iOS, Android, Windows, Linux, Other)
+  os          String
+  /// Code pays ISO 3166-1 alpha-2 dérivé de l'IP (ex: "FR", "CM", "SN") ou "??" si inconnu
+  country     String   @default("??")
+  /// Nombre de connexions vues avec ce trio (browser, os, country)
+  count       Int      @default(1)
+  firstSeenAt DateTime @default(now())
+  lastSeenAt  DateTime @default(now())
+
+  @@unique([userId, browser, os, country])
+  @@index([userId, lastSeenAt])
+}
+
+// ============================================================
+// PROMO CODES & PARRAINAGE (spec §6.9)
+// ============================================================
+//
+// 2 types principaux :
+//  - "DISCOUNT" : code promo classique créé par l'admin (ex: "BIENVENUE25")
+//                 → applique une réduction lors de l'upgrade Premium
+//  - "REFERRAL" : code de parrainage généré pour chaque user
+//                 → quand un nouvel user le rentre, les 2 reçoivent un bonus
+//
+// Les redemptions trackent qui a utilisé quel code, quand, et la valeur appliquée.
+
+model PromoCode {
+  /// Code court tapé par l'utilisateur (ex: "BIENVENUE25", "SARAH-X4Y2")
+  code         String   @id
+  /// Type de code : "DISCOUNT" (admin) ou "REFERRAL" (auto-généré par user)
+  type         String   @default("DISCOUNT")
+  /// % de réduction (0-100) OU montant fixe selon discountKind
+  discountValue Decimal  @default(0) @db.Decimal(10, 2)
+  /// "PERCENT" (% sur prix) ou "FIXED" (montant fixe en EUR)
+  discountKind String   @default("PERCENT")
+  /// Description marketing (visible côté UI)
+  description  String?
+  /// Limite de redemptions (null = illimité)
+  maxUses      Int?
+  /// Compteur de redemptions actuelles
+  uses         Int      @default(0)
+  /// Date d'expiration (null = pas d'expiration)
+  expiresAt    DateTime?
+  /// Si false, code désactivé (admin peut suspendre sans supprimer)
+  isActive     Boolean  @default(true)
+  /// User propriétaire (pour les codes REFERRAL — null pour DISCOUNT)
+  ownerUserId  String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  redemptions  PromoRedemption[]
+
+  @@index([ownerUserId])
+  @@index([type])
+}
+
+model PromoRedemption {
+  id           String    @id @default(uuid())
+  codeRef      String
+  code         PromoCode @relation(fields: [codeRef], references: [code], onDelete: Cascade)
+  userId       String
+  user         User      @relation("PromoUser", fields: [userId], references: [id], onDelete: Cascade)
+  /// Valeur effectivement appliquée (en EUR ou %)
+  appliedValue Decimal   @db.Decimal(10, 2)
+  /// Type appliqué (snapshot au moment de la redemption)
+  appliedKind  String
+  redeemedAt   DateTime  @default(now())
+
+  @@unique([codeRef, userId])
+  @@index([userId])
+}
+
+// ============================================================
+// SIM SWAP DETECTION (spec §7.5)
+// ============================================================
+//
+// Un "SIM swap" est une attaque où le pirate convainc l'opérateur télécom
+// de transférer le numéro de la victime sur sa propre SIM. Ensuite il peut
+// recevoir les OTP SMS et prendre le contrôle du compte.
+//
+// Très répandu en Afrique (zones Mobile Money). On détecte de manière
+// heuristique sans IA externe : 6 signaux pondérés → score 0-100.
+//
+// Status :
+//  - DETECTED  : signal initial — on a juste alerté
+//  - VERIFIED  : l'utilisateur a confirmé "c'était bien moi" (depuis un autre device)
+//  - BLOCKED   : score très élevé → la connexion a été refusée (admin doit débloquer)
+//  - RESOLVED  : admin a clos l'incident manuellement
+//  - DISMISSED : faux positif marqué par l'admin
+
+// ============================================================
+// CMS PAGES (spec §6.7) — éditeur de pages drag-drop versionné
+// ============================================================
+//
+// Permet aux admins de créer/éditer des pages publiques (about, help,
+// terms…) sans déployer de code. Multi-langue, preview live,
+// publication versionnée avec rollback.
+
+model CmsPage {
+  id              String   @id @default(uuid())
+  /// Slug URL stable (ex: "about", "help", "terms"). Unique global.
+  slug            String   @unique
+  /// Titre interne pour l'admin. Pas affiché aux visiteurs.
+  title           String
+  /// Blocs en cours d'édition (JSON array). Auto-save fréquent.
+  draftBlocks     Json     @default("[]")
+  /// Blocs servis au public. Mis à jour uniquement par "Publier".
+  publishedBlocks Json     @default("[]")
+  /// Date de la dernière publication (null = jamais publiée)
+  publishedAt     DateTime?
+  publishedById   String?
+  /// Si false, la page renvoie 404 même si publishedBlocks existe
+  isActive        Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  versions        CmsPageVersion[]
+}
+
+/// Snapshot d'une version publiée (immuable). Pour le rollback et l'audit.
+model CmsPageVersion {
+  id            String   @id @default(uuid())
+  pageId        String
+  page          CmsPage  @relation(fields: [pageId], references: [id], onDelete: Cascade)
+  /// Numéro incrémental humain (v1, v2, v3…) calculé au create
+  versionNumber Int
+  /// Blocs publiés à ce moment-là
+  blocks        Json
+  /// Note libre du publisher
+  note          String?
+  publishedById String?
+  publishedAt   DateTime @default(now())
+
+  @@unique([pageId, versionNumber])
+  @@index([pageId, publishedAt])
+}
+
+// ============================================================
+// PAYMENT METHODS (spec §9.1) — vault chiffré AES-256-GCM
+// ============================================================
+//
+// Stocke les moyens de paiement de l'utilisateur (numéros Mobile Money,
+// IBAN, comptes PayPal/Wise/Lydia…) de manière chiffrée. La valeur en
+// clair n'existe en mémoire que :
+//   - lors de l'ajout (chiffrement immédiat)
+//   - lors d'un revel à la demande de l'utilisateur (déchiffrement on-the-fly)
+//
+// Sécurité :
+//  - Algorithme : AES-256-GCM (authenticated encryption)
+//  - IV unique 96 bits par enregistrement
+//  - Tag d'authentification 128 bits stocké séparément
+//  - Clé maître depuis env PAYMENT_VAULT_KEY (32 bytes base64)
+//  - Si la clé est rotée, on ne peut plus déchiffrer les anciens entries
+//    (procédure de migration documentée — pas auto pour éviter accidents)
+//
+// Affichage :
+//  - `last4` permet d'afficher "•••• 6789" sans déchiffrer
+//  - `label` est un nom custom donné par l'utilisateur ("Mon Wave Famille")
+//  - Le type est explicite (LYDIA, WAVE, MTN_MOMO, ORANGE_MONEY, IBAN…)
+//
+// RGPD :
+//  - Soft delete (deletedAt) pour audit avant purge définitive
+//  - Logs SANS la valeur en clair (jamais)
+//  - À la suppression du user, cascade vide aussi le vault
+
+model PaymentMethod {
+  id              String    @id @default(uuid())
+  userId          String
+  user            User      @relation("UserPaymentMethods", fields: [userId], references: [id], onDelete: Cascade)
+  /// Type de moyen : LYDIA, WAVE, ORANGE_MONEY, MTN_MOMO, MPESA, WERO,
+  /// WISE, REVOLUT, PAYPAL, IBAN, TWINT, INTERAC, OTHER
+  type            String
+  /// Nom custom donné par l'utilisateur ("Mon Wave Sénégal", "PayPal pro"…)
+  label           String
+  /// Valeur chiffrée (base64) — déchiffrable uniquement avec PAYMENT_VAULT_KEY
+  encryptedValue  String
+  /// IV (12 bytes) en base64 — unique par enregistrement
+  iv              String
+  /// Tag GCM (16 bytes) en base64 — pour détecter toute altération
+  authTag         String
+  /// 4 derniers caractères en clair pour affichage rapide ("•••• 6789")
+  last4           String
+  /// Devise par défaut associée (utile pour pré-remplir lors d'un règlement)
+  defaultCurrency String?
+  /// Date de dernière utilisation (pour le tri "les plus utilisés en haut")
+  lastUsedAt      DateTime?
+  /// Soft delete pour audit RGPD
+  deletedAt       DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@index([userId, deletedAt])
+  @@index([userId, lastUsedAt])
+}
+
+model SimSwapEvent {
+  id                    String   @id @default(uuid())
+  userId                String
+  user                  User     @relation("UserSimSwapEvents", fields: [userId], references: [id], onDelete: Cascade)
+  /// Score de risque calculé (0-100). >= 60 = HIGH, >= 80 = bloqué.
+  riskScore             Int
+  /// Signaux détectés (JSON détaillé pour audit + UI)
+  /// Ex: { newCountry: true, newBrowser: true, recentContactChange: 3, otpRateLast1h: 7, ... }
+  signals               Json
+  /// Contact (numéro/email) au moment de la tentative
+  contactValueAttempted String?
+  /// Type de contact : PHONE ou EMAIL
+  contactTypeAttempted  String?
+  /// User-Agent de la tentative (pour aider l'investigation)
+  userAgent             String?
+  /// Pays détecté pour la tentative
+  country               String   @default("??")
+  /// État courant — voir docstring du modèle
+  status                String   @default("DETECTED")
+  /// Date de vérification utilisateur (s'il confirme "c'était bien moi")
+  verifiedAt            DateTime?
+  /// Si admin a résolu : qui et quand
+  resolvedById          String?
+  resolvedAt            DateTime?
+  /// Note libre admin (cause profonde, action prise)
+  resolutionNote        String?
+  createdAt             DateTime @default(now())
+
+  @@index([userId, createdAt])
+  @@index([status, createdAt])
+}
+
+// ============================================================
+// SUBSCRIPTION STATE — gestion downgrade Premium (spec §6.3)
+// ============================================================
+//
+// Quand un user passe Premium puis arrête de payer, on n'efface pas son
+// compte tout de suite. On suit son état dans ce modèle :
+//
+//   ACTIVE     → tout fonctionne normalement (paiement à jour)
+//   GRACE      → paiement échoué/expiré, mais on lui laisse N jours de
+//                grâce où il garde toutes ses features Premium
+//   WARN       → grace expirée, on l'avertit que sa surcapacité va passer
+//                en read-only dans M jours (compteur visible)
+//   DOWNGRADED → les groupes au-delà du quota FREE sont en read-only
+//                (lecture / export OK, écriture bloquée)
+//   CANCELLED  → l'utilisateur a explicitement annulé (bouton dans profil)
+//
+// Les paramètres N (grace days) et M (warn days) sont configurables par
+// l'admin via PlanDowngradePolicy — on les stocke pas en dur ici.
+//
+// Quand un user repaye → status revient à ACTIVE, les groupes sont déver-
+// rouillés en cascade.
+
+model SubscriptionState {
+  id                String   @id @default(uuid())
+  userId            String   @unique
+  user              User     @relation("UserSubscription", fields: [userId], references: [id], onDelete: Cascade)
+  /// État courant — voir docstring
+  status            String   @default("ACTIVE")
+  /// Plan de référence (avant downgrade éventuel — pour savoir quoi
+  /// restaurer au paiement)
+  planCodeReference String   @default("FREE")
+  /// Date d'expiration de la dernière période payée
+  expiresAt         DateTime?
+  /// Date de fin de grâce (= expiresAt + grace_days)
+  graceEndsAt       DateTime?
+  /// Date de bascule en mode lecture seule (= graceEndsAt + warn_days)
+  readOnlyAt        DateTime?
+  /// IDs des groupes verrouillés en read-only (sérialisé en JSON pour
+  /// éviter une nouvelle table). Sélectionné par "groupes les plus
+  /// anciens en activité" au moment de la bascule.
+  lockedGroupIds    Json     @default("[]")
+  /// Stripe customer / subscription IDs (à brancher quand on intègre
+  /// le paiement réel — pour l'instant null en MVP)
+  stripeCustomerId  String?
+  stripeSubscriptionId String?
+  /// Dernière notification envoyée (pour ne pas spam : on n'envoie pas
+  /// la notif "expiration dans 3 jours" 5 fois)
+  lastNotifiedKind  String?
+  lastNotifiedAt    DateTime?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@index([status])
+  @@index([readOnlyAt])
+}
+
+// ============================================================
+// PLAN DOWNGRADE POLICY — paramètres modifiables admin
+// ============================================================
+//
+// Une seule ligne dans cette table (singleton). L'admin peut éditer les
+// durées de grâce et de warning, et activer/désactiver la logique de
+// downgrade depuis la console (onglet Tarifs → "Politique d'expiration").
+
+model PlanDowngradePolicy {
+  id                String   @id @default("default")
+  /// Nb de jours de grâce après expiration avant de basculer en WARN
+  graceDays         Int      @default(14)
+  /// Nb de jours en WARN avant de passer en DOWNGRADED (read-only)
+  warnDays          Int      @default(7)
+  /// Si false, le downgrade est totalement désactivé : un user qui
+  /// arrête de payer reste Premium indéfiniment (pas recommandé en prod)
+  enabled           Boolean  @default(true)
+  /// Notif envoyée X jours avant expiration (rappel pré-renouvellement).
+  /// Liste de jours JSON ex: [7, 3, 1].
+  notifyBeforeDays  Json     @default("[7, 3, 1]")
+  updatedAt         DateTime @updatedAt
+}
+
+// ============================================================
+// AFFILIATE PROGRAM — paramètres du programme commercial multi-niveaux
+// ============================================================
+//
+// Configuration du programme d'affiliation (commerciaux). Une seule ligne
+// (singleton). L'admin peut modifier les pourcentages, durées, paliers
+// depuis la console (onglet Tarifs → "Programme commercial").
+//
+// Les commissions sont récurrentes : à chaque paiement d'un membre du
+// réseau, on crédite les ancêtres (jusqu'à 3 niveaux) selon les % définis
+// ici. La durée par niveau permet d'éviter les rentes ad vitam (le L2/L3
+// ne paye que pendant 6-12 mois).
+
+model AffiliateProgram {
+  id                  String   @id @default("default")
+  /// Si false, le programme est désactivé (pas de nouvelles commissions)
+  enabled             Boolean  @default(true)
+  /// Pourcentage commission filleul direct (L1) — sur chaque paiement
+  l1Percent           Decimal  @db.Decimal(5, 2) @default(20.00)
+  /// Durée commission L1 en mois. -1 = à vie.
+  l1DurationMonths    Int      @default(-1)
+  /// Pourcentage L2 (filleul de filleul)
+  l2Percent           Decimal  @db.Decimal(5, 2) @default(5.00)
+  /// Durée L2 en mois
+  l2DurationMonths    Int      @default(12)
+  /// Pourcentage L3 (3e niveau de profondeur)
+  l3Percent           Decimal  @db.Decimal(5, 2) @default(2.00)
+  /// Durée L3 en mois
+  l3DurationMonths    Int      @default(6)
+  /// Nb de jours d'attente avant de pouvoir payer la commission au
+  /// commercial (anti-chargeback Stripe). Les commissions PENDING > X
+  /// jours passent en PAYABLE.
+  holdDays            Int      @default(30)
+  /// Seuil minimum de paiement (en centimes EUR) avant de déclencher
+  /// un virement vers le RIB du commercial.
+  minPayoutCents      Int      @default(2000)
+  /// Plafond mensuel filleuls L1 par commercial (anti-spam)
+  maxL1ReferralsPerMonth Int   @default(50)
+  /// Paliers de bonus (JSON : [{count: 10, bonusCents: 5000, badge: "Apporteur"}, ...])
+  /// Centimes EUR pivot — converti dans la devise du commercial au paiement.
+  milestoneBonuses    Json     @default("[]")
+  updatedAt           DateTime @updatedAt
+}
+
+// ============================================================
+// AFFILIATE COMMISSION — Une commission tracée pour un paiement
+// ============================================================
+//
+// Chaque fois qu'un user paye sa souscription, on crée 0 à 3 lignes
+// AffiliateCommission (une par ancêtre éligible). Le scheduler nightly
+// passe les commissions PENDING > holdDays en PAYABLE puis batch les
+// virements via Stripe Connect (à brancher).
+
+model AffiliateCommission {
+  id                String   @id @default(uuid())
+  /// Le user qui a payé (= filleul direct ou indirect)
+  payerId           String
+  payer             User     @relation("CommissionPayer", fields: [payerId], references: [id], onDelete: Cascade)
+  /// Le commercial / parrain qui reçoit la commission
+  beneficiaryId     String
+  beneficiary       User     @relation("CommissionBeneficiary", fields: [beneficiaryId], references: [id], onDelete: Cascade)
+  /// Niveau dans la hiérarchie (1, 2 ou 3)
+  level             Int
+  /// Pourcentage appliqué à ce niveau (au moment du paiement —
+  /// snapshot, pour éviter les recalculs si le programme change).
+  percent           Decimal  @db.Decimal(5, 2)
+  /// Devise du paiement source
+  sourceCurrency    String
+  /// Montant payé (centimes dans sourceCurrency)
+  sourceAmountCents Int
+  /// Devise dans laquelle on paye le bénéficiaire (sa devise locale)
+  payoutCurrency    String
+  /// Commission convertie dans la devise du bénéficiaire
+  payoutAmountCents Int
+  /// État : PENDING (hold), PAYABLE (au-delà de holdDays), PAID, CANCELLED
+  status            String   @default("PENDING")
+  /// Référence du paiement source (Stripe payment_intent_id, ou notre id
+  /// interne pour MVP)
+  sourcePaymentRef  String?
+  /// ID du virement de payout (Stripe transfer_id) — null tant que pas payé
+  payoutRef         String?
+  paidAt            DateTime?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@index([beneficiaryId, status])
+  @@index([payerId])
+  @@index([status, createdAt])
+}
+
+// ============================================================
+// REFERRAL REWARD — récompenses du parrainage classique
+// ============================================================
+//
+// Distinct des AffiliateCommission (récurrentes commerciaux) : ici on
+// trace les bonus one-shot (filleul a payé son 1er mois → parrain reçoit
+// 5 €, ou jalons "10 filleuls = 50 €"). C'est plus simple : 1 ligne par
+// événement de récompense.
+
+model ReferralReward {
+  id              String   @id @default(uuid())
+  /// Le parrain qui reçoit
+  parentUserId    String
+  parent          User     @relation("ReferralRewardParent", fields: [parentUserId], references: [id], onDelete: Cascade)
+  /// Le filleul qui a déclenché la récompense (null pour les jalons)
+  childUserId     String?
+  child           User?    @relation("ReferralRewardChild", fields: [childUserId], references: [id], onDelete: SetNull)
+  /// Type : FIRST_PAYMENT (le filleul a payé), MILESTONE (palier atteint),
+  ///        FILLEUL_DISCOUNT (réduction donnée au filleul)
+  kind            String
+  /// Montant en centimes EUR pivot
+  amountCents     Int
+  /// Devise dans laquelle on a crédité le bénéficiaire
+  payoutCurrency  String
+  /// Montant converti dans la devise du bénéficiaire
+  payoutAmountCents Int
+  /// Statut : CREDITED (ajouté au crédit BMD), PAID (viré), CANCELLED
+  status          String   @default("CREDITED")
+  /// Description humaine (ex: "Palier 10 filleuls", "1er paiement de Marie")
+  description     String?
+  createdAt       DateTime @default(now())
+
+  @@index([parentUserId, status])
+  @@index([kind, createdAt])
+}

@@ -1,0 +1,143 @@
+# =============================================================================
+# docker-compose.prod.yml — Stack BMD self-hostable (api + web + db + redis)
+# =============================================================================
+# Usage :
+#   1. Copie .env.example → .env (à la racine) et remplis les valeurs
+#   2. docker compose -f docker-compose.prod.yml up -d --build
+#   3. Premier déploiement : `docker compose exec api npx prisma migrate deploy`
+#   4. (Optionnel) Reverse proxy en frontal : Caddy / nginx / Cloudflare Tunnel
+#      → cf. DEPLOYMENT.md section "Self-host avec Caddy"
+#
+# ⚠️ Pour la prod : monte un secret manager (Docker secrets / Vault) au lieu
+# d'utiliser .env en clair sur le filesystem. Cf. SECURITY.md.
+# =============================================================================
+
+version: "3.9"
+
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: bmd-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-bmd}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD requis en prod}
+      POSTGRES_DB: ${POSTGRES_DB:-bmd}
+    volumes:
+      - bmd_db_data:/var/lib/postgresql/data
+      # Backup auto via pg_dump : voir DEPLOYMENT.md "Backups"
+      - ./backups:/backups
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-bmd} -d ${POSTGRES_DB:-bmd}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    # ⚠️ Pas d'expose en clair en prod — l'API y accède via le network interne.
+    # Décommente uniquement si tu as besoin d'un accès externe (psql admin).
+    # ports:
+    #   - "127.0.0.1:5432:5432"
+
+  redis:
+    image: redis:7-alpine
+    container_name: bmd-redis
+    restart: unless-stopped
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      - --requirepass
+      - ${REDIS_PASSWORD:?REDIS_PASSWORD requis en prod}
+    volumes:
+      - bmd_redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "--no-auth-warning", "-a", "${REDIS_PASSWORD}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    container_name: bmd-api
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgres://${POSTGRES_USER:-bmd}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-bmd}
+      REDIS_URL: redis://default:${REDIS_PASSWORD}@redis:6379/0
+      PORT: 4000
+      HOST: 0.0.0.0
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET requis en prod}
+      JWT_EXPIRES_IN: ${JWT_EXPIRES_IN:-30d}
+      OTP_PEPPER: ${OTP_PEPPER:?OTP_PEPPER requis en prod}
+      OTP_DELIVERY_MODE: ${OTP_DELIVERY_MODE:-auto}
+      WEB_BASE_URL: ${WEB_BASE_URL:?WEB_BASE_URL requis en prod}
+      # Pass-through tous les secrets externes (vide = feature désactivée)
+      TWILIO_ACCOUNT_SID: ${TWILIO_ACCOUNT_SID:-}
+      TWILIO_AUTH_TOKEN: ${TWILIO_AUTH_TOKEN:-}
+      TWILIO_FROM_NUMBER: ${TWILIO_FROM_NUMBER:-}
+      RESEND_API_KEY: ${RESEND_API_KEY:-}
+      RESEND_FROM_EMAIL: ${RESEND_FROM_EMAIL:-}
+      WHATSAPP_PHONE_NUMBER_ID: ${WHATSAPP_PHONE_NUMBER_ID:-}
+      WHATSAPP_ACCESS_TOKEN: ${WHATSAPP_ACCESS_TOKEN:-}
+      WHATSAPP_BUSINESS_NUMBER: ${WHATSAPP_BUSINESS_NUMBER:-}
+      WHATSAPP_OTP_TEMPLATE: ${WHATSAPP_OTP_TEMPLATE:-bmd_otp_v1}
+      WHATSAPP_APP_SECRET: ${WHATSAPP_APP_SECRET:-}
+      WHATSAPP_WEBHOOK_VERIFY_TOKEN: ${WHATSAPP_WEBHOOK_VERIFY_TOKEN:-}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      APPLE_CLIENT_ID: ${APPLE_CLIENT_ID:-}
+      APPLE_TEAM_ID: ${APPLE_TEAM_ID:-}
+      APPLE_KEY_ID: ${APPLE_KEY_ID:-}
+      APPLE_PRIVATE_KEY: ${APPLE_PRIVATE_KEY:-}
+      VAPID_PUBLIC_KEY: ${VAPID_PUBLIC_KEY:-}
+      VAPID_PRIVATE_KEY: ${VAPID_PRIVATE_KEY:-}
+      VAPID_SUBJECT: ${VAPID_SUBJECT:-mailto:noreply@backmesdo.com}
+      OCR_PROVIDER: ${OCR_PROVIDER:-auto}
+      MINDEE_API_KEY: ${MINDEE_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_VISION_MODEL: ${OPENAI_VISION_MODEL:-gpt-4o-mini}
+      PAYMENT_VAULT_KEY: ${PAYMENT_VAULT_KEY:-}
+      OPENEXCHANGERATES_KEY: ${OPENEXCHANGERATES_KEY:-}
+      STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
+      STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}
+    ports:
+      - "127.0.0.1:4000:4000"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:4000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:?NEXT_PUBLIC_API_URL requis en prod}
+        NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY: ${NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY:-}
+        NEXT_PUBLIC_SITE_URL: ${NEXT_PUBLIC_SITE_URL:-https://www.backmesdo.com}
+    container_name: bmd-web
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:3000:3000"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS -o /dev/null -w '%{http_code}' http://127.0.0.1:3000/ | grep -q '^[23]'"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+volumes:
+  bmd_db_data:
+  bmd_redis_data:

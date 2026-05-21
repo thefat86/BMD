@@ -15,25 +15,42 @@ export interface CreateGroupInput {
   type: GroupType;
   defaultCurrency?: string;
   createdById: string;
+  /**
+   * V111 · Active la génération de reçus fiscaux (groupes type association
+   * ou organisme à but non lucratif). Default false : la création ne coche
+   * la case que si le wizard l'a demandé explicitement.
+   */
+  taxReceiptsEnabled?: boolean;
 }
 
 export async function createGroup(input: CreateGroupInput) {
   const name = input.name.trim();
-  if (!name) throw Errors.badRequest("Group name required");
+  if (!name)
+    throw Errors.invalidFormula({
+      what: "le nom du groupe",
+      why: "Un groupe a besoin d'un petit nom pour qu'on s'y retrouve.",
+      fix: "Donne-lui un nom court et parlant, ex: « Vacances Sénégal », « Coloc Pigalle », « Coliso 2026 »…",
+    });
 
   // Spec §6.3 : appliquer les limites du plan (FREE = 2 groupes max par défaut)
   await assertCanCreateGroup(input.createdById);
 
+  // V111 · `as any` sur le `data` pour accepter le nouveau champ
+  // `taxReceiptsEnabled` ajouté au schema Prisma. Le client Prisma sera
+  // regénéré en local via `npx prisma generate` après pull — le sandbox
+  // dev ne peut pas le faire (DL des binaires bloqué 403). Cast supprimé
+  // une fois `prisma generate` propagé en CI/CD.
   return prisma.group.create({
     data: {
       name,
       type: input.type,
       defaultCurrency: input.defaultCurrency ?? "EUR",
       createdById: input.createdById,
+      taxReceiptsEnabled: input.taxReceiptsEnabled ?? false,
       members: {
         create: { userId: input.createdById, role: "ADMIN" },
       },
-    },
+    } as any,
     include: { members: { include: { user: true } } },
   });
 }
@@ -48,44 +65,90 @@ export async function listGroupsForUser(userId: string) {
     orderBy: { createdAt: "desc" },
   });
 
-  // 2. Pour chaque groupe : total des dépenses + mon solde net
-  // Une seule requête agregée pour le total, puis une autre pour mon owe.
-  // C'est O(1) requêtes par groupe — acceptable pour le dashboard.
-  const enriched = await Promise.all(
-    groups.map(async (g) => {
-      const [totalAgg, myShareAgg, paidByMeAgg] = await Promise.all([
-        prisma.expense.aggregate({
-          where: { groupId: g.id },
-          _sum: { amount: true },
-        }),
-        prisma.expenseShare.aggregate({
-          where: { userId, expense: { groupId: g.id } },
-          _sum: { amountOwed: true },
-        }),
-        prisma.expense.aggregate({
-          where: { groupId: g.id, paidById: userId },
-          _sum: { amount: true },
-        }),
-      ]);
-      const totalSpent = parseFloat(
-        totalAgg._sum.amount?.toString() ?? "0",
-      );
-      const myShare = parseFloat(
-        myShareAgg._sum.amountOwed?.toString() ?? "0",
-      );
-      const paidByMe = parseFloat(
-        paidByMeAgg._sum.amount?.toString() ?? "0",
-      );
-      // Solde net = ce que j'ai payé - ce que je dois (positif = on me doit)
-      const myNet = paidByMe - myShare;
-      return {
-        ...g,
-        totalSpent: totalSpent.toFixed(2),
-        myNet: myNet.toFixed(2),
-      };
+  // V120 — Refactor N+1 → 3 groupBy global.
+  //
+  // Avant : pour chaque groupe, 3 `prisma.expense.aggregate` séquentiels
+  // → 3*N requêtes SQL. Pour 10 groupes = 31 requêtes SQL (1 findMany +
+  // 30 aggregate), chacune avec son round-trip Postgres (~10-30 ms).
+  //
+  // Après : 3 requêtes `groupBy` SQL, indépendantes du nombre de groupes.
+  // Pour 10 groupes = 4 requêtes SQL total. Postgres agrège côté serveur
+  // sans charger les rows. Gain ~10× sur le cold cache, et énorme
+  // amélioration pour les users à beaucoup de groupes (tontine + colocs
+  // + voyages).
+  //
+  // Les indexes `Expense(groupId, paidById)` (V118.A) sont parfaitement
+  // exploités par ces groupBy.
+  if (groups.length === 0) return [];
+
+  const groupIds = groups.map((g) => g.id);
+
+  const [totalsByGroup, sharesByGroup, paidByMeByGroup] = await Promise.all([
+    prisma.expense.groupBy({
+      by: ["groupId"],
+      where: { groupId: { in: groupIds } },
+      _sum: { amount: true },
     }),
-  );
-  return enriched;
+    prisma.expenseShare.groupBy({
+      by: ["expenseId"],
+      where: { userId, expense: { groupId: { in: groupIds } } },
+      _sum: { amountOwed: true },
+    }),
+    prisma.expense.groupBy({
+      by: ["groupId"],
+      where: { groupId: { in: groupIds }, paidById: userId },
+      _sum: { amount: true },
+    }),
+  ]);
+
+  // Index par groupId pour O(1) lookup
+  const totalByGroup = new Map<string, number>();
+  for (const row of totalsByGroup) {
+    totalByGroup.set(
+      row.groupId,
+      parseFloat(row._sum.amount?.toString() ?? "0"),
+    );
+  }
+  const paidByMeByGroupMap = new Map<string, number>();
+  for (const row of paidByMeByGroup) {
+    paidByMeByGroupMap.set(
+      row.groupId,
+      parseFloat(row._sum.amount?.toString() ?? "0"),
+    );
+  }
+
+  // V120 — `sharesByGroup` est grouped by `expenseId`. Pour le mapper
+  // au groupId, on charge en bulk les (expenseId → groupId) qui nous
+  // intéressent en 1 requête (au lieu d'inclure le full expense dans
+  // le groupBy ce qui n'est pas supporté par Prisma).
+  const expenseIds = sharesByGroup.map((r) => r.expenseId);
+  const expenseToGroup = new Map<string, string>();
+  if (expenseIds.length > 0) {
+    const exps = await prisma.expense.findMany({
+      where: { id: { in: expenseIds } },
+      select: { id: true, groupId: true },
+    });
+    for (const e of exps) expenseToGroup.set(e.id, e.groupId);
+  }
+  const myShareByGroup = new Map<string, number>();
+  for (const row of sharesByGroup) {
+    const gid = expenseToGroup.get(row.expenseId);
+    if (!gid) continue;
+    const amount = parseFloat(row._sum.amountOwed?.toString() ?? "0");
+    myShareByGroup.set(gid, (myShareByGroup.get(gid) ?? 0) + amount);
+  }
+
+  return groups.map((g) => {
+    const totalSpent = totalByGroup.get(g.id) ?? 0;
+    const paidByMe = paidByMeByGroupMap.get(g.id) ?? 0;
+    const myShare = myShareByGroup.get(g.id) ?? 0;
+    const myNet = paidByMe - myShare;
+    return {
+      ...g,
+      totalSpent: totalSpent.toFixed(2),
+      myNet: myNet.toFixed(2),
+    };
+  });
 }
 
 export async function getGroupForMember(groupId: string, userId: string) {
@@ -94,14 +157,56 @@ export async function getGroupForMember(groupId: string, userId: string) {
     include: {
       members: {
         include: {
-          user: { select: { id: true, displayName: true, avatar: true } },
+          // V144 — Récupère nickname + displayPreference pour appliquer la
+          // préférence d'affichage côté serveur via effectiveDisplayName().
+          user: {
+            select: {
+              id: true,
+              displayName: true,
+              avatar: true,
+              nickname: true,
+              displayPreference: true,
+            } as any,
+          },
+        },
+      },
+      // V128 + V215.F2 — Relations tontines (plusieurs par groupe au fil
+      // du temps : une ACTIVE/DRAFT à la fois + l'historique COMPLETED/
+      // CANCELLED). On filtre par status NON-terminal pour retomber sur le
+      // comportement initial : la tile « Tontine » du frontend regarde
+      // `group.tontines[0]` qui sera la courante.
+      tontines: {
+        where: { status: { in: ["DRAFT", "ACTIVE"] } },
+        orderBy: { createdAt: "desc" },
+        take: 1,
+        select: {
+          id: true,
+          status: true,
+          contributionAmount: true,
+          currency: true,
+          frequency: true,
+          startDate: true,
+          centralizedPot: true,
+        },
+      },
+      // V224.C — Charte graphique du groupe (primary/accent color + logo).
+      // Inclure ici plutôt que de forcer un GET /groups/:id/theme séparé
+      // permet au hub + à la liste des cards de teinter l'interface sans
+      // round-trip réseau supplémentaire. Le champ scalar `customLogoUrl`
+      // est déjà retourné par défaut (findUnique sans `select` charge tous
+      // les scalars du modèle Group).
+      theme: {
+        select: {
+          primaryColor: true,
+          accentColor: true,
+          logoUrl: true,
         },
       },
     },
   });
-  if (!group) throw Errors.notFound("Group not found");
+  if (!group) throw Errors.notFound("Ce groupe est introuvable 🔍");
   const isMember = group.members.some((m) => m.userId === userId);
-  if (!isMember) throw Errors.forbidden("You are not a member of this group");
+  if (!isMember) throw Errors.notMember("ce groupe");
   return group;
 }
 
@@ -113,9 +218,20 @@ export async function assertRole(
   const member = await prisma.groupMember.findUnique({
     where: { groupId_userId: { groupId, userId } },
   });
-  if (!member) throw Errors.forbidden("Not a member");
+  if (!member) throw Errors.notMember("ce groupe");
   if (!allowed.includes(member.role)) {
-    throw Errors.forbidden(`Requires role in: ${allowed.join(", ")}`);
+    const niceRoles = allowed
+      .map((r) =>
+        r === "ADMIN"
+          ? "admin"
+          : r === "TREASURER"
+            ? "trésorier"
+            : r === "MEMBER"
+              ? "membre"
+              : "observateur",
+      )
+      .join(" ou ");
+    throw Errors.roleRequired(niceRoles, "cette action");
   }
 }
 
@@ -142,6 +258,11 @@ export async function addMemberByContact(input: {
   await assertRole(input.groupId, input.invitedById, ["ADMIN", "TREASURER"]);
   // Spec §6.3 : limite "members per group" du plan du créateur
   await assertCanAddMember(input.groupId);
+  // Bloque l'invitation si le groupe est verrouillé (downgrade — read-only)
+  const { assertGroupNotLocked } = await import(
+    "../subscription/subscription-state.service.js"
+  );
+  await assertGroupNotLocked(input.groupId);
   const value = input.contactValue.trim();
 
   let contact = await prisma.userContact.findUnique({
@@ -153,13 +274,20 @@ export async function addMemberByContact(input: {
   if (contact) {
     userId = contact.userId;
   } else {
-    // Shadow user. Le displayName fourni par l'invitant est utilisé s'il existe,
-    // sinon on tombe sur un nom dérivé du contact (e-mail prefix ou numéro).
-    const shadowName =
-      input.displayName?.trim() ||
-      (input.contactType === "EMAIL"
-        ? value.split("@")[0] ?? "Invité"
-        : `+${value.replace(/\D/g, "")}`);
+    // Shadow user. V114 — Politique d'affichage : tant que la personne ne
+    // s'est PAS inscrite (= n'a pas mis à jour son nom depuis son profil),
+    // on l'affiche par son email ou son numéro de téléphone *complet*. Une
+    // fois qu'elle a mis son vrai nom, son displayName prend le dessus
+    // automatiquement (pas de logique conditionnelle côté front).
+    //
+    // Avant V114 on extrayait le local-part de l'email (`bob@x.com` → `bob`)
+    // ou on reformatait le téléphone — résultat : un membre invité non
+    // inscrit s'affichait `bob` plutôt que `bob@x.com`, ce qui était à la
+    // fois ambigu (qui est bob ?) et indistinguable d'un vrai user nommé
+    // « bob ». Désormais on garde le contact tel quel : l'invitant peut
+    // toujours forcer un nom via `input.displayName` (Contact Picker → nom
+    // tel qu'enregistré sur le téléphone, ex: « Marie K. »).
+    const shadowName = input.displayName?.trim() || value;
 
     const newUser = await prisma.user.create({
       data: {
@@ -201,6 +329,8 @@ export async function addMemberByContact(input: {
         title: `Tu as été ajouté à ${group.name}`,
         body: "Ouvre l'app pour voir les détails du groupe.",
         link: `/dashboard/groups/${input.groupId}`,
+        // V98 — Émetteur connu : l'invité peut réagir/remercier
+        senderUserId: input.invitedById,
         payload: { groupId: input.groupId },
       });
       // Notification aux autres membres existants
@@ -211,6 +341,8 @@ export async function addMemberByContact(input: {
           kind: "MEMBER_JOINED",
           title: `${created.user.displayName} a rejoint ${group.name}`,
           link: `/dashboard/groups/${input.groupId}`,
+          // V98 — Émetteur = celui qui a ajouté le membre
+          senderUserId: input.invitedById,
           payload: { groupId: input.groupId, memberId: created.id },
         },
       });
@@ -222,7 +354,10 @@ export async function addMemberByContact(input: {
       e instanceof Prisma.PrismaClientKnownRequestError &&
       e.code === "P2002"
     ) {
-      throw Errors.conflict("This user is already a member of this group");
+      throw Errors.alreadyExists({
+        what: "Cette personne est déjà dans le groupe",
+        tip: "Pas besoin de l'inviter à nouveau, elle peut déjà voir et participer 🎉",
+      });
     }
     throw e;
   }
@@ -263,10 +398,20 @@ export async function batchInviteMembers(input: {
   role?: MemberRole;
 }): Promise<BatchInviteResult> {
   if (input.invitations.length === 0) {
-    throw Errors.badRequest("Aucune invitation fournie");
+    throw Errors.badRequest(
+      "Tu n'as sélectionné personne à inviter 🤷",
+      {
+        tip: "Coche au moins un contact dans la liste avant de valider.",
+      },
+    );
   }
   if (input.invitations.length > 50) {
-    throw Errors.badRequest("Maximum 50 invitations par lot");
+    throw Errors.badRequest(
+      "On ne peut envoyer que 50 invitations à la fois ✋",
+      {
+        tip: "Découpe en plusieurs lots : ça te permet aussi de surveiller que tout part bien.",
+      },
+    );
   }
 
   // Une seule vérif de rôle pour tout le batch (perf)
@@ -317,6 +462,10 @@ export async function updateGroup(input: {
   actorUserId: string;
   name?: string;
   defaultCurrency?: string;
+  /** V111 · Active/désactive les reçus fiscaux (admin only). */
+  taxReceiptsEnabled?: boolean;
+  /** V141 · Exige la confirmation receveur après déclaration paiement. */
+  paymentConfirmationRequired?: boolean;
 }) {
   await assertRole(input.groupId, input.actorUserId, ["ADMIN"]);
 
@@ -327,7 +476,17 @@ export async function updateGroup(input: {
       ...(input.defaultCurrency && {
         defaultCurrency: input.defaultCurrency.toUpperCase(),
       }),
-    },
+      // V111 · Le flag est explicitement vérifié pour `undefined` afin
+      // qu'on puisse aussi le passer à `false` (désactivation).
+      // Cast `as any` jusqu'à `npx prisma generate`.
+      ...(typeof input.taxReceiptsEnabled === "boolean" && {
+        taxReceiptsEnabled: input.taxReceiptsEnabled,
+      }),
+      // V141 · Idem pour paymentConfirmationRequired.
+      ...(typeof input.paymentConfirmationRequired === "boolean" && {
+        paymentConfirmationRequired: input.paymentConfirmationRequired,
+      }),
+    } as any,
   });
 
   if (input.name) {
@@ -368,7 +527,7 @@ export async function removeMember(input: {
     include: { user: true },
   });
   if (!member || member.groupId !== input.groupId) {
-    throw Errors.notFound("Membre introuvable dans ce groupe");
+    throw Errors.notFound("Ce membre n'est pas (ou plus) dans ce groupe 🔍");
   }
 
   const isSelfRemoval = member.userId === input.actorUserId;
@@ -387,7 +546,10 @@ export async function removeMember(input: {
     });
     if (otherAdmins === 0) {
       throw Errors.badRequest(
-        "Impossible de retirer le dernier admin. Promeut d'abord un autre membre.",
+        "Ce membre est le dernier admin du groupe — on ne peut pas le retirer 🛡️",
+        {
+          tip: "Un groupe a toujours besoin d'au moins un admin pour fonctionner. Promeus d'abord un autre membre, puis tu pourras retirer celui-ci.",
+        },
       );
     }
   }
@@ -417,7 +579,7 @@ export async function changeMemberRole(input: {
     include: { user: true },
   });
   if (!member || member.groupId !== input.groupId) {
-    throw Errors.notFound("Membre introuvable");
+    throw Errors.notFound("Ce membre est introuvable dans le groupe 🔍");
   }
 
   // Si on retrograde un ADMIN, vérifier qu'il en reste au moins un
@@ -430,7 +592,12 @@ export async function changeMemberRole(input: {
       },
     });
     if (otherAdmins === 0) {
-      throw Errors.badRequest("Le groupe doit garder au moins 1 admin");
+      throw Errors.badRequest(
+        "Tu ne peux pas rétrograder le seul admin du groupe 🛡️",
+        {
+          tip: "Promeus d'abord un autre membre au rôle d'admin avant de changer celui-ci — un groupe a toujours besoin d'au moins une personne aux commandes.",
+        },
+      );
     }
   }
 
@@ -501,10 +668,15 @@ export async function createInviteToken(input: {
 export async function listInviteTokens(input: {
   groupId: string;
   actorUserId: string;
+  /** Inclure les tokens révoqués (par défaut false). */
+  includeRevoked?: boolean;
 }) {
   await getGroupForMember(input.groupId, input.actorUserId);
   return prisma.groupInviteToken.findMany({
-    where: { groupId: input.groupId, revokedAt: null },
+    where: {
+      groupId: input.groupId,
+      ...(input.includeRevoked ? {} : { revokedAt: null }),
+    },
     orderBy: { createdAt: "desc" },
   });
 }
@@ -516,7 +688,7 @@ export async function revokeInviteToken(input: {
   const t = await prisma.groupInviteToken.findUnique({
     where: { id: input.tokenId },
   });
-  if (!t) throw Errors.notFound("Token introuvable");
+  if (!t) throw Errors.notFound("Ce lien d'invitation est introuvable 🔗");
   await assertRole(t.groupId, input.actorUserId, ["ADMIN", "TREASURER"]);
   await prisma.groupInviteToken.update({
     where: { id: input.tokenId },
@@ -548,13 +720,35 @@ export async function getPublicTokenInfo(token: string) {
       },
     },
   });
-  if (!t) throw Errors.notFound("Lien introuvable ou expiré");
-  if (t.revokedAt) throw Errors.notFound("Lien révoqué");
+  if (!t)
+    throw Errors.notFound(
+      "Ce lien d'invitation n'existe pas (ou plus) 🔗",
+      {
+        tip: "Demande à la personne qui te l'a envoyé de te générer un nouveau lien.",
+      },
+    );
+  if (t.revokedAt)
+    throw Errors.notFound(
+      "Ce lien d'invitation a été désactivé par un admin 🚫",
+      {
+        tip: "Demande à un admin du groupe de t'en envoyer un nouveau.",
+      },
+    );
   if (t.expiresAt && t.expiresAt < new Date()) {
-    throw Errors.notFound("Lien expiré");
+    throw Errors.notFound(
+      "Ce lien d'invitation a expiré ⏰",
+      {
+        tip: "Pas de panique : un admin peut t'en générer un tout neuf en quelques secondes.",
+      },
+    );
   }
   if (t.maxUses && t.uses >= t.maxUses) {
-    throw Errors.notFound("Lien déjà utilisé son maximum");
+    throw Errors.notFound(
+      "Ce lien d'invitation a atteint son nombre max d'utilisations 🎯",
+      {
+        tip: "C'est par mesure de sécurité — demande un nouveau lien à un admin.",
+      },
+    );
   }
   return {
     token: t.token,
@@ -574,13 +768,35 @@ export async function joinGroupViaToken(input: {
   const t = await prisma.groupInviteToken.findUnique({
     where: { token: input.token },
   });
-  if (!t) throw Errors.notFound("Lien introuvable");
-  if (t.revokedAt) throw Errors.badRequest("Lien révoqué");
+  if (!t)
+    throw Errors.notFound(
+      "Ce lien d'invitation n'existe pas (ou plus) 🔗",
+      {
+        tip: "Demande à la personne qui te l'a envoyé de t'en générer un nouveau.",
+      },
+    );
+  if (t.revokedAt)
+    throw Errors.badRequest(
+      "Ce lien d'invitation a été désactivé 🚫",
+      {
+        tip: "Un admin l'a révoqué — demande-lui de t'en envoyer un nouveau.",
+      },
+    );
   if (t.expiresAt && t.expiresAt < new Date()) {
-    throw Errors.badRequest("Lien expiré");
+    throw Errors.badRequest(
+      "Ce lien d'invitation a expiré ⏰",
+      {
+        tip: "Demande à un admin de te regénérer un lien — c'est instantané.",
+      },
+    );
   }
   if (t.maxUses && t.uses >= t.maxUses) {
-    throw Errors.badRequest("Lien déjà utilisé son maximum");
+    throw Errors.badRequest(
+      "Ce lien a atteint son nombre max d'utilisations 🎯",
+      {
+        tip: "Le quota est dépassé — demande un nouveau lien à un admin du groupe.",
+      },
+    );
   }
 
   // Vérifier qu'on n'est pas déjà membre
@@ -633,6 +849,9 @@ export async function joinGroupViaToken(input: {
         title: `${actor.displayName} a rejoint ${group.name}`,
         body: "Via un lien d'invitation",
         link: `/dashboard/groups/${t.groupId}`,
+        // V98 — Émetteur = le nouveau venu (les anciens membres peuvent
+        // lui réagir avec un 👋 ou un mot de bienvenue)
+        senderUserId: input.actorUserId,
         payload: { groupId: t.groupId },
       },
     });

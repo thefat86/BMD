@@ -1,0 +1,530 @@
+"use client";
+
+/**
+ * /dashboard/groups · Liste de tous mes groupes (vue dédiée).
+ *
+ * Avant : le bouton "Groupes" du bottom-nav pointait vers /dashboard
+ * (= même URL que Home), donc tap = pas de feedback. Maintenant, c'est
+ * une vraie page liste avec :
+ *  - Recherche live
+ *  - Cartes de groupes (icône type + nom + badge balance + nb membres)
+ *  - Tap sur une carte → /dashboard/groups/[id]
+ *  - FAB "+" → crée un nouveau groupe (via /dashboard?create=1)
+ *
+ * Style banking-app : cards horizontales avec gradient subtil, fond dark
+ * BMD, scale-on-tap, haptic léger.
+ */
+import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
+import { useRouter } from "next/navigation";
+import {
+  api,
+  clearToken,
+  getToken,
+  isUnauthorized,
+} from "../../../lib/api-client";
+import { ResponsiveShell } from "../../../lib/ui/responsive-shell";
+import { useBreakpoint } from "../../../lib/use-breakpoint";
+// V41 — Refonte mobile dédiée (hero + filtres pills + cards à ruban couleur).
+import { MobileGroupsListView } from "../../../lib/ui/mobile-groups-list-view";
+import { useT } from "../../../lib/i18n/app-strings";
+
+/** Forme renvoyée par api.listGroups() — on accepte les champs réels du
+ *  backend pour ne pas casser le type-check. Les champs optionnels sont
+ *  gardés via `?:` pour qu'on puisse upgrader la vue sans refactor. */
+interface Group {
+  id: string;
+  name: string;
+  type: string;
+  defaultCurrency: string;
+  createdAt: string;
+  /** Nombre de membres (clé renvoyée par l'API : `membersCount`) */
+  membersCount?: number;
+  memberCount?: number;
+  expenseCount?: number;
+  /** Rôle de l'utilisateur dans le groupe ("ADMIN" | "MEMBER") — selon endpoint */
+  role?: string;
+  /** Balance perso renvoyée en string par l'API (montant signé) */
+  myNet?: string;
+  /** Variante future si on bascule en centimes (micro-units) */
+  myBalanceMinor?: number;
+}
+
+const TYPE_LABEL: Record<string, string> = {
+  TONTINE: "Tontine",
+  COLOC: "Coloc",
+  TRAVEL: "Voyage",
+  EVENT: "Événement",
+  CLUB: "Club",
+  PARISH: "Paroisse",
+  GENERIC: "Groupe",
+};
+
+function TypeIcon({ type }: { type: string }) {
+  // Icônes SVG outlined minimalistes — pas d'emojis chargés
+  const paths: Record<string, string> = {
+    TONTINE:
+      "M12 2v20M5 8h14M5 16h14",
+    COLOC:
+      "M3 11l9-8 9 8v9a2 2 0 01-2 2H5a2 2 0 01-2-2v-9z M9 21V13h6v8",
+    TRAVEL:
+      "M2 16l10-13 10 13M6 16h12M9 21h6",
+    EVENT:
+      "M12 2l3 6 7 1-5 5 1 7-6-3-6 3 1-7-5-5 7-1z",
+    CLUB:
+      "M12 2a10 10 0 100 20 10 10 0 000-20zM12 8v4l3 3",
+    PARISH:
+      "M12 2L4 9v13h16V9l-8-7zM12 11v6M9 14h6",
+    GENERIC:
+      "M3 7h18M3 12h18M3 17h18",
+  };
+  const d = paths[type] ?? paths.GENERIC;
+  return (
+    <svg
+      width="22"
+      height="22"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      <path d={d} />
+    </svg>
+  );
+}
+
+export default function GroupsListPage() {
+  const router = useRouter();
+  const { isMobile, ready: bpReady } = useBreakpoint();
+  const t = useT();
+  const [groups, setGroups] = useState<Group[] | null>(null);
+  const [query, setQuery] = useState("");
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!getToken()) {
+      router.replace("/login");
+      return;
+    }
+    api
+      .listGroups()
+      .then((g) => setGroups(g as Group[]))
+      .catch((e) => {
+        if (isUnauthorized(e)) {
+          clearToken();
+          router.replace("/login");
+          return;
+        }
+        setError((e as Error).message);
+      });
+  }, [router]);
+
+  const filtered = useMemo(() => {
+    if (!groups) return null;
+    const q = query.trim().toLowerCase();
+    if (!q) return groups;
+    return groups.filter(
+      (g) =>
+        g.name.toLowerCase().includes(q) ||
+        (TYPE_LABEL[g.type] ?? "").toLowerCase().includes(q),
+    );
+  }, [groups, query]);
+
+  function buzz() {
+    try {
+      if (typeof navigator !== "undefined" && "vibrate" in navigator) {
+        (navigator as any).vibrate(6);
+      }
+    } catch {
+      /* ignore */
+    }
+  }
+
+  function openCreate() {
+    buzz();
+    router.push("/dashboard?create=1");
+  }
+
+  // V41 — Bascule mobile vers vue dédiée ("Family of cards" avec filtre type).
+  // Placée APRÈS tous les hooks pour respecter Rules of Hooks.
+  if (bpReady && isMobile) {
+    return (
+      <ResponsiveShell
+        mobileTitle={t("nav.groups") || "Groupes"}
+        breadcrumb={t("nav.dashboard")}
+        back={{ href: "/dashboard" }}
+        hideFab
+      >
+        <MobileGroupsListView onCreate={openCreate} />
+      </ResponsiveShell>
+    );
+  }
+
+  return (
+    <ResponsiveShell
+      mobileTitle={t("nav.groups")}
+      desktopTitle={t("nav.groups")}
+      breadcrumb={t("nav.dashboard")}
+      back={{ href: "/dashboard" }}
+      onFabClick={openCreate}
+    >
+      <div
+        style={{
+          padding: isMobile ? "0 16px 24px" : 0,
+          maxWidth: isMobile ? "100%" : 920,
+          margin: "0 auto",
+        }}
+      >
+        {/* Search bar mobile-native */}
+        <div style={{ marginTop: 8, marginBottom: 14 }}>
+          <input
+            type="search"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder={t("groups.searchPlaceholder")}
+            inputMode="search"
+            enterKeyHint="search"
+            autoComplete="off"
+            spellCheck={false}
+            style={{
+              width: "100%",
+              padding: "13px 16px",
+              borderRadius: 14,
+              background: "rgba(244,228,193,0.04)",
+              border: "1.5px solid rgba(244,228,193,0.10)",
+              color: "var(--cream)",
+              fontSize: 16,
+              fontFamily: "inherit",
+              boxSizing: "border-box",
+              outline: "none",
+              minHeight: 48,
+            }}
+          />
+        </div>
+
+        {error && (
+          <div
+            style={{
+              padding: "12px 14px",
+              background: "rgba(217,113,74,0.10)",
+              border: "1px solid rgba(217,113,74,0.30)",
+              borderRadius: 12,
+              color: "#FFB89A",
+              fontSize: 13,
+              marginBottom: 12,
+            }}
+          >
+            {error}
+          </div>
+        )}
+
+        {filtered === null ? (
+          /* Skeleton chargement */
+          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            {[0, 1, 2].map((i) => (
+              <div
+                key={i}
+                style={{
+                  height: 76,
+                  background: "rgba(244,228,193,0.04)",
+                  border: "1px solid rgba(244,228,193,0.06)",
+                  borderRadius: 16,
+                  animation: "bmd-skel 1.2s ease-in-out infinite",
+                }}
+              />
+            ))}
+            <style jsx>{`
+              @keyframes bmd-skel {
+                0%, 100% { opacity: 0.5; }
+                50% { opacity: 0.8; }
+              }
+            `}</style>
+          </div>
+        ) : filtered.length === 0 ? (
+          <EmptyState query={query} onCreate={openCreate} t={t} />
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            {filtered.map((g) => (
+              <GroupCard key={g.id} group={g} onTap={buzz} />
+            ))}
+          </div>
+        )}
+      </div>
+    </ResponsiveShell>
+  );
+}
+
+function GroupCard({
+  group,
+  onTap,
+}: {
+  group: Group;
+  onTap: () => void;
+}) {
+  // Le backend peut renvoyer `myNet` en string ("12.34", "-5.00", "0.00")
+  // ou `myBalanceMinor` en number (centimes). On gère les 2 + safe fallback.
+  let balance: number | null = null;
+  if (typeof group.myBalanceMinor === "number") {
+    balance = group.myBalanceMinor / 100;
+  } else if (typeof group.myNet === "string") {
+    const n = Number(group.myNet);
+    if (!Number.isNaN(n)) balance = n;
+  }
+  const isPositive = balance !== null && balance > 0.01;
+  const memberCount = group.membersCount ?? group.memberCount;
+
+  return (
+    <Link
+      href={`/dashboard/groups/${group.id}`}
+      onClick={onTap}
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 14,
+        padding: "14px 16px",
+        background: "rgba(244,228,193,0.04)",
+        border: "1px solid rgba(244,228,193,0.08)",
+        borderRadius: 16,
+        color: "var(--cream)",
+        textDecoration: "none",
+        WebkitTapHighlightColor: "transparent",
+        touchAction: "manipulation",
+        transition: "transform 0.05s ease, background 0.15s ease",
+      }}
+      onTouchStart={(e) => {
+        (e.currentTarget as HTMLElement).style.transform = "scale(0.98)";
+      }}
+      onTouchEnd={(e) => {
+        (e.currentTarget as HTMLElement).style.transform = "scale(1)";
+      }}
+    >
+      {/* Icône type */}
+      <div
+        style={{
+          width: 44,
+          height: 44,
+          borderRadius: 12,
+          background:
+            "linear-gradient(135deg, rgba(232,163,61,0.15), rgba(181,70,46,0.05))",
+          border: "1px solid rgba(232,163,61,0.20)",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          color: "var(--saffron)",
+          flexShrink: 0,
+        }}
+      >
+        <TypeIcon type={group.type} />
+      </div>
+      {/* Nom + meta */}
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div
+          style={{
+            fontSize: 15,
+            fontWeight: 700,
+            color: "var(--cream)",
+            lineHeight: 1.2,
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+          }}
+        >
+          {group.name}
+        </div>
+        <div
+          style={{
+            fontSize: 11,
+            color: "var(--cream-soft)",
+            marginTop: 3,
+            letterSpacing: 0.2,
+          }}
+        >
+          {TYPE_LABEL[group.type] ?? group.type}
+          {typeof memberCount === "number" && (
+            <span> · {memberCount} membres</span>
+          )}
+          {group.role === "ADMIN" && (
+            <span
+              style={{
+                marginLeft: 6,
+                fontSize: 9,
+                padding: "1px 6px",
+                borderRadius: 999,
+                background: "rgba(232,163,61,0.15)",
+                color: "var(--saffron)",
+                fontWeight: 700,
+                letterSpacing: 0.6,
+                textTransform: "uppercase",
+                verticalAlign: "middle",
+              }}
+            >
+              Admin
+            </span>
+          )}
+        </div>
+      </div>
+      {/* Balance + chevron */}
+      <div
+        style={{
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "flex-end",
+          gap: 2,
+          flexShrink: 0,
+        }}
+      >
+        {balance !== null && Math.abs(balance) > 0.01 ? (
+          <span
+            style={{
+              fontSize: 13,
+              fontWeight: 800,
+              color: isPositive
+                ? "var(--emerald-soft, #7DC59E)"
+                : "#FFB89A",
+              fontVariantNumeric: "tabular-nums",
+            }}
+          >
+            {isPositive ? "+" : ""}
+            {balance.toFixed(2)} {group.defaultCurrency}
+          </span>
+        ) : (
+          <span
+            style={{
+              fontSize: 11,
+              color: "var(--muted)",
+              fontStyle: "italic",
+            }}
+          >
+            soldé
+          </span>
+        )}
+        <span
+          aria-hidden
+          style={{
+            fontSize: 14,
+            color: "var(--saffron)",
+            opacity: 0.5,
+          }}
+        >
+          ›
+        </span>
+      </div>
+    </Link>
+  );
+}
+
+function EmptyState({
+  query,
+  onCreate,
+  t,
+}: {
+  query: string;
+  onCreate: () => void;
+  t: (k: any) => string;
+}) {
+  if (query.trim()) {
+    return (
+      <div
+        style={{
+          padding: "40px 20px",
+          textAlign: "center",
+          color: "var(--cream-soft)",
+          fontSize: 14,
+          lineHeight: 1.6,
+        }}
+      >
+        <div style={{ fontSize: 36, marginBottom: 12 }}>·</div>
+        <p style={{ margin: 0 }}>
+          Aucun groupe ne correspond à « {query} »
+        </p>
+      </div>
+    );
+  }
+  return (
+    <div
+      style={{
+        padding: "40px 20px",
+        textAlign: "center",
+        color: "var(--cream-soft)",
+      }}
+    >
+      <div
+        style={{
+          width: 72,
+          height: 72,
+          margin: "0 auto 18px",
+          borderRadius: 18,
+          background:
+            "linear-gradient(135deg, rgba(232,163,61,0.15), rgba(181,70,46,0.06))",
+          border: "1px solid rgba(232,163,61,0.25)",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          color: "var(--saffron)",
+        }}
+      >
+        <svg
+          width="32"
+          height="32"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.6"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          aria-hidden
+        >
+          <circle cx="9" cy="7" r="4" />
+          <path d="M3 21v-2a4 4 0 014-4h4a4 4 0 014 4v2" />
+          <circle cx="17" cy="7" r="3" />
+          <path d="M21 21v-2a4 4 0 00-3-3.85" />
+        </svg>
+      </div>
+      <h3
+        style={{
+          fontFamily: "Cormorant Garamond, serif",
+          fontSize: 22,
+          fontWeight: 700,
+          margin: "0 0 8px",
+          color: "var(--cream)",
+        }}
+      >
+        Aucun groupe pour l'instant
+      </h3>
+      <p
+        style={{
+          fontSize: 13,
+          margin: "0 0 22px",
+          lineHeight: 1.5,
+        }}
+      >
+        Crée un groupe pour partager des dépenses avec ta famille, tes amis ou
+        tes colocs.
+      </p>
+      <button
+        type="button"
+        onClick={onCreate}
+        style={{
+          padding: "14px 26px",
+          background:
+            "linear-gradient(135deg, var(--saffron, #e8a33d), var(--terracotta, #b54732))",
+          color: "#16111E",
+          border: "none",
+          borderRadius: 999,
+          fontSize: 14,
+          fontWeight: 800,
+          letterSpacing: 0.3,
+          cursor: "pointer",
+          fontFamily: "inherit",
+          boxShadow: "0 8px 24px -8px rgba(232,163,61,0.45)",
+          touchAction: "manipulation",
+        }}
+      >
+        + Créer mon 1er groupe
+      </button>
+    </div>
+  );
+}

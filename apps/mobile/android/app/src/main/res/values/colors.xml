@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    V132 — Couleurs Android.
+
+    `notification_color` : utilisée par Firebase Messaging comme couleur
+    d'accent sur les notifs push (badge, icône, ripple). On reprend la
+    couleur de marque BMD V45-light (saffron) pour la cohérence visuelle
+    avec l'app et les autres canaux (Web Push, email, in-app badge).
+-->
+<resources>
+    <color name="notification_color">#C58A2E</color>
+</resources>

@@ -1,0 +1,1060 @@
+"use client";
+
+/**
+ * Page paramètres d'un groupe :
+ *  - Renommer
+ *  - Changer la devise par défaut
+ *  - Gérer les membres (rôle, retirer)
+ *  - Liens d'invitation (générer / révoquer + QR)
+ *  - Supprimer le groupe (admin uniquement, double confirmation)
+ *
+ * Permissions :
+ *  - Tous les membres : voient les paramètres
+ *  - ADMIN / TREASURER : peuvent renommer, gérer membres, invites
+ *  - ADMIN seul : peut supprimer le groupe
+ */
+import { useEffect, useMemo, useState } from "react";
+import { useParams, useRouter } from "next/navigation";
+import Link from "next/link";
+import {
+  api,
+  clearToken,
+  getToken,
+  isUnauthorized,
+} from "../../../../../lib/api-client";
+import { useToast } from "../../../../../lib/ui/toast";
+import { useDialog } from "../../../../../lib/ui/dialog-provider";
+import { ResponsiveShell } from "../../../../../lib/ui/responsive-shell";
+import { useBreakpoint } from "../../../../../lib/use-breakpoint";
+import { useT } from "../../../../../lib/i18n/app-strings";
+import { CategoryRulesBlock } from "../../../../../lib/ui/category-rules-block";
+// V52.C2 — Icon registry V45 (remplace 👥 ⚠ par SVG outline)
+import { Icon } from "../../../../../lib/ui/icons";
+import { GroupThemeBlock } from "../../../../../lib/ui/group-theme-block";
+import { BottomSheet } from "../../../../../lib/ui/bottom-sheet";
+// V40 — Refonte mobile dédiée (accordéon iOS + Danger zone).
+import { MobileGroupSettings } from "../../../../../lib/ui/mobile-group-settings";
+
+const ROLES = ["ADMIN", "TREASURER", "MEMBER", "OBSERVER"] as const;
+type Role = (typeof ROLES)[number];
+
+const CURRENCIES = ["EUR", "USD", "XAF", "XOF", "CDF", "GBP", "CAD"];
+
+export default function GroupSettingsPage(): JSX.Element {
+  const router = useRouter();
+  const params = useParams();
+  const groupId = params.id as string;
+  const toast = useToast();
+  const dialog = useDialog();
+  const { isMobile, ready: bpReady } = useBreakpoint();
+  const t = useT();
+
+  const [group, setGroup] = useState<any>(null);
+  const [me, setMe] = useState<any>(null);
+  const [tokens, setTokens] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  const [name, setName] = useState("");
+  const [currency, setCurrency] = useState("EUR");
+  const [confirmDeleteGroup, setConfirmDeleteGroup] = useState(false);
+  const [confirmText, setConfirmText] = useState("");
+
+  // QR code modal
+  const [qrToken, setQrToken] = useState<string | null>(null);
+
+  async function load() {
+    try {
+      const [m, g, t] = await Promise.all([
+        api.me(),
+        api.getGroup(groupId),
+        api.listInviteTokens(groupId).catch(() => []),
+      ]);
+      setMe(m.user);
+      setGroup(g);
+      setName(g.name);
+      setCurrency(g.defaultCurrency);
+      setTokens(t);
+    } catch (e) {
+      if (isUnauthorized(e)) {
+        clearToken();
+        router.replace("/login");
+        return;
+      }
+      toast.error(e);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    if (!getToken()) {
+      router.replace("/login");
+      return;
+    }
+    void load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [groupId]);
+
+  const myRole = useMemo<Role | null>(() => {
+    if (!group || !me) return null;
+    const m = group.members.find((x: any) => x.user.id === me.id);
+    return (m?.role as Role) ?? null;
+  }, [group, me]);
+
+  const canManage = myRole === "ADMIN" || myRole === "TREASURER";
+  const isAdmin = myRole === "ADMIN";
+
+  async function saveBasics() {
+    if (!canManage) return;
+    try {
+      const changes: { name?: string; defaultCurrency?: string } = {};
+      if (name.trim() !== group.name) changes.name = name.trim();
+      if (currency !== group.defaultCurrency)
+        changes.defaultCurrency = currency;
+      if (Object.keys(changes).length === 0) {
+        toast.info(t("common.optional"));
+        return;
+      }
+      await api.updateGroup(groupId, changes);
+      toast.success(t("settings.saved"));
+      await load();
+    } catch (e) {
+      toast.error(e);
+    }
+  }
+
+  async function changeRole(memberId: string, newRole: Role) {
+    if (!canManage) return;
+    try {
+      await api.changeMemberRole(groupId, memberId, newRole);
+      toast.success(t("settings.roleUpdated"));
+      await load();
+    } catch (e) {
+      toast.error(e);
+    }
+  }
+
+  async function removeMember(memberId: string, memberName: string) {
+    if (!canManage) return;
+    const ok = await dialog.confirm(
+      t("settings.removeMemberConfirm", { name: memberName }),
+      {
+        variant: "danger",
+        title: t("settings.removeMember"),
+        confirmLabel: t("settings.removeMember"),
+      },
+    );
+    if (!ok) return;
+    try {
+      await api.removeMember(groupId, memberId);
+      toast.success(t("settings.memberRemoved", { name: memberName }));
+      await load();
+    } catch (e) {
+      toast.error(e);
+    }
+  }
+
+  async function generateInvite() {
+    if (!canManage) return;
+    try {
+      const token = await api.createInviteToken(groupId, {
+        expiresInHours: 24 * 7,
+      });
+      toast.success(t("settings.generateInvite"));
+      // Ouvre direct le QR
+      setQrToken(token.token);
+      await load();
+    } catch (e) {
+      toast.error(e);
+    }
+  }
+
+  async function revokeInvite(tokenId: string) {
+    if (!canManage) return;
+    if (
+      !(await dialog.confirm(t("settings.revokeInvite") + " ?", {
+        variant: "warning",
+        title: t("settings.revokeInvite"),
+        confirmLabel: t("settings.revokeInvite"),
+      }))
+    )
+      return;
+    try {
+      await api.revokeInviteToken(tokenId);
+      toast.success(t("settings.revokeInvite"));
+      await load();
+    } catch (e) {
+      toast.error(e);
+    }
+  }
+
+  async function copyLink(token: string) {
+    const url = `${window.location.origin}/join/${token}`;
+    try {
+      await navigator.clipboard.writeText(url);
+      toast.success(t("settings.copyInviteLink"));
+    } catch {
+      // Fallback : on affiche le lien dans un dialog (l'utilisateur peut le
+      // sélectionner manuellement). Pas de window.prompt natif.
+      await dialog.alert(url, {
+        title: t("settings.copyInviteLink"),
+        okLabel: "Compris",
+      });
+    }
+  }
+
+  async function shareLink(token: string) {
+    const url = `${window.location.origin}/join/${token}`;
+    if (typeof navigator.share === "function") {
+      try {
+        await navigator.share({
+          title: `Rejoins ${group?.name} sur BMD`,
+          text: `Tu es invité·e à rejoindre le groupe « ${group?.name} » sur BMD`,
+          url,
+        });
+        return;
+      } catch {
+        // utilisateur a annulé : on ne fait rien
+        return;
+      }
+    }
+    void copyLink(token);
+  }
+
+  async function deleteGroupConfirmed() {
+    if (!isAdmin) return;
+    if (confirmText !== group.name) {
+      toast.error(t("settings.typeNameToConfirm", { name: group.name }));
+      return;
+    }
+    try {
+      await api.deleteGroup(groupId);
+      toast.success(t("settings.groupDeleted"));
+      router.replace("/dashboard");
+    } catch (e) {
+      toast.error(e);
+    }
+  }
+
+  // V40 — Bascule mobile vers vue dédiée accordéon iOS. Placée après tous
+  // les hooks pour respecter Rules of Hooks.
+  if (bpReady && isMobile) {
+    return (
+      <ResponsiveShell
+        breadcrumb={t("groupSettings.title") || t("settings.title") || "Paramètres"}
+        mobileTitle={t("groupSettings.title") || t("settings.title") || "Paramètres"}
+        back={{ href: `/dashboard/groups/${groupId}` }}
+        hideFab
+      >
+        <MobileGroupSettings groupId={groupId} />
+      </ResponsiveShell>
+    );
+  }
+
+  if (loading || !group) {
+    return (
+      <ResponsiveShell
+        breadcrumb={t("settings.title")}
+        desktopTitle={t("settings.title")}
+        mobileTitle={t("settings.title")}
+        back={{ href: `/dashboard/groups/${groupId}` }}
+        hideFab
+      >
+        <p style={{ padding: 30, color: "var(--cream-soft)" }}>
+          {t("common.loading")}
+        </p>
+      </ResponsiveShell>
+    );
+  }
+
+  return (
+    <ResponsiveShell
+      breadcrumb={`Groupes › ${group.name} › Paramètres`}
+      desktopTitle={`⚙️ Paramètres — ${group.name}`}
+      subtitle={`Tu es ${myRole?.toLowerCase()} dans ce groupe`}
+      mobileTitle="Paramètres"
+      back={{ href: `/dashboard/groups/${groupId}` }}
+      hideFab
+    >
+      <div
+        style={{
+          padding: isMobile ? "8px 16px 24px" : 0,
+          maxWidth: isMobile ? "100%" : 1100,
+          margin: "0 auto",
+        }}
+      >
+      {/* V37 — Mini hero card mobile banking : avatar groupe + nom + rôle.
+          Pattern Revolut/Wise : on rappelle l'identité de l'écran sous le
+          title du shell, avec une touche visuelle pour ancrer l'user. */}
+      {isMobile && (
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 12,
+            padding: "12px 14px",
+            marginTop: 4,
+            marginBottom: 14,
+            background:
+              "linear-gradient(135deg, rgba(232,163,61,0.10), rgba(181,70,46,0.04))",
+            border: "1px solid rgba(232,163,61,0.18)",
+            borderRadius: 16,
+          }}
+        >
+          <div
+            style={{
+              width: 44,
+              height: 44,
+              borderRadius: 14,
+              background:
+                "linear-gradient(135deg, var(--saffron, #e8a33d), var(--terracotta, #b54732))",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              color: "#16111E",
+              fontSize: 18,
+              fontWeight: 800,
+              fontFamily: "Cormorant Garamond, serif",
+              flexShrink: 0,
+              boxShadow: "0 4px 14px rgba(232,163,61,0.25)",
+            }}
+          >
+            {group.name?.charAt(0).toUpperCase() ?? "?"}
+          </div>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div
+              style={{
+                fontFamily: "Cormorant Garamond, serif",
+                fontSize: 17,
+                fontWeight: 700,
+                color: "var(--cream)",
+                lineHeight: 1.2,
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
+              }}
+            >
+              {group.name}
+            </div>
+            <div
+              style={{
+                fontSize: 11,
+                color: "var(--cream-soft)",
+                marginTop: 2,
+                letterSpacing: 0.3,
+              }}
+            >
+              Ton rôle : <strong>{myRole?.toLowerCase()}</strong>
+              {currency && (
+                <>
+                  {" · "}
+                  <strong>{currency}</strong>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* === Mode "Ne pas déranger" (spec §3.12) === */}
+      <DndToggle group={group} meId={me?.id} onChanged={load} />
+
+      {/* === Règles auto par catégorie (spec §3.7) === */}
+      <CategoryRulesBlock
+        groupId={group.id}
+        members={group.members}
+        canEdit={canManage}
+      />
+
+      {/* === Charte / thème du groupe (spec §6.8) — admin only === */}
+      {isAdmin && <GroupThemeBlock groupId={group.id} />}
+
+      {/* === BASE === */}
+      <div className="card" style={{ marginTop: 20 }}>
+        <h2 style={{ marginTop: 0 }}>{t("settings.info")}</h2>
+        <label
+          style={{ display: "block", marginBottom: 12, fontSize: 13 }}
+        >
+          {t("settings.groupName")}
+          <input
+            type="text"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            disabled={!canManage}
+            style={{
+              display: "block",
+              width: "100%",
+              padding: "10px 12px",
+              fontSize: 16,
+              border: "1px solid var(--line-soft)",
+              borderRadius: 8,
+              marginTop: 6,
+              boxSizing: "border-box",
+            }}
+          />
+        </label>
+        <label style={{ display: "block", fontSize: 13 }}>
+          {t("settings.defaultCurrency")}
+          <select
+            value={currency}
+            onChange={(e) => setCurrency(e.target.value)}
+            disabled={!canManage}
+            style={{
+              display: "block",
+              width: "100%",
+              padding: "10px 12px",
+              fontSize: 16,
+              border: "1px solid var(--line-soft)",
+              borderRadius: 8,
+              marginTop: 6,
+              boxSizing: "border-box",
+              background: "rgba(244, 228, 193, 0.04)",
+            }}
+          >
+            {CURRENCIES.map((c) => (
+              <option key={c} value={c}>
+                {c}
+              </option>
+            ))}
+          </select>
+        </label>
+        {canManage && (
+          <button
+            onClick={saveBasics}
+            style={{
+              marginTop: 16,
+              padding: "12px 20px",
+              background: "linear-gradient(135deg, #E8A33D 0%, #B5462E 100%)",
+              color: "#fff",
+              border: "none",
+              borderRadius: 8,
+              cursor: "pointer",
+              fontWeight: 600,
+              minHeight: 44,
+            }}
+          >
+            {t("settings.save")}
+          </button>
+        )}
+      </div>
+
+      {/* === MEMBRES === */}
+      <div className="card" style={{ marginTop: 20 }}>
+        <h2
+          style={{
+            marginTop: 0,
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 8,
+          }}
+        >
+          {/* V52.C2 — SVG users remplace 👥 */}
+          <Icon name="users" size={20} color="currentColor" strokeWidth={1.6} />
+          {t("settings.members")} ({group.members.length})
+        </h2>
+        <div className="list">
+          {group.members.map((m: any) => {
+            const isMe = m.user.id === me?.id;
+            return (
+              <div
+                key={m.id}
+                style={{
+                  padding: "10px 0",
+                  borderBottom: "1px solid var(--line-soft)",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 10,
+                  flexWrap: "wrap",
+                }}
+              >
+                <div
+                  style={{
+                    width: 36,
+                    height: 36,
+                    borderRadius: "50%",
+                    background: "rgba(244, 228, 193, 0.12)",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    fontWeight: 700,
+                    flexShrink: 0,
+                  }}
+                >
+                  {m.user.displayName.charAt(0).toUpperCase()}
+                </div>
+                <div style={{ flex: 1, minWidth: 120 }}>
+                  <div style={{ fontWeight: 600, fontSize: 14 }}>
+                    {m.user.displayName}
+                    {isMe && (
+                      <span
+                        style={{
+                          fontSize: 9,
+                          color: "var(--saffron, #E8A33D)",
+                          marginLeft: 6,
+                          letterSpacing: 1,
+                        }}
+                      >
+                        MOI
+                      </span>
+                    )}
+                  </div>
+                </div>
+                {canManage ? (
+                  <select
+                    value={m.role}
+                    onChange={(e) => changeRole(m.id, e.target.value as Role)}
+                    disabled={isMe && myRole === "ADMIN"}
+                    title={t("settings.changeRole")}
+                    style={{
+                      padding: "6px 8px",
+                      fontSize: 12,
+                      border: "1px solid var(--line-soft)",
+                      borderRadius: 6,
+                      background: "rgba(244, 228, 193, 0.04)",
+                    }}
+                  >
+                    {ROLES.map((r) => (
+                      <option key={r} value={r}>
+                        {r.toLowerCase()}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <span style={{ fontSize: 12, color: "#666" }}>
+                    {m.role.toLowerCase()}
+                  </span>
+                )}
+                {canManage && !isMe && (
+                  <button
+                    onClick={() => removeMember(m.id, m.user.displayName)}
+                    title={t("settings.removeMember")}
+                    aria-label={t("settings.removeMember")}
+                    style={{
+                      background: "transparent",
+                      border: "none",
+                      color: "#ef4444",
+                      cursor: "pointer",
+                      fontSize: 18,
+                      padding: "4px 8px",
+                      minHeight: 32,
+                    }}
+                  >
+                    ✕
+                  </button>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* === LIENS D'INVITATION === */}
+      {canManage && (
+        <div className="card" style={{ marginTop: 20 }}>
+          <h2 style={{ marginTop: 0 }}>🔗 {t("settings.invitations")}</h2>
+          <p className="muted" style={{ fontSize: 13 }}>
+            Génère un lien partageable (WhatsApp, SMS, QR…) que tes proches
+            cliquent pour rejoindre le groupe sans saisie manuelle.
+          </p>
+
+          {/* Mini tableau de bord — spec §7.6 (suivi des invitations) */}
+          {tokens.length > 0 && (() => {
+            const totalUses = tokens.reduce(
+              (acc: number, t: any) => acc + (t.uses ?? 0),
+              0,
+            );
+            const usedTokens = tokens.filter((t: any) => (t.uses ?? 0) > 0).length;
+            const activeTokens = tokens.filter(
+              (t: any) => t.status === "active",
+            ).length;
+            return (
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "repeat(3, 1fr)",
+                  gap: 8,
+                  margin: "12px 0 16px",
+                }}
+              >
+                <div style={statBox}>
+                  <div style={statValue}>{tokens.length}</div>
+                  <div style={statLabel}>{t("settings.linksCreatedLabel")}</div>
+                </div>
+                <div style={statBox}>
+                  <div style={statValue}>{activeTokens}</div>
+                  <div style={statLabel}>Actifs</div>
+                </div>
+                <div style={statBox}>
+                  <div style={statValue}>
+                    {usedTokens}/{tokens.length}
+                  </div>
+                  <div style={statLabel}>
+                    {totalUses} entrée{totalUses > 1 ? "s" : ""}
+                  </div>
+                </div>
+              </div>
+            );
+          })()}
+
+          <button
+            onClick={generateInvite}
+            style={{
+              padding: "12px 20px",
+              background: "var(--saffron, #E8A33D)",
+              color: "#0E0B14",
+              border: "none",
+              borderRadius: 8,
+              cursor: "pointer",
+              fontWeight: 700,
+              minHeight: 44,
+            }}
+          >
+            ＋ {t("settings.generateInvite")}
+          </button>
+
+          {tokens.length > 0 && (
+            <div style={{ marginTop: 16 }}>
+              {tokens.map((tk: any) => {
+                // Z2-fix · iter var renommé `tk` (au lieu de `t`) pour ne pas
+                // shadow le `t` d'i18n. Sinon `t("settings.copyInviteLink")`
+                // dans le JSX appelle l'objet token comme une fonction → crash.
+                const status = tk.status as
+                  | "active"
+                  | "exhausted"
+                  | "expired"
+                  | "revoked";
+                const isInactive = status !== "active";
+                const usesText = tk.maxUses
+                  ? `${tk.uses}/${tk.maxUses} utilisations`
+                  : `${tk.uses} utilisation${tk.uses > 1 ? "s" : ""}`;
+                const statusBadge = (() => {
+                  if (status === "active")
+                    return {
+                      bg: "#dcfce7",
+                      color: "#166534",
+                      label: "🟢 Actif",
+                    };
+                  if (status === "exhausted")
+                    return {
+                      bg: "#fef3c7",
+                      color: "#854d0e",
+                      label: "🎯 Épuisé",
+                    };
+                  if (status === "expired")
+                    return {
+                      bg: "#fee2e2",
+                      color: "#991b1b",
+                      label: "⏰ Expiré",
+                    };
+                  return {
+                    bg: "#f3f4f6",
+                    color: "var(--cream-soft)",
+                    label: "🚫 Révoqué",
+                  };
+                })();
+                return (
+                  <div
+                    key={tk.id}
+                    style={{
+                      padding: 12,
+                      border: "1px solid var(--line-soft)",
+                      borderRadius: 8,
+                      marginBottom: 8,
+                      opacity: isInactive ? 0.7 : 1,
+                    }}
+                  >
+                    <div
+                      style={{
+                        display: "flex",
+                        gap: 6,
+                        alignItems: "center",
+                        flexWrap: "wrap",
+                        marginBottom: 6,
+                        fontSize: 11,
+                        color: "var(--muted)",
+                      }}
+                    >
+                      <span
+                        style={{
+                          background: statusBadge.bg,
+                          color: statusBadge.color,
+                          padding: "2px 8px",
+                          borderRadius: 999,
+                          fontWeight: 600,
+                          fontSize: 10,
+                        }}
+                      >
+                        {statusBadge.label}
+                      </span>
+                      <span>{usesText}</span>
+                      {tk.expiresAt && (
+                        <span>
+                          · {status === "expired" ? "Expiré le" : "Expire le"}{" "}
+                          {new Date(tk.expiresAt).toLocaleDateString("fr-FR")}
+                        </span>
+                      )}
+                      <span>
+                        · Créé{" "}
+                        {new Date(tk.createdAt).toLocaleDateString("fr-FR")}
+                      </span>
+                    </div>
+                    <code
+                      style={{
+                        display: "block",
+                        fontSize: 11,
+                        background: "#f3f4f6",
+                        padding: "6px 8px",
+                        borderRadius: 4,
+                        marginBottom: 8,
+                        wordBreak: "break-all",
+                      }}
+                    >
+                      {`/join/${tk.token}`}
+                    </code>
+                    <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                      {!isInactive && (
+                        <>
+                          <button
+                            onClick={() => copyLink(tk.token)}
+                            title={t("settings.copyInviteLink")}
+                            style={btnSmall}
+                          >
+                            📋 {t("common.copy")}
+                          </button>
+                          <button
+                            onClick={() => shareLink(tk.token)}
+                            title={t("common.share")}
+                            style={btnSmall}
+                          >
+                            📤 {t("common.share")}
+                          </button>
+                          <button
+                            onClick={() => setQrToken(tk.token)}
+                            style={btnSmall}
+                          >
+                            ⊞ QR
+                          </button>
+                        </>
+                      )}
+                      {!tk.revokedAt && (
+                        <button
+                          onClick={() => revokeInvite(tk.id)}
+                          title={t("settings.revokeInvite")}
+                          style={{ ...btnSmall, color: "#ef4444" }}
+                        >
+                          🚫 {t("settings.revokeInvite")}
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* === DANGER ZONE === */}
+      {isAdmin && (
+        <div
+          className="card"
+          style={{ marginTop: 20, borderColor: "#fee2e2" }}
+        >
+          <h2
+            style={{
+              marginTop: 0,
+              color: "#991b1b",
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 8,
+            }}
+          >
+            {/* V52.C2 — SVG alert-triangle remplace ⚠ */}
+            <Icon
+              name="alert-triangle"
+              size={20}
+              color="currentColor"
+              strokeWidth={1.8}
+            />
+            {t("settings.dangerZone")}
+          </h2>
+          {!confirmDeleteGroup ? (
+            <button
+              onClick={() => setConfirmDeleteGroup(true)}
+              style={{
+                padding: "12px 20px",
+                background: "#fef2f2",
+                color: "#991b1b",
+                border: "1px solid #fecaca",
+                borderRadius: 8,
+                cursor: "pointer",
+                fontWeight: 600,
+                minHeight: 44,
+              }}
+            >
+              🗑 {t("settings.deleteGroup")}
+            </button>
+          ) : (
+            <div>
+              <p style={{ color: "#991b1b", fontSize: 13 }}>
+                {t("settings.deleteWarning")}
+              </p>
+              <p style={{ fontSize: 13 }}>
+                {t("settings.typeNameToConfirm", { name: group.name })} :
+              </p>
+              <input
+                type="text"
+                value={confirmText}
+                onChange={(e) => setConfirmText(e.target.value)}
+                placeholder={group.name}
+                style={{
+                  width: "100%",
+                  padding: "10px 12px",
+                  fontSize: 16,
+                  border: "1px solid #fecaca",
+                  borderRadius: 8,
+                  marginBottom: 12,
+                  boxSizing: "border-box",
+                }}
+              />
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                <button
+                  onClick={() => {
+                    setConfirmDeleteGroup(false);
+                    setConfirmText("");
+                  }}
+                  style={{
+                    padding: "10px 16px",
+                    background: "rgba(244, 228, 193, 0.04)",
+                    border: "1px solid #d1d5db",
+                    borderRadius: 8,
+                    cursor: "pointer",
+                    minHeight: 44,
+                  }}
+                >
+                  {t("common.cancel")}
+                </button>
+                <button
+                  onClick={deleteGroupConfirmed}
+                  disabled={confirmText !== group.name}
+                  style={{
+                    padding: "10px 16px",
+                    background:
+                      confirmText === group.name ? "#ef4444" : "#fca5a5",
+                    color: "#fff",
+                    border: "none",
+                    borderRadius: 8,
+                    cursor:
+                      confirmText === group.name ? "pointer" : "not-allowed",
+                    minHeight: 44,
+                    fontWeight: 600,
+                  }}
+                >
+                  {t("common.delete")}
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* === BOTTOM SHEET QR CODE === */}
+      <BottomSheet
+        open={qrToken !== null}
+        onClose={() => setQrToken(null)}
+        title={t("settings.qrScanToJoin")}
+      >
+        <div style={{ textAlign: "center" }}>
+          <p
+            style={{
+              fontSize: 14,
+              color: "var(--cream-soft)",
+              margin: "0 0 14px",
+            }}
+          >
+            {group.name}
+          </p>
+          <div
+            style={{
+              margin: "10px auto 16px",
+              width: 256,
+              maxWidth: "100%",
+              aspectRatio: "1 / 1",
+              background: "#FFFFFF",
+              padding: 12,
+              borderRadius: 14,
+              boxShadow: "0 6px 24px rgba(232,163,61,0.20)",
+            }}
+          >
+            {/* QR via Google Charts API (fond blanc pour scan optimal). */}
+            <img
+              src={`https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${encodeURIComponent(
+                `${typeof window !== "undefined" ? window.location.origin : ""}/join/${qrToken ?? ""}`,
+              )}`}
+              alt="QR code d'invitation"
+              style={{ width: "100%", height: "100%", display: "block" }}
+            />
+          </div>
+          <p
+            style={{
+              fontSize: 11,
+              color: "var(--muted)",
+              wordBreak: "break-all",
+              margin: "0 0 18px",
+            }}
+          >
+            {`${typeof window !== "undefined" ? window.location.origin : ""}/join/${qrToken ?? ""}`}
+          </p>
+          <button
+            type="button"
+            onClick={() => setQrToken(null)}
+            style={{
+              width: "100%",
+              padding: "14px 22px",
+              background:
+                "linear-gradient(135deg, #E8A33D 0%, #B5462E 100%)",
+              color: "#16111E",
+              border: "none",
+              borderRadius: 999,
+              fontWeight: 700,
+              fontSize: 15,
+              fontFamily: "inherit",
+              cursor: "pointer",
+              minHeight: 52,
+              boxShadow: "0 6px 20px rgba(232, 163, 61, 0.3)",
+            }}
+          >
+            {t("common.close")}
+          </button>
+        </div>
+      </BottomSheet>
+      </div>
+    </ResponsiveShell>
+  );
+}
+
+const btnSmall: React.CSSProperties = {
+  padding: "8px 12px",
+  fontSize: 12,
+  background: "rgba(244, 228, 193, 0.04)",
+  border: "1px solid var(--line-soft)",
+  borderRadius: 6,
+  cursor: "pointer",
+  minHeight: 36,
+};
+
+// Styles pour les mini-stats du bandeau "Suivi des invitations" (spec §7.6)
+const statBox: React.CSSProperties = {
+  background:
+    "linear-gradient(135deg, rgba(232,163,61,0.08), rgba(232,163,61,0.02))",
+  border: "1px solid rgba(232,163,61,0.2)",
+  borderRadius: 10,
+  padding: "10px 8px",
+  textAlign: "center",
+};
+const statValue: React.CSSProperties = {
+  fontFamily: "Cormorant Garamond, serif",
+  fontSize: 22,
+  fontWeight: 700,
+  color: "var(--saffron, #E8A33D)",
+  lineHeight: 1.1,
+};
+const statLabel: React.CSSProperties = {
+  fontSize: 10,
+  color: "var(--cream-soft)",
+  letterSpacing: 0.6,
+  textTransform: "uppercase",
+  marginTop: 4,
+};
+
+/**
+ * Toggle "Ne pas déranger" pour la membership courante (spec §3.12).
+ * Lit le flag `doNotDisturb` depuis le membre courant, déclenche un PATCH
+ * /groups/:id/dnd, puis recharge le groupe via onChanged().
+ */
+function DndToggle({
+  group,
+  meId,
+  onChanged,
+}: {
+  group: any;
+  meId?: string;
+  onChanged: () => void | Promise<void>;
+}): JSX.Element | null {
+  const dialog = useDialog();
+  const t = useT();
+  const [busy, setBusy] = useState(false);
+  if (!group || !meId) return null;
+  const me = group.members.find((m: any) => m.user.id === meId);
+  if (!me) return null;
+  const dnd = !!me.doNotDisturb;
+
+  async function toggle() {
+    setBusy(true);
+    try {
+      await api.setGroupDND(group.id, !dnd);
+      await onChanged();
+    } catch (e) {
+      await dialog.alert(`Échec : ${(e as Error).message}`, {
+        variant: "danger",
+        title: "Erreur",
+      });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div
+      className="card"
+      style={{
+        marginTop: 20,
+        background: dnd
+          ? "rgba(232,163,61,0.06)"
+          : "rgba(255,255,255,0.02)",
+      }}
+    >
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 12,
+          flexWrap: "wrap",
+        }}
+      >
+        <div style={{ flex: 1, minWidth: 200 }}>
+          <h2 style={{ margin: 0, fontSize: 16 }}>
+            {dnd ? "🔕" : "🔔"} {t("settings.dnd")}
+          </h2>
+          <p
+            className="muted"
+            style={{ fontSize: 12, margin: "6px 0 0", lineHeight: 1.5 }}
+          >
+            {t("settings.dndDescription")}
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={toggle}
+          disabled={busy}
+          style={{
+            padding: "10px 16px",
+            background: dnd
+              ? "var(--saffron, #E8A33D)"
+              : "rgba(255,255,255,0.05)",
+            color: dnd ? "#16111E" : "var(--cream, #F4E4C1)",
+            border: "1px solid var(--line-soft, rgba(244,228,193,0.08))",
+            borderRadius: 10,
+            fontWeight: 700,
+            cursor: busy ? "wait" : "pointer",
+            minHeight: 44,
+            fontSize: 13,
+            whiteSpace: "nowrap",
+          }}
+        >
+          {dnd ? t("settings.save") : t("settings.dnd")}
+        </button>
+      </div>
+    </div>
+  );
+}

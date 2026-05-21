@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    V132 — Icône notification Android (monochrome blanche).
+
+    Android (depuis Lollipop, API 21+) exige une icône notification
+    monochrome blanche avec fond transparent. Sinon le système affiche
+    un carré blanc anonyme dans la status bar et les notifs.
+
+    Style BMD : un "B" minimaliste en majuscule, encadré dans un cercle
+    arrondi pour rester reconnaissable même en 18dp. La couleur d'accent
+    (saffron, cf. colors.xml `notification_color`) est appliquée par
+    Android par-dessus cette silhouette.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <!-- Cercle de fond (silhouette) -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M12,2 C6.48,2 2,6.48 2,12 C2,17.52 6.48,22 12,22 C17.52,22 22,17.52 22,12 C22,6.48 17.52,2 12,2 Z M12,4 C16.41,4 20,7.59 20,12 C20,16.41 16.41,20 12,20 C7.59,20 4,16.41 4,12 C4,7.59 7.59,4 12,4 Z" />
+    <!-- "B" central : deux boucles superposées -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M9,7 L9,17 L13.5,17 C15.43,17 17,15.43 17,13.5 C17,12.41 16.47,11.45 15.66,10.84 C15.87,10.46 16,10.04 16,9.59 C16,8.16 14.84,7 13.41,7 L9,7 Z M11,9 L13.41,9 C13.74,9 14,9.26 14,9.59 C14,9.93 13.74,10.19 13.41,10.19 L11,10.19 L11,9 Z M11,12.19 L13.5,12.19 C14.33,12.19 15,12.86 15,13.69 C15,14.52 14.33,15.19 13.5,15.19 L11,15.19 L11,12.19 Z" />
+</vector>

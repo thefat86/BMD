@@ -1,0 +1,35 @@
+# Capacitor — projets natifs générés (à versionner sélectivement)
+# Les dossiers ios/ et android/ contiennent du code généré ET du code custom.
+# On les garde versionnés (sauf dérivés ci-dessous) pour reproduire le build.
+
+# Dépendances + caches
+node_modules/
+www/
+dist/
+.turbo/
+
+# Build artifacts iOS
+ios/App/Pods/
+ios/App/build/
+ios/App/DerivedData/
+ios/App/App/public/
+ios/.xcode.env.local
+
+# Build artifacts Android
+android/.gradle/
+android/build/
+android/app/build/
+android/app/release/
+android/local.properties
+android/captures/
+android/app/src/main/assets/public/
+
+# Secrets
+*.keystore
+*.jks
+*.p8
+*.p12
+*.mobileprovision
+
+# Mac OS
+.DS_Store

@@ -18,6 +18,9 @@ coverage/
 .env.*.local
 .env.production
 
+# V146 — Config dev locale (IP LAN auto-détectée par dev-up.sh)
+.bmd-dev-config.json
+
 # ============================================
 # Logs & temp
 # ============================================
@@ -90,3 +93,9 @@ playwright/.cache/
 # ============================================
 TODO.local.md
 NOTES.local.md
+
+# ============================================
+# V93 — Backups BDD (locaux uniquement)
+# ============================================
+backups/*.sql.gz
+backups/*.dump

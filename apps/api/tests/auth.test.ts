@@ -61,7 +61,9 @@ describe("M01 · Auth · OTP request + verify", () => {
       },
     });
     expect(r.statusCode).toBe(401);
-    expect(r.json().message).toContain("wrong_code");
+    // V86 — L'API renvoie un message FR user-friendly, pas le code machine.
+    // Cf. auth.service.ts:43 « Le code ne correspond pas — vérifie... »
+    expect(r.json().message).toContain("ne correspond pas");
   });
 
   it("T04 · existing user re-logging in (no displayName needed)", async () => {
@@ -161,6 +163,8 @@ describe("M01 · Auth · OTP request + verify", () => {
       payload: { contactType: "PHONE", contactValue: phone, code, displayName: "X" },
     });
     expect(r2.statusCode).toBe(401);
-    expect(r2.json().message).toContain("no_pending_code");
+    // V86 — Idem T03 : message FR user-friendly pour "code déjà consommé"
+    // = "Aucun code en attente" (cf. auth.service.ts:46).
+    expect(r2.json().message).toContain("Aucun code en attente");
   });
 });

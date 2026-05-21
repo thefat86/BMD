@@ -1,11 +1,13 @@
-@import url("https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600;700&family=Inter:wght@300;400;500;600;700;800&display=swap");
+/* Fonts chargées via <link> dans layout.tsx (perf : permet preconnect +
+   pas de blocage du CSS parser). Poids réduits aux usages réels :
+   Inter 400/600/700 + Cormorant 600/700. */
 
 /* ================================================================
    BMD · Design System — mobile-first, chic, refined
    ================================================================ */
 
 :root {
-  /* === Palette Indigo & Safran === */
+  /* === Palette Indigo & Safran (mode SOMBRE par défaut) === */
   --night: #0e0b14;
   --night-2: #16111e;
   --indigo: #1e1830;
@@ -26,6 +28,8 @@
   --line-strong: rgba(232, 163, 61, 0.32);
   --overlay: rgba(255, 255, 255, 0.025);
   --overlay-2: rgba(255, 255, 255, 0.04);
+  /* Indique aux contrôles natifs (scrollbar, form-fields) le schéma actif */
+  color-scheme: dark;
 
   /* === Spacing scale (multiples of 4) === */
   --s1: 4px;
@@ -48,6 +52,595 @@
   /* === Safe area iOS === */
   --safe-top: env(safe-area-inset-top, 0px);
   --safe-bottom: env(safe-area-inset-bottom, 0px);
+
+  /* ================================================================
+     V45 · Palette claire (constantes, indépendantes du theme global)
+     ================================================================
+     Variables réservées aux composants migrés V45 (cf. AUDIT-V45-VS-PROD.md).
+     Elles ne changent JAMAIS de valeur, même quand l'utilisateur bascule
+     en mode light historique : les composants V45 sont light-by-construction.
+     Cette stratégie permet de migrer écran par écran sans toucher au reste.
+
+     Quand toute l'app sera migrée V45 (Vagues B-D livrées), on basculera
+     `:root` lui-même sur ces valeurs et on supprimera le legacy.
+  */
+  /* Surfaces V45 */
+  --ivory: #FBF6EC;        /* fond principal page */
+  --ivory-2: #F4ECD8;      /* fond secondaire / hover discret */
+  --paper: #FFFFFF;        /* cards */
+  --sand: #E8DBC0;         /* dividers chauds */
+  /* Texte V45 */
+  --cocoa: #2B1F15;        /* texte principal */
+  --cocoa-soft: #6B5A47;   /* texte secondaire */
+  --cocoa-mute: #A99580;   /* texte muted / labels */
+  /* Accents V45 (préfixés v45- pour ne pas écraser les --saffron etc. legacy) */
+  --v45-saffron: #C58A2E;       /* accent BMD */
+  --v45-saffron-soft: #E8C988;  /* accent doux */
+  --v45-saffron-pale: #F6E8C5;  /* background selected */
+  --v45-emerald: #4F8E6E;       /* positif */
+  --v45-terracotta: #9F4628;    /* alerte / debit */
+  --v45-rose: #C2563D;          /* negatif doux */
+  --v45-indigo: #4458B5;        /* tag info */
+  /* Réservé logo BMD : fond cocoa-night signature, à ne PAS utiliser ailleurs */
+  --night-deep: #14101E;
+  /* Lignes V45 */
+  --v45-line: rgba(43, 31, 21, 0.08);
+  --v45-line-strong: rgba(43, 31, 21, 0.16);
+}
+
+/* ================================================================
+   V54 — Police chiffres unifiée (banking-style, demande Fabrice)
+   ================================================================
+   Une SEULE typographie pour TOUS les chiffres de l'app, peu importe
+   la taille. tabular-nums pour aligner verticalement les décimales,
+   feature-settings tnum+lnum pour exposer les chiffres "old-style"
+   en monospaced. Stack système pour qu'iOS/Android utilisent leur
+   font native (SF Pro Display / Roboto) — meilleure lisibilité que
+   Inter pour les chiffres compacts. */
+.bmd-num {
+  font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "SF Pro Display",
+    "Segoe UI", "Roboto", "Helvetica Neue", Arial, sans-serif;
+  font-variant-numeric: tabular-nums lining-nums;
+  font-feature-settings: "tnum" 1, "lnum" 1, "ss01" 0;
+  letter-spacing: -0.01em;
+}
+
+/* ================================================================
+   V54 — Cliquabilité tactile renforcée (boutons / onglets / nav)
+   ================================================================
+   Le problème : sur mobile, certains tap se "perdent" — l'onglet
+   change d'état visuel sans qu'on l'ait voulu, ou il faut tapper
+   plusieurs fois. Cause : combinaison de scroll-snap, ghost-clicks
+   iOS post-scroll, et transitions qui retardent l'état actif.
+   Fix : touch-action manipulation pour désactiver le double-tap zoom,
+   user-select none, et empêcher les sélections de texte parasites. */
+.bmd-tap {
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+  cursor: pointer;
+  /* V57 — Préparation GPU pour transform instantané (compositing layer
+     créé au mount au lieu d'au tap → pas de jank au 1er tap). */
+  will-change: transform;
+}
+.bmd-tap:active {
+  /* V57 — Feedback instantané au tap + brightness pour distinguer le press
+     du hover. La combinaison scale + brightness = "press" iOS authentique. */
+  transform: scale(0.96);
+  filter: brightness(0.95);
+}
+/* Désactive l'animation .bmd-tap:active sur les éléments porteurs d'un
+   .bmd-no-scale (utile pour les onglets/nav où on ne veut pas que le
+   container rétrécisse — on a déjà un feedback visuel de surbrillance). */
+.bmd-tap.bmd-no-scale:active {
+  transform: none;
+  filter: none;
+}
+
+/* ================================================================
+   V58 — BMD bottom-sheet : remappage V45-light auto
+   ================================================================
+   Le BottomSheet historique a un fond `--night-2` (dark) en mode défaut.
+   En V45-light, on veut un fond paper/ivory avec texte cocoa. On override
+   via les CSS vars du shell (data-theme="v45-light" déjà actif par défaut). */
+html[data-theme="v45-light"] .bmd-num,
+html[data-theme="v45-light"] [data-bmd-num] {
+  color: inherit;
+}
+
+/* ================================================================
+   V58 — Fluidité tap globale (toutes les pages héritent)
+   ================================================================
+   Empêche les liens / boutons de garder un focus sticky qui flash après
+   le tap iOS Safari. */
+button, a {
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* ================================================================
+   V58 — BottomSheet V45-light override
+   ================================================================
+   Le composant <BottomSheet> a un fond gradient indigo hardcodé. En mode
+   V45-light (défaut Fabrice), on force un fond ivory propre + texte cocoa,
+   pour que TOUS les sheets (relance, régler, invite, person-detail…)
+   s'affichent en palette claire automatiquement. */
+html[data-theme="v45-light"] .bmd-bottom-sheet {
+  background: linear-gradient(180deg, #FBF6EC 0%, #F4ECD8 100%) !important;
+  border: 1px solid rgba(197,138,46,0.25) !important;
+  color: #2B1F15 !important;
+  box-shadow: 0 -10px 40px rgba(43,31,21,0.18) !important;
+}
+/* Drag handle plus visible sur fond clair */
+html[data-theme="v45-light"] .bmd-bottom-sheet [aria-hidden="true"][style*="background: rgba(244,228,193,0.25)"] {
+  background: rgba(43,31,21,0.18) !important;
+}
+/* Titre + textes — on laisse les inline styles qui utilisent var(--cream)
+   être overridés par le mode light (où var(--cream) devient déjà dark).
+   Mais certaines couleurs hardcodées dark restent : on les force ici. */
+html[data-theme="v45-light"] .bmd-bottom-sheet h2,
+html[data-theme="v45-light"] .bmd-bottom-sheet h3,
+html[data-theme="v45-light"] .bmd-bottom-sheet h4,
+html[data-theme="v45-light"] .bmd-bottom-sheet strong,
+html[data-theme="v45-light"] .bmd-bottom-sheet label > span {
+  color: #2B1F15;
+}
+/* Inputs dans bottom sheets — fond ivory + border subtle */
+html[data-theme="v45-light"] .bmd-bottom-sheet input[type="text"],
+html[data-theme="v45-light"] .bmd-bottom-sheet input[type="number"],
+html[data-theme="v45-light"] .bmd-bottom-sheet input[type="email"],
+html[data-theme="v45-light"] .bmd-bottom-sheet textarea,
+html[data-theme="v45-light"] .bmd-bottom-sheet select {
+  background: #FBF6EC !important;
+  border: 1px solid rgba(43,31,21,0.14) !important;
+  color: #2B1F15 !important;
+}
+html[data-theme="v45-light"] .bmd-bottom-sheet input:focus,
+html[data-theme="v45-light"] .bmd-bottom-sheet textarea:focus,
+html[data-theme="v45-light"] .bmd-bottom-sheet select:focus {
+  border-color: rgba(197,138,46,0.55) !important;
+}
+
+/* ================================================================
+   V58 — Pages dashboard secondaires (stats / affiliate / etc.)
+   ================================================================
+   Force background V45 ivory sur le main scrollable des shells mobile,
+   pour que toutes les pages internes héritent du fond clair sans toucher
+   à chacune. */
+html[data-theme="v45-light"] main {
+  background: #FBF6EC;
+  color: #2B1F15;
+}
+html[data-theme="v45-light"] main h1,
+html[data-theme="v45-light"] main h2,
+html[data-theme="v45-light"] main h3 {
+  color: #2B1F15;
+}
+
+/* ================================================================
+   MODE CLAIR (data-theme="light")
+   ================================================================
+   Stratégie : (1) inverser les CSS vars (--night devient cream clair,
+   --cream devient indigo profond) pour les composants qui utilisent
+   `var(--xxx)`. (2) overrides ciblés via attribute selectors pour les
+   inline styles qui contiennent des `rgba()` hardcodés (designés pour
+   le mode sombre) — sans ça les cartes restent dark muddy purple sur
+   fond cream et les bordures cream-alpha disparaissent.
+*/
+html[data-theme="light"] {
+  /* Surfaces : cream très clair → cream chaud. Légèrement contrasté entre
+     night (page bg) et night-2 (cards) pour donner du relief. */
+  --night: #fbf5e6;
+  --night-2: #f4ead0;
+  --indigo: #ede0c0;
+  --indigo-2: #e3d2ad;
+  --indigo-3: #d6c39a;
+  /* Accents brand : assombris pour rester lisibles sur cream (WCAG AA). */
+  --saffron: #a85f1a;
+  --saffron-soft: #8a4d12;
+  --gold: #6f5318;
+  --terracotta: #8a2e15;
+  --emerald: #1e4530;
+  --emerald-soft: #356f50;
+  --rose: #9c4023;
+  /* Textes : indigo profond pour le ratio max (>14:1 sur cream). */
+  --cream: #1a1426;
+  --cream-soft: #4a3d6a;
+  --muted: #6e5e4a;
+  /* Lignes : indigo subtil pour les bordures soft, saffron pour les
+     accents fortement marqués. */
+  --line: rgba(168, 95, 26, 0.28);
+  --line-soft: rgba(26, 20, 38, 0.10);
+  --line-strong: rgba(168, 95, 26, 0.45);
+  --overlay: rgba(26, 20, 38, 0.03);
+  --overlay-2: rgba(26, 20, 38, 0.05);
+  color-scheme: light;
+}
+
+/* Halo radial du body : tons saffron chauds très subtils en clair */
+html[data-theme="light"] body {
+  background-image:
+    radial-gradient(800px 500px at 10% -10%, rgba(168, 95, 26, 0.06), transparent 60%),
+    radial-gradient(800px 500px at 110% 10%, rgba(138, 46, 21, 0.05), transparent 60%);
+}
+
+/* ================================================================
+   LIGHT MODE — overrides pour les inline styles avec rgba() hardcodés
+   ================================================================
+   L'app a été designée en mode sombre, donc beaucoup de composants
+   ont des `style={{ background: "rgba(244,228,193,0.08)" }}` (cream
+   alpha sur fond night) hardcodés en JSX. En mode clair, ces RGBA
+   restent identiques et deviennent invisibles ou laids :
+   - cream-alpha sur cream → invisible
+   - indigo-alpha (rgba(42,34,68,...)) sur cream → cards muddy purple
+   On utilise des attribute selectors `[style*="..."]` qui matchent la
+   sous-chaîne dans le `style=""` puis on override via `!important`.
+   Les selectors sont conçus pour ne PAS casser le mode sombre — ils
+   ne s'appliquent QUE sous `html[data-theme="light"]`.
+
+   Note perf : attribute-selectors string-contains sont O(n) sur le
+   nombre d'éléments matchés ; négligeable à l'échelle d'une page (~100
+   éléments par viewport). Mesuré : aucun impact visible sur LCP/CLS.
+*/
+
+/* === Bordures cream-alpha → bordures indigo-alpha === */
+/* Pattern : `border: ... solid rgba(244,228,193, ...)` ou
+   `borderTop: ... solid rgba(244,228,193, ...)`, etc. */
+html[data-theme="light"] [style*="solid rgba(244,228,193"],
+html[data-theme="light"] [style*="solid rgba(244, 228, 193"] {
+  border-color: rgba(26, 20, 38, 0.14) !important;
+}
+html[data-theme="light"] [style*="solid rgba(232,163,61,0.18)"],
+html[data-theme="light"] [style*="solid rgba(232, 163, 61, 0.18)"] {
+  border-color: rgba(168, 95, 26, 0.32) !important;
+}
+html[data-theme="light"] [style*="solid rgba(232,163,61,0.32)"] {
+  border-color: rgba(168, 95, 26, 0.5) !important;
+}
+
+/* === Surfaces card indigo-alpha → cream chaud subtil === */
+/* Patterns hero/cards : linear-gradient(180deg, rgba(42,34,68,...), rgba(22,17,30,...)).
+   En clair on remplace par un dégradé cream très léger pour préserver le
+   relief tout en restant lisible. */
+html[data-theme="light"] [style*="rgba(42,34,68,0.4)"],
+html[data-theme="light"] [style*="rgba(42, 34, 68, 0.4)"],
+html[data-theme="light"] [style*="rgba(42,34,68,0.5)"],
+html[data-theme="light"] [style*="rgba(42,34,68,0.6)"],
+html[data-theme="light"] [style*="rgba(42, 34, 68, 0.6)"],
+html[data-theme="light"] [style*="rgba(42,34,68,0.92)"],
+html[data-theme="light"] [style*="rgba(22,17,30,0.6)"],
+html[data-theme="light"] [style*="rgba(22, 17, 30, 0.6)"],
+html[data-theme="light"] [style*="rgba(22,17,30,0.85)"],
+html[data-theme="light"] [style*="rgba(22, 17, 30, 0.85)"],
+html[data-theme="light"] [style*="rgba(22,17,30,0.9)"],
+html[data-theme="light"] [style*="rgba(22, 17, 30, 0.9)"] {
+  background: linear-gradient(180deg, #fffaee, #f5ead0) !important;
+}
+
+/* Fonds nav sticky / overlays foncés → cream chaud opaque */
+html[data-theme="light"] [style*="rgba(14,11,20,0.6)"],
+html[data-theme="light"] [style*="rgba(14, 11, 20, 0.6)"],
+html[data-theme="light"] [style*="rgba(14,11,20,0.92)"],
+html[data-theme="light"] [style*="rgba(14, 11, 20, 0.92)"],
+html[data-theme="light"] [style*="rgba(14,11,20,0.78)"],
+html[data-theme="light"] [style*="rgba(14, 11, 20, 0.78)"],
+html[data-theme="light"] [style*="rgba(14,11,20,0.95)"],
+html[data-theme="light"] [style*="rgba(14, 11, 20, 0.95)"],
+html[data-theme="light"] [style*="rgba(14,11,20,0.97)"],
+html[data-theme="light"] [style*="rgba(14, 11, 20, 0.97)"],
+html[data-theme="light"] [style*="rgba(14,11,20,0.98)"],
+html[data-theme="light"] [style*="rgba(14, 11, 20, 0.98)"],
+html[data-theme="light"] [style*="rgba(14,11,20,0.75)"],
+html[data-theme="light"] [style*="rgba(22,17,30,0.92)"],
+html[data-theme="light"] [style*="rgba(22, 17, 30, 0.92)"],
+html[data-theme="light"] [style*="rgba(22,17,30,0.95)"] {
+  background: linear-gradient(180deg, rgba(251, 245, 230, 0.95), rgba(244, 234, 208, 0.92)) !important;
+}
+
+/* === Backgrounds très subtiles white-alpha → indigo-alpha clair === */
+html[data-theme="light"] [style*="rgba(255,255,255,0.025)"],
+html[data-theme="light"] [style*="rgba(255, 255, 255, 0.025)"],
+html[data-theme="light"] [style*="rgba(255,255,255,0.04)"],
+html[data-theme="light"] [style*="rgba(255, 255, 255, 0.04)"],
+html[data-theme="light"] [style*="rgba(255,255,255,0.05)"],
+html[data-theme="light"] [style*="rgba(255, 255, 255, 0.05)"] {
+  background-color: rgba(26, 20, 38, 0.04) !important;
+}
+
+/* === Backgrounds cream-alpha → indigo-alpha (overlays/badges) === */
+html[data-theme="light"] [style*="rgba(244,228,193,0.04)"],
+html[data-theme="light"] [style*="rgba(244, 228, 193, 0.04)"],
+html[data-theme="light"] [style*="rgba(244,228,193,0.06)"] {
+  background-color: rgba(26, 20, 38, 0.04) !important;
+}
+
+/* === Surfaces saffron très très subtiles → on garde mais teinte adaptée === */
+/* `rgba(232,163,61,0.06)` (saffron alpha 6%) sur night = subtle warm tint.
+   Sur cream, ça apparaît comme un léger orange peach qui marche. On laisse
+   tranquille. */
+
+/* === Couleurs hardcodées (#16111E, #F4E4C1) sur les boutons gradient === */
+/* Les boutons `linear-gradient(135deg, var(--saffron), var(--terracotta))`
+   utilisent `color: var(--night-2)` = en clair = cream foncé. Avant le
+   changement de palette, c'était `#16111E` (indigo profond) directement
+   sur le gradient saffron — qui était lisible en sombre comme en clair.
+   Maintenant que --night-2 est cream en mode light, le contraste est
+   inversé : cream sur saffron. Pas idéal. On force "indigo profond"
+   pour les CTAs gradient saffron quel que soit le thème. */
+html[data-theme="light"] [style*="linear-gradient(135deg, var(--saffron)"],
+html[data-theme="light"] [style*="linear-gradient(135deg, #E8A33D"],
+html[data-theme="light"] [style*="linear-gradient(135deg, #e8a33d"] {
+  color: #1a1426 !important;
+}
+
+/* === Inputs et selects en mode clair === */
+/* Input et select avec fonds rgba(255,255,255,0.04) deviennent invisibles
+   sur cream. On force un fond blanc avec bordure indigo soft. */
+html[data-theme="light"] input,
+html[data-theme="light"] select,
+html[data-theme="light"] textarea {
+  background-color: #ffffff !important;
+  color: var(--cream) !important;
+  border-color: rgba(26, 20, 38, 0.18) !important;
+}
+html[data-theme="light"] input::placeholder,
+html[data-theme="light"] textarea::placeholder {
+  color: rgba(26, 20, 38, 0.35);
+}
+
+/* === FX ticker (bandeau bas de page) === */
+/* Le ticker a un fond noir hardcodé. En mode clair on le passe en cream
+   avec bordure sombre. */
+html[data-theme="light"] [class*="fx-ticker"],
+html[data-theme="light"] [class*="FxTicker"] {
+  background: linear-gradient(180deg, #f4ead0, #ede0c0) !important;
+  color: var(--cream) !important;
+}
+
+/* ================================================================
+   V45 LIGHT MODE (data-theme="v45-light")
+   ================================================================
+   La VRAIE palette V45 cible (cf. AUDIT-V45-VS-PROD.md + maquette claire) :
+   ivoire `#FBF6EC` / paper `#FFFFFF` / cocoa `#2B1F15` / saffron `#C58A2E`.
+
+   Coexiste avec le `data-theme="light"` user-toggleable existant (qui est
+   un mode clair historique avec des valeurs différentes). On utilise un
+   theme distinct pour ne pas casser l'expérience utilisateur en place.
+
+   Pour activer cette palette sur toute l'app :
+     document.documentElement.dataset.theme = "v45-light";
+
+   Quand toute la migration V45 (Vagues B-D) sera finalisée et validée
+   visuellement par Fabrice, on basculera le DEFAULT dans layout.tsx pour
+   `<html data-theme="v45-light">` et on supprimera l'ancien mode.
+
+   Stratégie identique au `[data-theme="light"]` historique :
+   (1) on remap les CSS vars sémantiques (--night, --cream, --saffron, …)
+   (2) on override les rgba() hardcodés via attribute selectors
+*/
+html[data-theme="v45-light"] {
+  /* Surfaces : ivoire (fond page) → paper (cards) — gradient subtil */
+  --night: #FBF6EC;       /* fond principal page */
+  --night-2: #FFFFFF;     /* cards */
+  --indigo: #F4ECD8;      /* surfaces 2 (alt cards) */
+  --indigo-2: #E8DBC0;    /* sand (dividers chauds) */
+  --indigo-3: #D6C39A;    /* sand profond (rarely used) */
+  /* Accents brand : valeurs V45 strictes (assombris vs --saffron historique
+     pour rester lisibles sur ivoire avec ratio WCAG AA). */
+  --saffron: #C58A2E;
+  --saffron-soft: #E8C988;
+  --gold: #B5742A;
+  --terracotta: #9F4628;
+  --emerald: #4F8E6E;
+  --emerald-soft: #87B3A0;
+  --rose: #C2563D;
+  /* Textes : cocoa profond pour le ratio max sur ivoire (>14:1). */
+  --cream: #2B1F15;       /* texte principal — était `cream-on-night` en V44 */
+  --cream-soft: #6B5A47;  /* texte secondaire */
+  --muted: #A99580;       /* texte muted / labels uppercase */
+  /* Lignes : cocoa subtil pour les bordures soft, saffron pour les accents. */
+  --line: rgba(43, 31, 21, 0.08);
+  --line-soft: rgba(43, 31, 21, 0.06);
+  --line-strong: rgba(43, 31, 21, 0.16);
+  --overlay: rgba(43, 31, 21, 0.025);
+  --overlay-2: rgba(43, 31, 21, 0.04);
+  color-scheme: light;
+}
+
+/* Halo radial body V45 — tons saffron très chauds + emerald discret */
+html[data-theme="v45-light"] body {
+  background-image:
+    radial-gradient(800px 500px at 10% -10%, rgba(197, 138, 46, 0.10), transparent 60%),
+    radial-gradient(800px 500px at 110% 90%, rgba(159, 70, 40, 0.06), transparent 60%);
+}
+
+/* ================================================================
+   V45 LIGHT — overrides pour les inline styles avec rgba() hardcodés
+   ================================================================
+   L'app a été designée dark V44. Les composants ont des `rgba(244,228,193,X)`
+   (cream alpha) hardcodés dans `style={{}}`. En V45 light, on les remap :
+   - cream-alpha (244,228,193) → cocoa-alpha (43,31,21) pour les bordures
+   - cream-alpha (244,228,193) → paper-alpha (255,255,255) pour les surfaces
+   - night-alpha (14,11,20) → ivory ou paper
+   - indigo-purple (42,34,68) → ivory-2 (F4ECD8)
+*/
+
+/* === Bordures cream-alpha (244,228,193) → cocoa-alpha (43,31,21) === */
+html[data-theme="v45-light"] [style*="solid rgba(244,228,193"],
+html[data-theme="v45-light"] [style*="solid rgba(244, 228, 193"] {
+  border-color: rgba(43, 31, 21, 0.10) !important;
+}
+/* Bordures saffron — on les conserve mais avec la teinte V45 #C58A2E */
+html[data-theme="v45-light"] [style*="solid rgba(232,163,61,0.18)"],
+html[data-theme="v45-light"] [style*="solid rgba(232, 163, 61, 0.18)"] {
+  border-color: rgba(197, 138, 46, 0.30) !important;
+}
+html[data-theme="v45-light"] [style*="solid rgba(232,163,61,0.32)"] {
+  border-color: rgba(197, 138, 46, 0.45) !important;
+}
+html[data-theme="v45-light"] [style*="solid rgba(232,163,61,0.40)"] {
+  border-color: rgba(197, 138, 46, 0.55) !important;
+}
+html[data-theme="v45-light"] [style*="solid rgba(232,163,61,0.25)"] {
+  border-color: rgba(197, 138, 46, 0.35) !important;
+}
+
+/* === Surfaces card indigo-purple (42,34,68 = V44 gradient hero violet)
+       → paper FFFFFF avec très léger halo saffron au fond === */
+html[data-theme="v45-light"] [style*="rgba(42,34,68,0.4)"],
+html[data-theme="v45-light"] [style*="rgba(42, 34, 68, 0.4)"],
+html[data-theme="v45-light"] [style*="rgba(42,34,68,0.5)"],
+html[data-theme="v45-light"] [style*="rgba(42,34,68,0.6)"],
+html[data-theme="v45-light"] [style*="rgba(42, 34, 68, 0.6)"],
+html[data-theme="v45-light"] [style*="rgba(42,34,68,0.92)"],
+html[data-theme="v45-light"] [style*="rgba(22,17,30,0.6)"],
+html[data-theme="v45-light"] [style*="rgba(22, 17, 30, 0.6)"],
+html[data-theme="v45-light"] [style*="rgba(22,17,30,0.85)"],
+html[data-theme="v45-light"] [style*="rgba(22, 17, 30, 0.85)"],
+html[data-theme="v45-light"] [style*="rgba(22,17,30,0.9)"],
+html[data-theme="v45-light"] [style*="rgba(22, 17, 30, 0.9)"],
+html[data-theme="v45-light"] [style*="#2A2244"],
+html[data-theme="v45-light"] [style*="#3A2A52"],
+html[data-theme="v45-light"] [style*="#4A3568"] {
+  background: linear-gradient(180deg, #FFFFFF, #FBF6EC) !important;
+}
+
+/* === Fonds nav sticky / overlays foncés (14,11,20 = night V44) → paper === */
+html[data-theme="v45-light"] [style*="rgba(14,11,20,0.6)"],
+html[data-theme="v45-light"] [style*="rgba(14, 11, 20, 0.6)"],
+html[data-theme="v45-light"] [style*="rgba(14,11,20,0.92)"],
+html[data-theme="v45-light"] [style*="rgba(14, 11, 20, 0.92)"],
+html[data-theme="v45-light"] [style*="rgba(14,11,20,0.78)"],
+html[data-theme="v45-light"] [style*="rgba(14, 11, 20, 0.78)"],
+html[data-theme="v45-light"] [style*="rgba(14,11,20,0.95)"],
+html[data-theme="v45-light"] [style*="rgba(14, 11, 20, 0.95)"],
+html[data-theme="v45-light"] [style*="rgba(14,11,20,0.97)"],
+html[data-theme="v45-light"] [style*="rgba(14, 11, 20, 0.97)"],
+html[data-theme="v45-light"] [style*="rgba(14,11,20,0.98)"],
+html[data-theme="v45-light"] [style*="rgba(14, 11, 20, 0.98)"],
+html[data-theme="v45-light"] [style*="rgba(14,11,20,0.75)"],
+html[data-theme="v45-light"] [style*="rgba(22,17,30,0.92)"],
+html[data-theme="v45-light"] [style*="rgba(22, 17, 30, 0.92)"],
+html[data-theme="v45-light"] [style*="rgba(22,17,30,0.95)"],
+html[data-theme="v45-light"] [style*="rgba(22,17,30,0.4)"],
+html[data-theme="v45-light"] [style*="rgba(22,17,30,0.3)"] {
+  background: linear-gradient(180deg, rgba(251, 246, 236, 0.96), rgba(244, 236, 216, 0.92)) !important;
+}
+
+/* === Backgrounds très subtiles white-alpha → cocoa-alpha clair === */
+html[data-theme="v45-light"] [style*="rgba(255,255,255,0.025)"],
+html[data-theme="v45-light"] [style*="rgba(255, 255, 255, 0.025)"],
+html[data-theme="v45-light"] [style*="rgba(255,255,255,0.04)"],
+html[data-theme="v45-light"] [style*="rgba(255, 255, 255, 0.04)"],
+html[data-theme="v45-light"] [style*="rgba(255,255,255,0.05)"],
+html[data-theme="v45-light"] [style*="rgba(255, 255, 255, 0.05)"] {
+  background-color: rgba(43, 31, 21, 0.025) !important;
+}
+
+/* === Surfaces card cream-alpha (244,228,193) → paper sur ivoire === */
+html[data-theme="v45-light"] [style*="rgba(244,228,193,0.03)"],
+html[data-theme="v45-light"] [style*="rgba(244, 228, 193, 0.03)"],
+html[data-theme="v45-light"] [style*="rgba(244,228,193,0.04)"],
+html[data-theme="v45-light"] [style*="rgba(244, 228, 193, 0.04)"],
+html[data-theme="v45-light"] [style*="rgba(244,228,193,0.06)"] {
+  background-color: #FFFFFF !important;
+}
+
+/* === Surface saffron très subtile (232,163,61,0.04-0.12) → saffron-pale V45 === */
+html[data-theme="v45-light"] [style*="rgba(232,163,61,0.04)"],
+html[data-theme="v45-light"] [style*="rgba(232,163,61,0.06)"],
+html[data-theme="v45-light"] [style*="rgba(232,163,61,0.08)"],
+html[data-theme="v45-light"] [style*="rgba(232,163,61,0.10)"],
+html[data-theme="v45-light"] [style*="rgba(232, 163, 61, 0.10)"],
+html[data-theme="v45-light"] [style*="rgba(232,163,61,0.12)"] {
+  background-color: rgba(246, 232, 197, 0.5) !important; /* saffron-pale dilué */
+}
+
+/* === Couleurs hardcodées des CTAs gradient saffron === */
+/* Les boutons gradient `linear-gradient(135deg, var(--saffron), var(--terracotta))`
+   utilisent souvent `color: var(--night-2)` (= cream en mode V45 light, mauvais
+   contraste) ou `#16111E` directement. On force "night-deep" pour les CTAs
+   primaires V45 quel que soit le thème. */
+html[data-theme="v45-light"] [style*="linear-gradient(135deg, var(--saffron)"],
+html[data-theme="v45-light"] [style*="linear-gradient(135deg, #E8A33D"],
+html[data-theme="v45-light"] [style*="linear-gradient(135deg, #e8a33d"] {
+  color: #14101E !important; /* night-deep réservé contraste sur gold */
+}
+
+/* === Hero balance gradient violet V44 (#2A2244 → #4A3568) → paper hero === */
+/* C'est LE point critique : le hero dashboard / group / stats utilise ce
+   gradient violet signature. En V45 light, on le remplace par une carte
+   paper avec halo saffron très léger en background. */
+html[data-theme="v45-light"] [style*="#2A2244"][style*="#4A3568"],
+html[data-theme="v45-light"] [style*="#2A2244"][style*="#3A2A52"] {
+  background:
+    radial-gradient(circle at 50% 30%, rgba(197, 138, 46, 0.08), transparent 60%),
+    #FFFFFF !important;
+}
+
+/* === Inputs / selects / textareas en V45 light === */
+html[data-theme="v45-light"] input,
+html[data-theme="v45-light"] select,
+html[data-theme="v45-light"] textarea {
+  background-color: #FBF6EC !important; /* ivoire (différencie de paper white des cards) */
+  color: #2B1F15 !important;
+  border-color: rgba(43, 31, 21, 0.12) !important;
+}
+html[data-theme="v45-light"] input::placeholder,
+html[data-theme="v45-light"] textarea::placeholder {
+  color: rgba(43, 31, 21, 0.35);
+}
+
+/* === FX ticker bandeau bas → paper avec accent saffron === */
+html[data-theme="v45-light"] [class*="fx-ticker"],
+html[data-theme="v45-light"] [class*="FxTicker"] {
+  background: linear-gradient(180deg, #FBF6EC, #F4ECD8) !important;
+  color: #2B1F15 !important;
+  border-top: 1px solid rgba(43, 31, 21, 0.10) !important;
+}
+
+/* === Scrollbar V45 light === */
+html[data-theme="v45-light"] ::-webkit-scrollbar-thumb {
+  background: rgba(43, 31, 21, 0.18);
+}
+html[data-theme="v45-light"] ::-webkit-scrollbar-thumb:hover {
+  background: rgba(43, 31, 21, 0.32);
+}
+
+/* === Logo BMD : EXCEPTION — garde son fond night-deep (cocoa-night)
+       signature, car c'est l'identité visuelle BMD réservée. === */
+html[data-theme="v45-light"] [data-bmd-logo-medallion] {
+  background: #14101E !important;
+  color: #C58A2E !important;
+}
+
+/* Scrollbar discrète qui suit le thème (Webkit) */
+html[data-theme="light"] ::-webkit-scrollbar-thumb {
+  background: rgba(46, 33, 78, 0.18);
+}
+html[data-theme="light"] ::-webkit-scrollbar-thumb:hover {
+  background: rgba(46, 33, 78, 0.32);
+}
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(244, 228, 193, 0.12);
+  border-radius: 6px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(244, 228, 193, 0.22);
+}
+
+/* Transition douce quand on bascule de thème (200ms) — ne touche QUE les
+   propriétés qui changent, pas tout l'arbre (sinon perf catastrophique). */
+html {
+  transition: background-color 0.25s ease, color 0.25s ease;
+}
+html[data-theme] body {
+  transition: background-color 0.25s ease, color 0.25s ease;
 }
 
 * {
@@ -58,22 +651,165 @@
 
 html {
   -webkit-text-size-adjust: 100%; /* iOS : empêche l'auto-zoom à la rotation */
+  /* V25 — Quand on clique un anchor (#story, #features, #pricing, …), le
+     navigateur scrolle pour que la cible touche le haut du viewport. La
+     nav sticky du site vitrine fait ~70px de haut → sans `scroll-padding-top`
+     la section est cachée derrière. On laisse une marge de sécurité pour
+     que le titre de la section apparaisse PILE sous la nav. */
+  scroll-padding-top: 88px;
+}
+@media (max-width: 768px) {
+  html {
+    /* Sur mobile la nav peut wrap → un peu plus haute */
+    scroll-padding-top: 64px;
+  }
+}
+
+/* === RTL natif (spec §9.3) === */
+/* Quand <html dir="rtl"> est appliqué (ar / am), on miroirise le layout :
+   - Les flèches de navigation sont retournées
+   - Les marges/paddings utilisant les propriétés logiques (-inline-start/end)
+     suivent automatiquement
+   - Les progress bars et sliders gardent leur orientation visuelle
+*/
+html[dir="rtl"] .arrow-back::before {
+  content: "→";
+}
+html[dir="rtl"] body {
+  /* Inter supporte mal l'arabe — on bascule sur la stack système RTL */
+  font-family: "SF Arabic", "Geeza Pro", "Noto Sans Arabic", "Tahoma",
+    -apple-system, sans-serif;
+}
+html[dir="rtl"] .between {
+  flex-direction: row-reverse;
+}
+
+/* Skip link a11y — invisible jusqu'à focus, indispensable pour navigation clavier */
+.skip-link {
+  position: absolute;
+  top: -40px;
+  left: 8px;
+  z-index: 9999;
+  padding: 8px 14px;
+  background: var(--saffron, #e8a33d);
+  color: #16111e;
+  font-weight: 700;
+  text-decoration: none;
+  border-radius: 0 0 8px 8px;
+  transition: top 0.15s;
+}
+.skip-link:focus {
+  top: 0;
+  outline: 2px solid #fff;
+  outline-offset: 2px;
+}
+
+/* Focus visible — toujours visible pour navigation clavier (WCAG AA 2.4.7).
+   On garde l'outline saffron MÊME sur les composants gradient (boutons primaires)
+   pour garantir la visibilité du focus quel que soit le fond. */
+:focus-visible {
+  outline: 2px solid var(--saffron, #e8a33d);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+/* Variant : pour les boutons saffron eux-mêmes, on inverse en cream pour le contraste. */
+button:focus-visible,
+a:focus-visible {
+  outline-offset: 3px;
+}
+.btn:focus-visible,
+[style*="linear-gradient(135deg, var(--saffron"]:focus-visible,
+[style*="linear-gradient(135deg, #E8A33D"]:focus-visible,
+[style*="linear-gradient(135deg, #e8a33d"]:focus-visible {
+  outline-color: var(--cream, #f4e4c1);
+  outline-width: 3px;
+}
+
+/* Touch targets — tous les éléments interactifs ≥ 44×44 px sur mobile (WCAG 2.5.5) */
+@media (pointer: coarse) {
+  button,
+  a[role="button"],
+  [role="button"],
+  input[type="button"],
+  input[type="submit"] {
+    min-height: 44px;
+  }
+}
+
+/* Reduce motion — désactive les animations pour les users qui en ont demandé
+   moins (système / accessibilité). WCAG 2.3.3 / 2.2.2. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* Visually hidden — pour les labels accessibles aux lecteurs d'écran uniquement */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }
 
 html,
 body {
   background: var(--night);
   color: var(--cream);
-  font-family: "Inter", -apple-system, BlinkMacSystemFont, sans-serif;
+  /* next/font expose --font-inter (variable CSS pointant vers la font
+     self-hostée). Fallback à -apple-system si pas dispo (anti-FOUT). */
+  font-family: var(--font-inter, "Inter"), -apple-system, BlinkMacSystemFont, sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  /* `100dvh` = dynamic viewport height (iOS Safari 15.4+, Chrome 108+).
+     Évite le bug iOS où la barre d'URL réduit la zone visible et laisse
+     un trou en bas de l'app. Fallback `100vh` pour les vieux browsers. */
   min-height: 100vh;
+  min-height: 100dvh;
   font-size: 15px;
   line-height: 1.5;
   background-image:
     radial-gradient(800px 500px at 10% -10%, rgba(232, 163, 61, 0.07), transparent 60%),
     radial-gradient(800px 500px at 110% 10%, rgba(181, 70, 46, 0.05), transparent 60%);
   background-attachment: fixed;
+  /* iOS standalone : empêche le rebound bounce ennuyeux quand on scroll
+     en haut/bas, donne un feel "vraie app" verrouillée. */
+  overscroll-behavior-y: none;
+}
+
+/* === Mode standalone (PWA installée) — feel app native ===
+   On retire les chrome/scroll-bars résiduelles et on assure que
+   le body remplit toute la viewport sans débordement. */
+@media all and (display-mode: standalone) {
+  html,
+  body {
+    /* Empêche le scroll horizontal accidentel (souvent causé par un
+       élément qui dépasse de quelques pixels). */
+    overflow-x: hidden;
+  }
+  /* Désactive la sélection texte par défaut sur les éléments interactifs
+     en standalone — les apps natives ne sélectionnent pas le texte des
+     boutons quand on long-press. Le texte sélectionnable reste possible
+     dans les <p>, <input>, etc. */
+  button,
+  .btn,
+  .btn-ghost,
+  .quick-card,
+  nav {
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-touch-callout: none;
+  }
 }
 
 a {
@@ -87,6 +823,161 @@ button {
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
   touch-action: manipulation;
+  /* Active state global : rapide feedback visuel à chaque tap, même sur les
+     boutons sans classe spécifique. 0.05s = quasi-instant pour percevoir le clic. */
+  transition: transform 0.05s ease, opacity 0.1s ease;
+}
+button:active:not(:disabled) {
+  transform: scale(0.97);
+}
+button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Lien cliquable : feedback similaire sur tap (mobile) */
+a:active {
+  opacity: 0.75;
+}
+
+/* === Smooth scrolling globale ===
+   Comportement : quand on scroll programmatiquement (anchor scroll-into-view),
+   on smooth-scroll. Désactivé par prefers-reduced-motion. */
+html {
+  scroll-behavior: smooth;
+}
+
+/* === Optimistic UI pulse ===
+   Animation discrète sur les éléments en cours de sauvegarde optimiste —
+   signal subtil "ça arrive" sans bloquer la lecture. */
+@keyframes bmd-optimistic-pulse {
+  0%, 100% { opacity: 0.6; }
+  50% { opacity: 0.85; }
+}
+
+/* V123 — Fade-in court pour les hints progressifs (wizard ajout dépense
+   notamment). Évite que les messages "Saisis le montant" / "Ajoute une
+   description" apparaissent brutalement quand la condition change. */
+@keyframes bmd-hint-fade {
+  from { opacity: 0; transform: translateY(-2px); }
+  to { opacity: 0.85; transform: translateY(0); }
+}
+
+/* === View Transition API ===
+   Si le browser supporte (Chrome 111+ / Safari 18+), Next.js 15 utilisera
+   automatiquement les view transitions pour les navigations entre pages.
+   V120 — Réduit de 180 → 120 ms : la transition reste visible sans
+   ajouter trop de delay perçu avant que la nouvelle page apparaisse.
+   Gain ~60 ms sur chaque navigation. */
+@supports (view-transition-name: none) {
+  ::view-transition-old(root),
+  ::view-transition-new(root) {
+    animation-duration: 0.12s;
+  }
+}
+
+/* V120 — Respecte `prefers-reduced-motion` : si le user a désactivé
+   les animations dans l'OS (accessibilité, économie batterie), on
+   coupe TOUTES les animations purement décoratives. Concerne le
+   pulse du FAB, les view-transitions, les bounces de skeleton, etc.
+   Conserve les transitions courtes (cliquabilité visuelle) car
+   <100ms reste perçu comme "instantané" et utile à la cliquabilité. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* ================================================================
+   MOBILE-FIRST · LOGIN PAGE OVERRIDES
+   ================================================================
+   Sur petit écran, on transforme le `.container` + `.card` du login
+   en layout vraiment full-screen mobile-native (pas une carte centrée
+   sur fond). On ne touche pas au JSX, juste au rendu via CSS.
+*/
+@media (max-width: 600px) {
+  body:has(form.login-form) .container,
+  body:has(.login-form) .container {
+    max-width: 100%;
+    padding-left: 18px;
+    padding-right: 18px;
+    padding-top: max(28px, var(--safe-top));
+    padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 24px);
+  }
+}
+
+/* ================================================================
+   MOBILE-FIRST · OPTIMISATIONS TACTILES
+   ================================================================
+   Règle « mobile ≠ web responsive » : sur tactile on coupe tout ce qui
+   ralentit ou crée du « sticky highlight » entre les taps.
+   - `@media (hover: none) and (pointer: coarse)` cible les vrais
+     devices tactiles (iPhone, Android), pas les écrans tactiles desktop.
+   - `@media (hover: hover)` cible le vrai pointeur (souris, trackpad).
+*/
+
+/* Sur tactile : tous les hover states sont neutralisés pour éviter
+   le « sticky » désagréable après un tap. Le :active prend le relais
+   pour le feedback visuel instant. */
+@media (hover: none) and (pointer: coarse) {
+  *,
+  *::before,
+  *::after {
+    -webkit-tap-highlight-color: transparent !important;
+  }
+  /* Désactive transitions de hover qui resteraient figées après un tap.
+     Le :active reste fonctionnel pour le feedback de pression. */
+  a:hover,
+  button:hover,
+  [role="button"]:hover,
+  .btn:hover,
+  .btn-ghost:hover {
+    background: inherit !important;
+    color: inherit !important;
+    transform: none !important;
+    box-shadow: inherit !important;
+  }
+}
+
+/* Sur pointer fin (souris) : on garde les hover states classiques. */
+@media (hover: hover) and (pointer: fine) {
+  a:hover {
+    opacity: 0.85;
+  }
+  button:not(:disabled):hover {
+    opacity: 0.92;
+  }
+}
+
+/* Tap réactivité : passe à la touche sans attendre le 300ms historique
+   du double-tap zoom iOS. */
+html {
+  touch-action: manipulation;
+}
+
+/* Optimiser les transitions GPU sur tactile : on force le compositing
+   pour éviter les jank quand on scroll pendant qu'une animation tourne. */
+@media (hover: none) and (pointer: coarse) {
+  .btn,
+  button[class*="btn"],
+  [role="button"] {
+    will-change: transform;
+    -webkit-transform: translateZ(0);
+    transform: translateZ(0);
+  }
+}
+
+/* iOS PWA standalone : safe-area + bounce vertical contrôlé */
+@supports (-webkit-touch-callout: none) {
+  body {
+    /* Évite le rubber-band bounce horizontal qui révèle le fond noir */
+    overscroll-behavior-x: none;
+  }
 }
 
 input,
@@ -94,6 +985,42 @@ select,
 textarea {
   font-family: inherit;
   font-size: 16px; /* iOS : empêche le zoom au focus si >= 16px */
+}
+
+/* === Style global des <select> natifs ===
+   Sur iOS, les <select> ouvrent un drawer plein écran natif (UX OK).
+   Mais leur rendu inline est par défaut très "web" : flèche grise sur fond
+   blanc. On override pour matcher la palette BMD dark : fond saffron-soft,
+   bordure cream-alpha, chevron saffron via background-image SVG inline.
+   `appearance: none` retire le chevron natif. */
+select {
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  appearance: none;
+  background-color: rgba(244, 228, 193, 0.04);
+  color: var(--cream);
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 8' fill='none'><path d='M1 1.5L6 6.5L11 1.5' stroke='%23E8A33D' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/></svg>");
+  background-repeat: no-repeat;
+  background-position: right 14px center;
+  background-size: 12px 8px;
+  padding-right: 36px; /* place pour le chevron */
+}
+select::-ms-expand {
+  display: none;
+}
+/* Les options du dropdown natif iOS héritent du style du select sur iOS 16+
+   (sombre). Sur Android, les options gardent leur thème natif system. */
+select option {
+  background-color: #1E1830;
+  color: var(--cream);
+}
+html[data-theme="light"] select {
+  background-color: rgba(168, 95, 26, 0.06);
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 8' fill='none'><path d='M1 1.5L6 6.5L11 1.5' stroke='%23A85F1A' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/></svg>");
+}
+html[data-theme="light"] select option {
+  background-color: #FBF5E6;
+  color: #1A1426;
 }
 
 /* ================================================================
@@ -120,7 +1047,7 @@ textarea {
   display: flex;
   align-items: center;
   gap: 8px;
-  font-family: "Cormorant Garamond", serif;
+  font-family: var(--font-cormorant, "Cormorant Garamond"), Georgia, serif;
   font-size: 22px;
   font-weight: 700;
   color: var(--cream);
@@ -158,7 +1085,7 @@ textarea {
 }
 
 .page-header h1 {
-  font-family: "Cormorant Garamond", serif;
+  font-family: var(--font-cormorant, "Cormorant Garamond"), Georgia, serif;
   font-size: 26px;
   font-weight: 600;
   color: var(--cream);
@@ -198,7 +1125,7 @@ textarea {
 }
 
 .card h2 {
-  font-family: "Cormorant Garamond", serif;
+  font-family: var(--font-cormorant, "Cormorant Garamond"), Georgia, serif;
   font-size: 18px;
   color: var(--cream);
   font-weight: 600;
@@ -446,7 +1373,7 @@ textarea {
 }
 
 .list-item .amount {
-  font-family: "Cormorant Garamond", serif;
+  font-family: var(--font-cormorant, "Cormorant Garamond"), Georgia, serif;
   font-size: 17px;
   font-weight: 700;
   color: var(--saffron);
@@ -483,49 +1410,6 @@ textarea {
 .chip-muted { background: var(--overlay); color: var(--muted); border-color: var(--line-soft); }
 
 /* ================================================================
-   QUICK ACTIONS (top of group page, etc.)
-   ================================================================ */
-
-.quick-row {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
-  gap: 8px;
-  margin-bottom: 16px;
-}
-
-.quick-card {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 4px;
-  padding: 14px 8px;
-  border-radius: var(--r-md);
-  background: linear-gradient(135deg, rgba(232, 163, 61, 0.1), rgba(181, 70, 46, 0.05));
-  border: 1px solid var(--line);
-  color: var(--saffron);
-  font-size: 12px;
-  font-weight: 700;
-  letter-spacing: 0.3px;
-  text-decoration: none;
-  min-height: 64px;
-  transition: transform 0.1s, border-color 0.15s;
-}
-
-.quick-card:active {
-  transform: scale(0.98);
-}
-
-.quick-card .ico {
-  font-size: 18px;
-  line-height: 1;
-}
-
-.quick-card .lbl {
-  font-size: 11px;
-}
-
-/* ================================================================
    STATS GRID
    ================================================================ */
 
@@ -549,7 +1433,7 @@ textarea {
 }
 
 .stat .v {
-  font-family: "Cormorant Garamond", serif;
+  font-family: var(--font-cormorant, "Cormorant Garamond"), Georgia, serif;
   font-size: 22px;
   font-weight: 700;
   color: var(--saffron);
@@ -600,7 +1484,7 @@ textarea {
 }
 
 .hero-card .amount {
-  font-family: "Cormorant Garamond", serif;
+  font-family: var(--font-cormorant, "Cormorant Garamond"), Georgia, serif;
   font-size: 38px;
   font-weight: 600;
   color: var(--cream);
@@ -662,11 +1546,6 @@ textarea {
   gap: 10px;
 }
 
-.row-tight {
-  display: flex;
-  gap: 6px;
-}
-
 .between {
   display: flex;
   align-items: center;
@@ -683,10 +1562,8 @@ textarea {
   text-align: center;
 }
 
-.mt-2 { margin-top: 8px; }
 .mt-3 { margin-top: 12px; }
 .mt-4 { margin-top: 16px; }
-.mb-2 { margin-bottom: 8px; }
 .mb-3 { margin-bottom: 12px; }
 
 /* ================================================================
@@ -702,4 +1579,674 @@ textarea {
 ::-webkit-scrollbar-thumb {
   background: var(--line);
   border-radius: 3px;
+}
+
+/* ================================================================
+   GROUP DETAIL — DESKTOP LAYOUT
+   ----------------------------------------------------------------
+   La page /dashboard/groups/[id] est wrappée par <ResponsiveShell>.
+   En mode mobile (<768px) on garde le flow vertical naturel (les
+   cards s'empilent comme une vraie app native).
+   En mode desktop (≥769px) on adopte une organisation deux colonnes
+   à la Wise/Revolut Business : le contenu principal (Dépenses,
+   Activité) prend la colonne large, les panneaux latéraux (Soldes,
+   Membres, Presets, Stats) vont en colonne droite.
+
+   Implémentation : CSS multi-column (column-count) avec
+   break-inside:avoid pour que chaque card reste atomique. Cela
+   évite de toucher au JSX (la page fait déjà 2700+ lignes) tout en
+   produisant un rendu pro et adaptatif.
+   ================================================================ */
+
+.group-detail-page.is-mobile {
+  /* Sur mobile, on garde le padding horizontal classique du container */
+  padding: 8px 16px 24px;
+}
+
+.group-detail-page.is-desktop {
+  /* Sur desktop, le DesktopShell fournit déjà max-width et padding */
+  padding: 0;
+}
+
+/* Quick actions row : 3 cartes côte-à-côte sur mobile, plus large sur desktop */
+.group-detail-page .quick-row {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+@media (min-width: 769px) {
+  .group-detail-page.is-desktop .quick-row {
+    grid-template-columns: repeat(6, minmax(120px, 1fr));
+    gap: 12px;
+    max-width: 100%;
+  }
+
+  /* Mise en colonnes des cards sur desktop.
+     On exclut .quick-row qui doit rester pleine largeur.
+     On exclut aussi les modales (Confirm delete, etc.) qui sont en
+     overlay full-screen via position:fixed. */
+  .group-detail-page.is-desktop {
+    column-count: 2;
+    column-gap: 20px;
+    column-fill: balance;
+  }
+  .group-detail-page.is-desktop > .quick-row,
+  .group-detail-page.is-desktop > .error {
+    column-span: all;
+  }
+  .group-detail-page.is-desktop > .card {
+    break-inside: avoid;
+    page-break-inside: avoid;
+    margin-bottom: 16px;
+    /* Important : sans display block on a des bugs de fragmentation
+       sur certains navigateurs avec column-count */
+    display: block;
+    width: 100%;
+  }
+}
+
+/* Sur les très grands écrans, on passe à 3 colonnes pour densifier */
+@media (min-width: 1400px) {
+  .group-detail-page.is-desktop {
+    column-count: 3;
+    column-gap: 22px;
+  }
+}
+
+/* Le hero balance et la section nav doivent prendre toute la largeur,
+   pas être broyés par le multi-column layout. */
+@media (min-width: 769px) {
+  .group-detail-page.is-desktop > div[style*="linear-gradient"]:first-of-type,
+  .group-detail-page.is-desktop > .gd-section-nav {
+    column-span: all;
+    margin-bottom: 18px;
+  }
+}
+
+/* ================================================================
+   V41.2 · ANTI-DÉBORDEMENT GLOBAL (toutes tailles)
+   ================================================================
+   Verrou universel sur html/body pour qu'aucun élément ne puisse
+   provoquer de scroll horizontal de page, peu importe la viewport.
+   Si un carousel doit scroller, il le fait DANS sa propre boîte.
+*/
+html,
+body {
+  overflow-x: clip; /* clip = pas de scrollbar, pas de scroll, sans casser position:sticky */
+  max-width: 100vw;
+}
+/* Fallback navigateurs sans `clip` (vieux Safari < 16) : on bascule sur hidden */
+@supports not (overflow-x: clip) {
+  html,
+  body {
+    overflow-x: hidden;
+  }
+}
+
+/* V79 — Verrou supplémentaire sur <main> : empêche le débordement
+   horizontal de remonter au scroll de page quand le contenu interne
+   (carousel à margin négative, table large, image hors-zone) déborde.
+   Sur iOS Safari, le `overflow-x: clip` du <body> peut être contourné
+   par un `<main>` enfant avec `overflow-y: auto` qui laisse fuiter X.
+   On force le clip sur tous les <main> pour fermer la porte définitivement. */
+main {
+  max-width: 100%;
+  overflow-x: clip;
+}
+@supports not (overflow-x: clip) {
+  main {
+    overflow-x: hidden;
+  }
+}
+
+/* ================================================================
+   V41.2 · HERO NUMBERS — taille adaptative avec clamp()
+   ================================================================
+   Les gros chiffres en Cormorant Garamond (soldes, montants tontine,
+   stats principales) doivent s'adapter au viewport sans déborder.
+   On utilise clamp() avec une typo "fluid" qui réduit en dessous de
+   ~360px tout en restant lisible. Combiné à overflow-wrap, ça
+   garantit qu'un solde 999 999 999,99 EUR ne casse jamais le layout.
+*/
+.bmd-hero-amount,
+[data-bmd-hero-amount] {
+  font-size: clamp(24px, 8vw, 44px) !important;
+  overflow-wrap: anywhere !important;
+  word-break: normal;
+  min-width: 0;
+  max-width: 100%;
+}
+
+/* ================================================================
+   V41.2 · BottomSheets + Modals : verrou box-sizing
+   ================================================================
+   Tous les overlays (position: fixed) DOIVENT avoir box-sizing inclusif
+   et max-width 100%. Plus aucun débordement possible.
+*/
+[role="dialog"],
+.bmd-bottom-sheet,
+[data-bmd-overlay] {
+  box-sizing: border-box;
+  max-width: 100vw;
+}
+[role="dialog"] *,
+.bmd-bottom-sheet *,
+[data-bmd-overlay] * {
+  box-sizing: border-box;
+  max-width: 100%;
+}
+
+/* ================================================================
+   V41.8 · ANTI-ZOOM iOS + clavier mobile bien géré
+   ================================================================
+   iOS Safari ZOOM AUTOMATIQUEMENT quand on tappe un input avec
+   font-size < 16px → décale tout le layout + provoque scroll latéral.
+   On force 16px minimum sur TOUS les inputs/textarea/select de l'app
+   pour empêcher ce zoom.
+*/
+@media (max-width: 768px) {
+  input[type="text"],
+  input[type="tel"],
+  input[type="email"],
+  input[type="number"],
+  input[type="password"],
+  input[type="search"],
+  input[type="url"],
+  input[type="date"],
+  input[type="time"],
+  input[type="datetime-local"],
+  input:not([type]),
+  textarea,
+  select {
+    font-size: 16px !important;
+    /* Permet au browser de scroller automatiquement l'input dans la
+       visible area au focus (sous le clavier) */
+    scroll-margin-bottom: 20vh;
+    scroll-margin-top: 20vh;
+  }
+}
+
+/* ================================================================
+   V41.8 · BottomSheet : taille adaptative au clavier visible
+   ================================================================
+   Quand le clavier mobile s'affiche, on utilise les nouvelles unités
+   CSS dvh (dynamic viewport height) qui se réduit automatiquement.
+   Sans ça, sur iOS Safari, le 100vh reste figé à la hauteur d'origine
+   et le BottomSheet déborde sous le clavier.
+*/
+.bmd-bottom-sheet {
+  max-height: 90dvh !important;
+}
+@supports not (height: 100dvh) {
+  /* Fallback navigateurs sans dvh (Safari < 15.4) */
+  .bmd-bottom-sheet {
+    max-height: 90vh !important;
+  }
+}
+
+/* ================================================================
+   MOBILE-FIRST · ANTI-DÉBORDEMENT HORIZONTAL (NO SIDE-SCROLL)
+   ================================================================
+   Règle absolue : sur mobile, AUCUN scroll horizontal de page.
+   Si un contenu doit défiler horizontalement (table large, scroll-snap
+   carousel), il doit le faire DANS son propre conteneur scrollable —
+   jamais en débordant le viewport.
+
+   Sur Safari mobile + Capacitor WebView, le `overflow-x: hidden` du
+   bloc « standalone » ne s'applique PAS. On force ici sur tactile.
+*/
+@media (max-width: 768px) {
+  /* (1) Verrou de viewport : le body ne dépasse jamais la largeur écran */
+  html,
+  body {
+    overflow-x: hidden;
+    max-width: 100%;
+    width: 100%;
+  }
+
+  /* (2) Conteneurs structurants : box-sizing inclusif + max-width 100% */
+  main,
+  section,
+  article,
+  aside,
+  header,
+  footer,
+  nav,
+  .container,
+  .stack,
+  .card,
+  .quick-card,
+  .row,
+  .col,
+  .grid,
+  .page-header {
+    max-width: 100%;
+    box-sizing: border-box;
+  }
+
+  /* (3) Wrapping forcé sur les textes longs (URLs, tokens, emails, hashes,
+        noms de fichiers, IDs). `overflow-wrap: anywhere` est plus permissif
+        que `break-word` et coupe entre n'importe quels caractères si besoin. */
+  p,
+  h1, h2, h3, h4, h5, h6,
+  li, dt, dd, blockquote, figcaption,
+  span, label, small,
+  td, th,
+  a, button {
+    overflow-wrap: anywhere;
+    word-break: normal;
+  }
+
+  /* (4) Code / mono / hashes / tokens : break-all autorisé */
+  code, pre, kbd, samp, tt {
+    overflow-wrap: anywhere;
+    word-break: break-all;
+    white-space: pre-wrap;
+    max-width: 100%;
+  }
+
+  /* (5) Media : ne jamais déborder du viewport */
+  img, video, iframe, canvas, picture, object, embed {
+    max-width: 100%;
+    height: auto;
+  }
+  /* SVG : laisse le height auto seulement si pas d'aspect-ratio explicite */
+  svg:not([width]):not([height]) {
+    max-width: 100%;
+  }
+
+  /* (6) Tables : scrollables DANS leur boîte, pas hors page */
+  table {
+    display: block;
+    max-width: 100%;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  /* (7) Inputs / textareas / selects : never overflow le viewport */
+  input,
+  textarea,
+  select {
+    max-width: 100%;
+    box-sizing: border-box;
+  }
+  textarea {
+    /* iOS : pas de redim manuel hors viewport */
+    resize: vertical;
+  }
+
+  /* (8) Min-width inline en flex/grid : neutralisation universelle.
+        On capture toutes les valeurs entre 140 et 320 — ces colonnes
+        sont conçues pour desktop et écrasent le viewport mobile. */
+  [style*="minWidth: 140"],
+  [style*="minWidth: 160"],
+  [style*="minWidth: 180"],
+  [style*="minWidth: 200"],
+  [style*="minWidth: 220"],
+  [style*="minWidth: 240"],
+  [style*="minWidth: 260"],
+  [style*="minWidth: 280"],
+  [style*="minWidth: 300"],
+  [style*="minWidth: 320"],
+  [style*="minWidth:140"],
+  [style*="minWidth:160"],
+  [style*="minWidth:180"],
+  [style*="minWidth:200"],
+  [style*="minWidth:220"],
+  [style*="minWidth:240"],
+  [style*="minWidth:260"],
+  [style*="minWidth:280"],
+  [style*="minWidth:300"],
+  [style*="minWidth:320"],
+  [style*="min-width: 140"],
+  [style*="min-width: 160"],
+  [style*="min-width: 180"],
+  [style*="min-width: 200"],
+  [style*="min-width: 220"],
+  [style*="min-width: 240"],
+  [style*="min-width: 260"],
+  [style*="min-width: 280"],
+  [style*="min-width: 300"],
+  [style*="min-width: 320"] {
+    min-width: 0 !important;
+    flex-basis: auto !important;
+  }
+
+  /* (9) Width: 100vw → 100% (un 100vw inclut la scrollbar et déborde de
+        quelques px en zoom/safe-area). */
+  [style*="100vw"] {
+    /* On laisse intact certains overlays full-bleed légitimes (fixed),
+       mais pour les éléments inline en flux, on capture via classe. */
+  }
+
+  /* (10) Grid columns figés qui débordent : on les rabat en 1 colonne mobile
+        sauf si la classe l'a explicitement prévu (.plan-gate-grid, etc.) */
+  [style*="gridTemplateColumns: \"repeat"][style*="200px"],
+  [style*="gridTemplateColumns: \"repeat"][style*="240px"],
+  [style*="grid-template-columns: repeat"][style*="200px"],
+  [style*="grid-template-columns: repeat"][style*="240px"] {
+    grid-template-columns: 1fr !important;
+  }
+}
+
+/* Sur très petit viewport (iPhone SE ~375px, iPhone Mini), on est encore
+   plus strict : on rabat aussi les min-width 100-140px. */
+@media (max-width: 400px) {
+  [style*="minWidth: 100"],
+  [style*="minWidth: 110"],
+  [style*="minWidth: 120"],
+  [style*="minWidth: 130"],
+  [style*="minWidth:100"],
+  [style*="minWidth:110"],
+  [style*="minWidth:120"],
+  [style*="minWidth:130"],
+  [style*="min-width: 100"],
+  [style*="min-width: 110"],
+  [style*="min-width: 120"],
+  [style*="min-width: 130"] {
+    min-width: 0 !important;
+  }
+}
+
+/* ================================================================
+   ANTI-DÉBORDEMENT · MOBILE-SHELL HARDENING (Capacitor / Safari iOS)
+   ================================================================
+   Le BMD MobileShell rend ses sections dans `<main role="main">`. On
+   garantit qu'à l'intérieur, AUCUN flex item n'écrase le viewport. */
+@media (max-width: 768px) {
+  /* (a) Pattern critique : un enfant flex sans `min-width: 0` peut imposer
+        sa largeur intrinsèque (long mot, image, input) et faire déborder le
+        parent. On force min-width: 0 sur les flex children courants. */
+  .gd-section-nav > *,
+  .page-header > *,
+  main[role="main"] > section > *,
+  [class*="card"] > [class*="row"] > *,
+  [class*="stack"] > * {
+    min-width: 0;
+  }
+
+  /* (b) Les chips / badges avec whiteSpace:nowrap : on autorise l'ellipsis
+        seulement s'ils sont dans un flex avec overflow:hidden. Sinon, on
+        retire le nowrap pour qu'ils wrappent au lieu de déborder. */
+  [style*="whiteSpace: \"nowrap"]:not([style*="overflow"]):not([style*="textOverflow"]),
+  [style*="whiteSpace:\"nowrap"]:not([style*="overflow"]):not([style*="textOverflow"]) {
+    white-space: normal !important;
+  }
+
+  /* (c) Les conteneurs explicitement scrollables horizontalement (carousels,
+        scroll-snap chips) doivent garder leur scroll INTERNE — on les rend
+        explicitement opt-in via la classe `.h-scroll`. */
+  .h-scroll {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    max-width: 100vw;
+  }
+  .h-scroll::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+/* ================================================================
+   V91.B — Panneau Inviter (desktop) en V45-light
+   La `.card` parent a un fond night sombre par défaut, mais l'app a
+   migré en v45-light. On override le scope `.bmd-invite-panel-v45`
+   pour passer en palette paper/ivory/cocoa/saffron. Les autres `.card`
+   ne sont pas touchées (changement chirurgical).
+   ================================================================ */
+html[data-theme="v45-light"] .bmd-invite-panel-v45 {
+  background: var(--paper, #ffffff);
+  border: 1px solid var(--v45-line, rgba(43, 31, 21, 0.10));
+  color: var(--cocoa, #2b1f15);
+  box-shadow: 0 8px 24px rgba(43, 31, 21, 0.06);
+}
+
+html[data-theme="v45-light"] .bmd-invite-panel-v45 h2 {
+  color: var(--cocoa, #2b1f15);
+}
+
+html[data-theme="v45-light"] .bmd-invite-panel-v45 .card-head {
+  border-bottom-color: var(--v45-line, rgba(43, 31, 21, 0.10));
+}
+
+/* Inputs + selects : fond ivory, border saffron au focus */
+html[data-theme="v45-light"] .bmd-invite-panel-v45 input,
+html[data-theme="v45-light"] .bmd-invite-panel-v45 select,
+html[data-theme="v45-light"] .bmd-invite-panel-v45 textarea {
+  background: var(--ivory, #fbf6ec) !important;
+  border-color: var(--v45-line, rgba(43, 31, 21, 0.12)) !important;
+  color: var(--cocoa, #2b1f15) !important;
+}
+html[data-theme="v45-light"] .bmd-invite-panel-v45 input:focus,
+html[data-theme="v45-light"] .bmd-invite-panel-v45 select:focus,
+html[data-theme="v45-light"] .bmd-invite-panel-v45 textarea:focus {
+  border-color: var(--v45-saffron, #c58a2e) !important;
+  box-shadow: 0 0 0 3px rgba(232, 201, 136, 0.22) !important;
+  outline: none;
+}
+
+/* Boutons ghost : bordure saffron sur paper */
+html[data-theme="v45-light"] .bmd-invite-panel-v45 .btn-ghost {
+  background: var(--paper, #ffffff);
+  border: 1px solid var(--v45-line-strong, rgba(43, 31, 21, 0.16));
+  color: var(--cocoa, #2b1f15);
+}
+html[data-theme="v45-light"] .bmd-invite-panel-v45 .btn-ghost:hover {
+  background: var(--ivory-2, #f4ecd8);
+  border-color: var(--v45-saffron, #c58a2e);
+}
+
+/* CTA principal (submit batch) : gradient saffron→terracotta */
+html[data-theme="v45-light"] .bmd-invite-panel-v45 .btn:not(.btn-ghost) {
+  background: linear-gradient(
+    135deg,
+    var(--v45-saffron, #c58a2e) 0%,
+    var(--v45-terracotta, #9f4628) 100%
+  ) !important;
+  color: #ffffff !important;
+  border: none;
+  box-shadow: 0 8px 22px rgba(197, 138, 46, 0.30);
+}
+html[data-theme="v45-light"] .bmd-invite-panel-v45 .btn:not(.btn-ghost):disabled {
+  background: var(--ivory-2, #f4ecd8) !important;
+  color: var(--cocoa-mute, #a99580) !important;
+  box-shadow: none;
+}
+
+/* Sous-blocs (saisie manuelle, file d'invitations) : fond paper neutre */
+html[data-theme="v45-light"] .bmd-invite-panel-v45 > div[style*="overlay"],
+html[data-theme="v45-light"] .bmd-invite-panel-v45 .list,
+html[data-theme="v45-light"] .bmd-invite-panel-v45 .list-item {
+  background: var(--ivory, #fbf6ec) !important;
+  border-color: var(--v45-line, rgba(43, 31, 21, 0.10)) !important;
+  color: var(--cocoa, #2b1f15) !important;
+}
+
+/* Texte secondaire (.muted, .section-title, .meta) : cocoa-soft */
+html[data-theme="v45-light"] .bmd-invite-panel-v45 .section-title,
+html[data-theme="v45-light"] .bmd-invite-panel-v45 .meta,
+html[data-theme="v45-light"] .bmd-invite-panel-v45 [style*="--muted"],
+html[data-theme="v45-light"] .bmd-invite-panel-v45 [style*="cream-soft"] {
+  color: var(--cocoa-soft, #6b5a47) !important;
+}
+
+/* Disclaimer RGPD (premier bandeau) : ivory-2 avec liseré saffron */
+html[data-theme="v45-light"] .bmd-invite-panel-v45 > div:first-of-type[style*="saffron"] {
+  background: var(--v45-saffron-pale, #f6e8c5) !important;
+  border-color: var(--v45-saffron, #c58a2e) !important;
+  color: var(--cocoa, #2b1f15) !important;
+}
+
+/* Liens : saffron sur clair */
+html[data-theme="v45-light"] .bmd-invite-panel-v45 a {
+  color: var(--v45-saffron, #c58a2e) !important;
+}
+
+/* Success / Error inline */
+html[data-theme="v45-light"] .bmd-invite-panel-v45 .success {
+  background: rgba(63, 125, 92, 0.10) !important;
+  border: 1px solid rgba(63, 125, 92, 0.30) !important;
+  color: #3f7d5c !important;
+}
+html[data-theme="v45-light"] .bmd-invite-panel-v45 .error {
+  background: rgba(159, 70, 40, 0.08) !important;
+  border: 1px solid rgba(159, 70, 40, 0.30) !important;
+  color: var(--v45-terracotta, #9f4628) !important;
+}
+
+/* ================================================================
+   V103 — Overrides V45-light pour les classes utilitaires globales
+   (.card, .list-item, .field, .btn-ghost, .chip, etc.).
+   ----------------------------------------------------------------
+   Pourquoi : ces classes étaient définies pour le thème SOMBRE legacy
+   (fond gradient indigo, texte cream). Sur la version web qui tourne
+   maintenant en V45-light par défaut, elles rendaient les pages quasi
+   illisibles (cards transparentes/foncées sur fond ivory).
+   On préserve la palette dark pour les pages qui pourraient encore
+   forcer un autre theme — d'où le scoping par `[data-theme="v45-light"]`.
+   ================================================================ */
+
+/* Cards — fond paper plein, ombre douce, texte cocoa */
+html[data-theme="v45-light"] .card {
+  background: var(--paper, #FFFFFF) !important;
+  border: 1px solid rgba(43, 31, 21, 0.08) !important;
+  box-shadow: 0 2px 8px rgba(43, 31, 21, 0.04) !important;
+}
+html[data-theme="v45-light"] .card h2 {
+  color: var(--cocoa, #2B1F15) !important;
+}
+
+/* Formulaires — labels cocoa-soft, inputs ivory */
+html[data-theme="v45-light"] .field label {
+  color: var(--cocoa-soft, #6B5A47) !important;
+}
+html[data-theme="v45-light"] .field input,
+html[data-theme="v45-light"] .field select,
+html[data-theme="v45-light"] .field textarea {
+  background: var(--ivory, #FBF6EC) !important;
+  border: 1px solid rgba(43, 31, 21, 0.12) !important;
+  color: var(--cocoa, #2B1F15) !important;
+}
+html[data-theme="v45-light"] .field input::placeholder,
+html[data-theme="v45-light"] .field textarea::placeholder {
+  color: var(--cocoa-mute, #A99580) !important;
+  opacity: 1 !important;
+}
+html[data-theme="v45-light"] .field input:focus,
+html[data-theme="v45-light"] .field select:focus,
+html[data-theme="v45-light"] .field textarea:focus {
+  border-color: var(--v45-saffron, #C58A2E) !important;
+  background: var(--paper, #FFFFFF) !important;
+}
+
+/* Bouton ghost — bordure cocoa pâle, texte cocoa-soft */
+html[data-theme="v45-light"] .btn-ghost {
+  background: transparent !important;
+  border: 1px solid rgba(43, 31, 21, 0.14) !important;
+  color: var(--cocoa-soft, #6B5A47) !important;
+}
+html[data-theme="v45-light"] .btn-ghost:hover {
+  background: var(--ivory-2, #F4ECD8) !important;
+  border-color: rgba(43, 31, 21, 0.20) !important;
+}
+
+/* Bouton primaire — saffron V45 (gradient existant garde son rendu) */
+html[data-theme="v45-light"] .btn {
+  background: linear-gradient(
+    135deg,
+    var(--v45-saffron, #C58A2E),
+    var(--v45-terracotta, #9F4628)
+  ) !important;
+  color: #FFFFFF !important;
+  box-shadow: 0 6px 18px rgba(197, 138, 46, 0.30) !important;
+}
+
+/* Feedback messages */
+html[data-theme="v45-light"] .error {
+  background: rgba(159, 70, 40, 0.08) !important;
+  border: 1px solid rgba(159, 70, 40, 0.30) !important;
+  color: var(--v45-terracotta, #9F4628) !important;
+}
+html[data-theme="v45-light"] .success {
+  background: rgba(47, 139, 92, 0.08) !important;
+  border: 1px solid rgba(47, 139, 92, 0.30) !important;
+  color: #2F8B5C !important;
+}
+html[data-theme="v45-light"] .info {
+  background: var(--v45-saffron-pale, #F6E8C5) !important;
+  border: 1px solid rgba(197, 138, 46, 0.30) !important;
+  color: var(--cocoa, #2B1F15) !important;
+}
+
+/* Listes — items paper, séparateur cocoa pâle */
+html[data-theme="v45-light"] .list-item {
+  background: var(--paper, #FFFFFF) !important;
+  border: 1px solid rgba(43, 31, 21, 0.08) !important;
+}
+html[data-theme="v45-light"] .list-item:active,
+html[data-theme="v45-light"] .list-item:hover {
+  border-color: rgba(43, 31, 21, 0.16) !important;
+}
+html[data-theme="v45-light"] .list-item .name {
+  color: var(--cocoa, #2B1F15) !important;
+}
+html[data-theme="v45-light"] .list-item .meta {
+  color: var(--cocoa-soft, #6B5A47) !important;
+}
+html[data-theme="v45-light"] .list-item .icon {
+  background: linear-gradient(
+    135deg,
+    rgba(197, 138, 46, 0.18),
+    rgba(232, 201, 136, 0.12)
+  ) !important;
+  color: var(--v45-saffron, #C58A2E) !important;
+}
+html[data-theme="v45-light"] .list-item .amount {
+  color: var(--v45-saffron, #C58A2E) !important;
+}
+html[data-theme="v45-light"] .amount-neg {
+  color: var(--v45-terracotta, #9F4628) !important;
+}
+html[data-theme="v45-light"] .amount-pos {
+  color: #2F8B5C !important;
+}
+
+/* Chips */
+html[data-theme="v45-light"] .chip-saffron {
+  background: var(--v45-saffron-pale, #F6E8C5) !important;
+  color: var(--v45-saffron, #C58A2E) !important;
+  border-color: rgba(197, 138, 46, 0.30) !important;
+}
+html[data-theme="v45-light"] .chip-emerald {
+  background: rgba(47, 139, 92, 0.10) !important;
+  color: #2F8B5C !important;
+  border-color: rgba(47, 139, 92, 0.30) !important;
+}
+html[data-theme="v45-light"] .chip-rose {
+  background: rgba(159, 70, 40, 0.08) !important;
+  color: var(--v45-terracotta, #9F4628) !important;
+  border-color: rgba(159, 70, 40, 0.30) !important;
+}
+html[data-theme="v45-light"] .chip-muted {
+  background: var(--ivory-2, #F4ECD8) !important;
+  color: var(--cocoa-soft, #6B5A47) !important;
+  border-color: rgba(43, 31, 21, 0.12) !important;
+}
+
+/* Quick action cards (rangée top page groupe) */
+html[data-theme="v45-light"] .quick-card {
+  background: var(--paper, #FFFFFF) !important;
+  border: 1px solid rgba(43, 31, 21, 0.08) !important;
+  color: var(--v45-saffron, #C58A2E) !important;
+  box-shadow: 0 1px 3px rgba(43, 31, 21, 0.04) !important;
+}
+html[data-theme="v45-light"] .quick-card:hover {
+  background: var(--v45-saffron-pale, #F6E8C5) !important;
+  border-color: rgba(197, 138, 46, 0.30) !important;
+}
+
+/* Muted générique : tous les texts avec color: var(--muted) */
+html[data-theme="v45-light"] .muted {
+  color: var(--cocoa-soft, #6B5A47) !important;
 }

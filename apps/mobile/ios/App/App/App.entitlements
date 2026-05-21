@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+	BMD · Entitlements iOS
+
+	Active les capabilities natives nécessaires :
+	  - Associated Domains : Universal Links pour `backmesdo.com`
+	  - Push Notifications : APNs (production + dev sandbox)
+	  - Sign in with Apple : SSO natif
+	  - In-App Purchase : abonnements StoreKit
+
+	IMPORTANT : ces entitlements doivent ALSO être activées côté Apple
+	Developer Portal pour le bundle ID `com.backmesdo.bmd`. Sinon le code
+	fonctionne en local mais Apple rejettera la build à la soumission.
+
+	Côté Xcode :
+	  Targets → App → Signing & Capabilities → "+" pour ajouter chaque
+	  capability et lier à ce fichier .entitlements.
+-->
+<plist version="1.0">
+<dict>
+	<!-- Universal Links — backmesdo.com/* ouvre directement l'app -->
+	<key>com.apple.developer.associated-domains</key>
+	<array>
+		<string>applinks:backmesdo.com</string>
+		<string>applinks:app.backmesdo.com</string>
+		<string>applinks:www.backmesdo.com</string>
+	</array>
+
+	<!-- Push Notifications — APNs (production OU dev sandbox selon build) -->
+	<key>aps-environment</key>
+	<string>production</string>
+
+	<!-- Sign in with Apple natif -->
+	<key>com.apple.developer.applesignin</key>
+	<array>
+		<string>Default</string>
+	</array>
+
+	<!-- In-App Purchase (StoreKit) -->
+	<key>com.apple.developer.in-app-payments</key>
+	<array>
+		<string>merchant.com.backmesdo.bmd</string>
+	</array>
+</dict>
+</plist>

@@ -18,6 +18,9 @@
     "paths": {
       "@/*": [
         "./*"
+      ],
+      "@bmd/mobile/*": [
+        "../mobile/*"
       ]
     },
     "allowJs": true
@@ -26,6 +29,7 @@
     "**/*.ts",
     "**/*.tsx",
     "next-env.d.ts",
+    "types/**/*.d.ts",
     ".next/types/**/*.ts"
   ],
   "exclude": [

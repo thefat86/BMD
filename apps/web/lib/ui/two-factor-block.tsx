@@ -15,9 +15,12 @@
 import { useEffect, useState } from "react";
 import { api } from "../api-client";
 import { useToast } from "./toast";
+import { SecretField } from "./secret-field";
+import { useT } from "../i18n/app-strings";
 
 export function TwoFactorBlock(): JSX.Element {
   const toast = useToast();
+  const t = useT();
   const [status, setStatus] = useState<"loading" | "off" | "on">("loading");
   const [enabledAt, setEnabledAt] = useState<string | null>(null);
   const [step, setStep] = useState<"idle" | "setup" | "verify" | "disable">(
@@ -58,13 +61,13 @@ export function TwoFactorBlock(): JSX.Element {
 
   async function confirmEnable() {
     if (!/^\d{6}$/.test(code) || !secret) {
-      toast.error("Code à 6 chiffres requis");
+      toast.error(t("twoFactor.codeRequired"));
       return;
     }
     setBusy(true);
     try {
       await api.twoFactorEnable(secret, code);
-      toast.success("Authentification à 2 facteurs activée 🔐");
+      toast.success(t("twoFactor.enabledSuccess"));
       setStep("idle");
       setSecret(null);
       setUri(null);
@@ -79,13 +82,13 @@ export function TwoFactorBlock(): JSX.Element {
 
   async function confirmDisable() {
     if (!/^\d{6}$/.test(code)) {
-      toast.error("Code à 6 chiffres requis");
+      toast.error(t("twoFactor.codeRequired"));
       return;
     }
     setBusy(true);
     try {
       await api.twoFactorDisable(code);
-      toast.success("Authentification à 2 facteurs désactivée");
+      toast.success(t("twoFactor.disabledSuccess"));
       setStep("idle");
       setCode("");
       await load();
@@ -129,16 +132,75 @@ export function TwoFactorBlock(): JSX.Element {
         comptes Premium et Communauté.
       </p>
 
-      {/* État inactif : proposer activation */}
+      {/* État inactif : explication + CTA */}
       {status === "off" && step === "idle" && (
-        <button
-          type="button"
-          onClick={startSetup}
-          disabled={busy}
-          className="btn btn-block"
-        >
-          {busy ? "…" : "🔐 Activer la 2FA"}
-        </button>
+        <>
+          <div
+            style={{
+              background: "rgba(232,163,61,0.06)",
+              border: "1px solid rgba(232,163,61,0.2)",
+              borderRadius: 12,
+              padding: 12,
+              marginBottom: 12,
+              fontSize: 12,
+              lineHeight: 1.6,
+              color: "var(--cream-soft)",
+            }}
+          >
+            <strong style={{ color: "var(--saffron)" }}>
+              📱 Tu as besoin d'une app d'authentification
+            </strong>
+            <p style={{ margin: "6px 0 8px" }}>
+              Avant d'activer la 2FA, installe une de ces apps gratuites sur ton
+              téléphone :
+            </p>
+            <ul
+              style={{
+                margin: "0 0 8px",
+                paddingLeft: 18,
+                fontSize: 11.5,
+                color: "var(--cream)",
+              }}
+            >
+              <li>
+                <strong>Google Authenticator</strong>{" "}
+                <a
+                  href="https://apps.apple.com/app/google-authenticator/id388497605"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  style={{ color: "var(--saffron)", textDecoration: "underline" }}
+                >
+                  iOS
+                </a>
+                {" · "}
+                <a
+                  href="https://play.google.com/store/apps/details?id=com.google.android.apps.authenticator2"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  style={{ color: "var(--saffron)", textDecoration: "underline" }}
+                >
+                  Android
+                </a>
+              </li>
+              <li>
+                <strong>Authy</strong> · <strong>1Password</strong> ·{" "}
+                <strong>Bitwarden</strong> (autres options)
+              </li>
+            </ul>
+            <p style={{ margin: "8px 0 0", fontSize: 11, fontStyle: "italic" }}>
+              💡 Ces apps génèrent un code à 6 chiffres qui change toutes les 30
+              secondes. C'est ce code qui te servira à te connecter.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={startSetup}
+            disabled={busy}
+            className="btn btn-block"
+          >
+            {busy ? "…" : "🔐 J'ai mon app — activer la 2FA"}
+          </button>
+        </>
       )}
 
       {/* Étape setup : afficher QR + secret */}
@@ -193,22 +255,30 @@ export function TwoFactorBlock(): JSX.Element {
           >
             Ou saisis manuellement ce secret :
           </div>
-          <code
+          <div
             style={{
-              display: "block",
               padding: 10,
               background: "rgba(232,163,61,0.06)",
               border: "1px dashed var(--saffron, #E8A33D)",
               borderRadius: 8,
-              fontSize: 12,
-              wordBreak: "break-all",
-              fontFamily: "monospace",
-              color: "var(--saffron)",
               marginBottom: 14,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: 8,
             }}
           >
-            {secret}
-          </code>
+            <SecretField value={secret} copyable monospace />
+            <span
+              style={{
+                fontSize: 10,
+                color: "var(--cream-soft)",
+                fontStyle: "italic",
+              }}
+            >
+              Press long pour révéler
+            </span>
+          </div>
           <button
             type="button"
             onClick={() => setStep("verify")}
@@ -248,11 +318,25 @@ export function TwoFactorBlock(): JSX.Element {
               color: "var(--saffron)",
               textTransform: "uppercase",
               fontWeight: 700,
-              marginBottom: 10,
+              marginBottom: 8,
             }}
           >
-            Étape 2/2 · Confirme avec le 1er code
+            Étape 2/2 · Confirme avec le code de ton app
           </div>
+          <p
+            style={{
+              fontSize: 12.5,
+              color: "var(--cream-soft)",
+              lineHeight: 1.55,
+              margin: "0 0 14px",
+            }}
+          >
+            👉 Ouvre ton app d'authentification (Google Authenticator / Authy /
+            1Password / Bitwarden). Cherche l'entrée{" "}
+            <strong style={{ color: "var(--cream)" }}>BMD</strong> — elle
+            affiche un code à 6 chiffres qui change toutes les 30 secondes. Tape
+            ce code ci-dessous :
+          </p>
           <input
             type="text"
             inputMode="numeric"
@@ -262,6 +346,14 @@ export function TwoFactorBlock(): JSX.Element {
             onChange={(e) => setCode(e.target.value.replace(/\D/g, ""))}
             placeholder="123456"
             autoFocus
+            autoComplete="one-time-code"
+            enterKeyHint="done"
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && code.length === 6 && !busy) {
+                e.preventDefault();
+                void confirmEnable();
+              }
+            }}
             style={{
               width: "100%",
               padding: 14,
@@ -274,6 +366,7 @@ export function TwoFactorBlock(): JSX.Element {
               borderRadius: 10,
               color: "var(--cream)",
               marginBottom: 10,
+              boxSizing: "border-box",
             }}
           />
           <button
@@ -282,7 +375,7 @@ export function TwoFactorBlock(): JSX.Element {
             disabled={busy || code.length !== 6}
             className="btn btn-block"
           >
-            {busy ? "Vérification…" : "✓ Activer"}
+            {busy ? "Vérification…" : "✓ Activer la 2FA"}
           </button>
           <button
             type="button"
@@ -293,8 +386,20 @@ export function TwoFactorBlock(): JSX.Element {
             className="btn-ghost btn-block"
             style={{ marginTop: 6 }}
           >
-            ← Retour
+            ← Retour scan QR
           </button>
+          <p
+            style={{
+              fontSize: 11,
+              color: "var(--muted)",
+              marginTop: 12,
+              lineHeight: 1.5,
+              textAlign: "center",
+            }}
+          >
+            ⏱ Le code change toutes les 30s — pas grave si tu rates, attends
+            simplement le suivant.
+          </p>
         </div>
       )}
 

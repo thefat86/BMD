@@ -16,19 +16,118 @@
  *  - Bouton "Mon espace" si connecté, "Se connecter" sinon
  *  - Sélecteur de langue persisté + RTL pour l'arabe
  */
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { getToken } from "../lib/api-client";
+import { api, getToken } from "../lib/api-client";
 import {
+  AFRICAN_LOCALES,
+  ARABIC_LOCALES,
+  ASIAN_LOCALES,
   detectLocale,
+  EUROPEAN_LOCALES,
   isRtl,
   LOCALE_FLAGS,
   LOCALE_NAMES,
   LOCALES,
   Locale,
+  MAIN_LOCALES,
+  type MarketingStrings,
   setLocale,
   T,
 } from "../lib/i18n/marketing-translations";
+import { LivePricingSection } from "../lib/ui/live-pricing-section";
+import { FxTicker } from "../lib/ui/fx-ticker";
+import { ThemeToggle } from "../lib/ui/theme-toggle";
+import { Icon, type IconName } from "../lib/ui/icons";
+
+/**
+ * V173 — Map emoji utilisé dans les strings i18n marketing → IconName V45.
+ * On garde les emojis dans les 27 locales (source de vérité), mais on les
+ * convertit en SVG pro pour l'affichage. Fallback : "sparkles".
+ */
+function emojiToIcon(emoji: string | undefined): IconName {
+  if (!emoji) return "sparkles";
+  const map: Record<string, IconName> = {
+    "🪙": "coins",
+    "🏠": "home",
+    "✈️": "plane",
+    "💍": "gift", // mariage
+    "⚽": "trophy",
+    "⛪": "users",
+    "🎉": "party-popper",
+    "👥": "users",
+    "👋": "sparkles",
+    "💸": "credit-card",
+    "💰": "credit-card",
+    "💱": "repeat",
+    "↔": "repeat",
+    "↔️": "repeat",
+    "🔔": "bell",
+    "🛎": "bell",
+    "🛎️": "bell",
+    "📷": "camera",
+    "📸": "camera",
+    "🛡": "shield",
+    "🛡️": "shield",
+    "🌍": "globe",
+    "🌐": "globe",
+    "🌎": "globe",
+    "🇪🇺": "globe",
+    "💔": "users",
+    "🕊": "sparkles",
+    "🕊️": "sparkles",
+    "🎭": "palette",
+    "✉️": "mail",
+    "✉": "mail",
+    "🎨": "palette",
+    "⚖️": "scan-line",
+    "⚖": "scan-line",
+    "🤖": "sparkles",
+    "📜": "file-text",
+    "🚨": "alert-triangle",
+    "🏦": "credit-card",
+    "🔄": "rotate-cw",
+    "🔁": "repeat",
+    "🤝": "check",
+    "📅": "calendar",
+    "🎯": "trophy",
+    "📚": "file-text",
+    "🧮": "bar-chart-2",
+    "🔗": "share-2",
+    "💳": "credit-card",
+    "📈": "bar-chart-2",
+    "📊": "bar-chart-2",
+    "🧾": "receipt",
+    "💬": "phone",
+    "😊": "sparkles",
+    "🌙": "lock",
+    "🧠": "sparkles",
+    "🎙": "mic",
+    "🎙️": "mic",
+    "🔮": "sparkles",
+    "🔑": "key-round",
+    "🚫": "x",
+    "📱": "phone",
+    "📲": "phone",
+    "♿": "users",
+    "🌗": "palette",
+    "♾️": "repeat",
+    "🎁": "gift",
+    "🔓": "lock",
+    "🔒": "lock",
+    "✨": "sparkles",
+    "🪄": "sparkles",
+    "📞": "phone",
+    "📄": "file-text",
+    "💵": "credit-card",
+    "🏅": "trophy",
+    "🌟": "sparkles",
+    "🤔": "search",
+    "🛒": "shopping-cart",
+    "🚗": "car",
+  };
+  return map[emoji] ?? "sparkles";
+}
 
 export default function MarketingPage() {
   const [locale, setLoc] = useState<Locale>("fr");
@@ -42,10 +141,72 @@ export default function MarketingPage() {
    * → on affiche un écran d'accueil "vraie app" (logo + CTA), pas le site vitrine.
    */
   const [isMobile, setIsMobile] = useState(false);
+  /**
+   * V23 — email de contact configurable depuis l'admin (PATCH /admin/site-config).
+   * Si la requête échoue, on garde le default (hello@backmesdo.com) qui est
+   * déjà dans toutes les chaînes traduites — donc aucun affichage cassé.
+   */
+  const [supportEmail, setSupportEmail] = useState("hello@backmesdo.com");
 
   useEffect(() => {
-    setIsLogged(!!getToken());
+    const hasToken = !!getToken();
+    setIsLogged(hasToken);
     setLoc(detectLocale());
+
+    // === AUTO-REDIRECT mobile / PWA standalone / Capacitor WebView ===
+    // Au lancement de l'app native (Capacitor) ou PWA installée, l'utilisateur
+    // doit arriver DIRECTEMENT sur sa zone de travail (dashboard si connecté,
+    // login si pas connecté) — pas sur la vitrine marketing qui n'a aucune
+    // raison d'être présente dans l'app.
+    if (typeof window !== "undefined") {
+      const narrow = window.innerWidth < 768;
+      const standalone =
+        window.matchMedia?.("(display-mode: standalone)").matches ||
+        (window.navigator as any).standalone === true;
+      // Détection Capacitor : présence de window.bmdNative (injecté par le
+      // bridge mobile) ou capacitor:// scheme dans l'URL.
+      const isCapacitor =
+        typeof (window as any).bmdNative !== "undefined" ||
+        window.location.protocol === "capacitor:";
+
+      if (narrow || standalone || isCapacitor) {
+        // Mobile / app native → on bypass la vitrine.
+        // ⚠ Pas de redirect si on a un `?ref=` ou un autre query param :
+        // l'utilisateur partage souvent un lien marketing depuis WhatsApp.
+        const params = new URLSearchParams(window.location.search);
+        const hasShareParam =
+          params.has("ref") || params.has("invite") || params.has("share");
+        if (!hasShareParam) {
+          const target = hasToken ? "/dashboard" : "/login";
+          window.location.replace(target);
+          return; // Stop l'init du marketing
+        }
+      }
+    }
+
+    // Récupère la config publique du site (cache 5 min côté API et client).
+    // Defensive coding : on vérifie que la fonction existe avant d'appeler
+    // pour ne PAS faire planter la vitrine si un cache de build est encore
+    // sur une version pré-V23 où getSiteConfig n'existait pas. Le `try` +
+    // typeof + .catch couvre les 3 modes d'échec :
+    //  1. Fonction undefined → fallback hardcodé silencieux
+    //  2. Promise rejected (réseau down) → fallback hardcodé silencieux
+    //  3. Throw synchrone → swallow par le try
+    try {
+      const fn =
+        typeof api.getSiteConfig === "function" ? api.getSiteConfig : null;
+      if (fn) {
+        fn()
+          .then((cfg) => {
+            if (cfg?.supportEmail) setSupportEmail(cfg.supportEmail);
+          })
+          .catch(() => {
+            /* silencieux — on garde le default */
+          });
+      }
+    } catch {
+      /* hardcoded default — la vitrine reste fonctionnelle */
+    }
 
     function checkMobile() {
       const narrow = window.innerWidth < 768;
@@ -105,22 +266,11 @@ export default function MarketingPage() {
   return (
     <>
       <style jsx global>{`
-        /* Palette extraite directement des maquettes BMD_portail_web.html / BMD_maquettes.html */
+        /* Palette héritée de :root (globals.css) pour suivre data-theme.
+           Les vars --night, --cream, --saffron etc viennent du theme global :
+           en mode light, --night devient un cream très clair, --cream devient
+           un indigo profond, etc. Aucune redéfinition locale ici. */
         .bmd-mkt {
-          --night: #0e0b14;
-          --night-2: #16111e;
-          --indigo: #1e1830;
-          --indigo-2: #2a2244;
-          --indigo-3: #3a2a52;
-          --saffron: #e8a33d;
-          --gold: #c9a24a;
-          --terracotta: #b5462e;
-          --emerald: #3f7d5c;
-          --cream: #f4e4c1;
-          --cream-soft: #e8d5b7;
-          --muted: #8a7b6b;
-          --line: rgba(232, 163, 61, 0.18);
-          --line-soft: rgba(244, 228, 193, 0.08);
           background: var(--night);
           color: var(--cream);
           font-family:
@@ -147,6 +297,20 @@ export default function MarketingPage() {
               transparent 60%
             );
         }
+        /* Halos plus chauds en mode clair (orange/terracotta saturés) */
+        html[data-theme="light"] .bmd-mkt {
+          background-image:
+            radial-gradient(
+              900px 600px at 10% -10%,
+              rgba(196, 125, 42, 0.08),
+              transparent 60%
+            ),
+            radial-gradient(
+              900px 600px at 110% 10%,
+              rgba(160, 59, 37, 0.06),
+              transparent 60%
+            );
+        }
         .bmd-mkt h1,
         .bmd-mkt h2,
         .bmd-mkt h3 {
@@ -164,8 +328,8 @@ export default function MarketingPage() {
           display: flex;
           align-items: center;
           justify-content: center;
-          background: #0e0b14;
-          color: #f4e4c1;
+          background: var(--night, #0e0b14);
+          color: var(--cream, #f4e4c1);
           font-family:
             "Cormorant Garamond",
             Georgia,
@@ -174,7 +338,7 @@ export default function MarketingPage() {
           font-weight: 700;
         }
         .bmd-marketing-loader span {
-          color: #e8a33d;
+          color: var(--saffron, #e8a33d);
         }
         /* Browser frame, like in mockups */
         .bmd-mkt .browser {
@@ -251,19 +415,33 @@ export default function MarketingPage() {
       `}</style>
 
       <div className="bmd-mkt" dir={rtl ? "rtl" : "ltr"}>
-        {/* ======== NAV ======== */}
+        {/* ======== NAV STICKY ======== */}
+        {/* Reste collée en haut au scroll, fond avec backdrop-blur pour
+            laisser deviner le contenu derrière (style Stripe/Linear). */}
         <nav
           style={{
-            padding: "20px 24px",
-            maxWidth: 1380,
-            margin: "0 auto",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "space-between",
-            gap: 12,
-            flexWrap: "wrap",
+            position: "sticky",
+            top: 0,
+            zIndex: 50,
+            background:
+              "linear-gradient(180deg, rgba(14,11,20,0.92), rgba(14,11,20,0.78))",
+            backdropFilter: "blur(14px)",
+            WebkitBackdropFilter: "blur(14px)",
+            borderBottom: "1px solid rgba(244,228,193,0.06)",
           }}
         >
+          <div
+            style={{
+              padding: "14px 24px",
+              maxWidth: 1380,
+              margin: "0 auto",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: 12,
+              flexWrap: "wrap",
+            }}
+          >
           <Link
             href="/"
             style={{
@@ -285,12 +463,12 @@ export default function MarketingPage() {
                   lineHeight: 1,
                 }}
               >
-                BMD<span style={{ color: "#E8A33D" }}>·</span>
+                BMD<span style={{ color: "var(--saffron)" }}>·</span>
               </div>
               <div
                 style={{
                   fontSize: 9,
-                  color: "#C9A24A",
+                  color: "var(--gold)",
                   letterSpacing: 3,
                   textTransform: "uppercase",
                   fontWeight: 700,
@@ -315,17 +493,19 @@ export default function MarketingPage() {
               justifyContent: "center",
             }}
           >
+            {t.story && (
+              <a
+                href="#story"
+                style={{ color: "var(--cream-soft)", textDecoration: "none" }}
+              >
+                {t.nav.story ?? (locale === "fr" ? "Notre histoire" : "Our story")}
+              </a>
+            )}
             <a
               href="#features"
               style={{ color: "var(--cream-soft)", textDecoration: "none" }}
             >
               {t.nav.features}
-            </a>
-            <a
-              href="#communities"
-              style={{ color: "var(--cream-soft)", textDecoration: "none" }}
-            >
-              {locale === "fr" ? "Communautés" : "Communities"}
             </a>
             <a
               href="#how-it-works"
@@ -339,6 +519,14 @@ export default function MarketingPage() {
             >
               {t.nav.pricing}
             </a>
+            {t.referral && (
+              <a
+                href="#referral"
+                style={{ color: "var(--cream-soft)", textDecoration: "none" }}
+              >
+                {locale === "fr" ? "Parrainage" : "Refer"}
+              </a>
+            )}
             <a
               href="#faq"
               style={{ color: "var(--cream-soft)", textDecoration: "none" }}
@@ -347,19 +535,33 @@ export default function MarketingPage() {
             </a>
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <ThemeToggle
+              variant="ghost"
+              labelDark={
+                locale === "fr"
+                  ? "Passer en mode clair"
+                  : "Switch to light mode"
+              }
+              labelLight={
+                locale === "fr"
+                  ? "Passer en mode sombre"
+                  : "Switch to dark mode"
+              }
+            />
             <LangPicker
               locale={locale}
               rtl={rtl}
               show={showLangMenu}
               setShow={setShowLangMenu}
               onChange={changeLocale}
+              t={t}
             />
             {isLogged ? (
               <Link
                 href="/dashboard"
                 style={{
                   background: "linear-gradient(135deg, #E8A33D, #B5462E)",
-                  color: "#16111E",
+                  color: "var(--night-2)",
                   padding: "10px 18px",
                   borderRadius: 10,
                   textDecoration: "none",
@@ -383,7 +585,7 @@ export default function MarketingPage() {
                   href="/login"
                   style={{
                     background: "transparent",
-                    color: "#F4E4C1",
+                    color: "var(--cream)",
                     padding: "10px 14px",
                     borderRadius: 10,
                     textDecoration: "none",
@@ -400,7 +602,7 @@ export default function MarketingPage() {
                   href="/login"
                   style={{
                     background: "linear-gradient(135deg, #E8A33D, #B5462E)",
-                    color: "#16111E",
+                    color: "var(--night-2)",
                     padding: "10px 18px",
                     borderRadius: 10,
                     textDecoration: "none",
@@ -417,6 +619,7 @@ export default function MarketingPage() {
                 </Link>
               </>
             )}
+          </div>
           </div>
         </nav>
 
@@ -449,7 +652,7 @@ export default function MarketingPage() {
                 style={{
                   fontSize: 11,
                   letterSpacing: 4,
-                  color: "#E8A33D",
+                  color: "var(--saffron)",
                   textTransform: "uppercase",
                   fontWeight: 700,
                   marginBottom: 18,
@@ -462,7 +665,7 @@ export default function MarketingPage() {
                   fontSize: "clamp(36px, 5.5vw, 56px)",
                   lineHeight: 1.05,
                   marginBottom: 18,
-                  color: "#F4E4C1",
+                  color: "var(--cream)",
                 }}
                 dangerouslySetInnerHTML={{
                   __html: emphasizeLast(t.hero.headline),
@@ -472,7 +675,7 @@ export default function MarketingPage() {
                 style={{
                   fontSize: 17,
                   lineHeight: 1.7,
-                  color: "#E8D5B7",
+                  color: "var(--cream-soft)",
                   maxWidth: 540,
                   marginBottom: 28,
                 }}
@@ -491,7 +694,7 @@ export default function MarketingPage() {
                   href="/login"
                   style={{
                     background: "linear-gradient(135deg, #E8A33D, #B5462E)",
-                    color: "#16111E",
+                    color: "var(--night-2)",
                     padding: "16px 28px",
                     borderRadius: 12,
                     textDecoration: "none",
@@ -510,7 +713,7 @@ export default function MarketingPage() {
                   href="#features"
                   style={{
                     background: "rgba(255,255,255,0.04)",
-                    color: "#F4E4C1",
+                    color: "var(--cream)",
                     padding: "16px 28px",
                     borderRadius: 12,
                     textDecoration: "none",
@@ -549,7 +752,7 @@ export default function MarketingPage() {
                       background: "rgba(255,255,255,0.04)",
                       border: "1px solid rgba(244,228,193,0.08)",
                       fontSize: 11,
-                      color: "#E8D5B7",
+                      color: "var(--cream-soft)",
                       display: "flex",
                       alignItems: "center",
                       gap: 8,
@@ -559,7 +762,7 @@ export default function MarketingPage() {
                     <span>
                       <strong
                         style={{
-                          color: "#F4E4C1",
+                          color: "var(--cream)",
                           fontFamily: "'Cormorant Garamond', serif",
                           fontSize: 13,
                           display: "block",
@@ -585,7 +788,7 @@ export default function MarketingPage() {
                         fontSize: 11,
                         fontWeight: 600,
                         background: "rgba(232,163,61,0.08)",
-                        color: "#E8A33D",
+                        color: "var(--saffron)",
                         border: "1px solid rgba(232,163,61,0.18)",
                       }}
                     >
@@ -601,91 +804,23 @@ export default function MarketingPage() {
           </div>
         </section>
 
-        {/* ======== TRUST BAR (fidèle BMD_site_web.html) ======== */}
-        <div
-          id="communities"
-          style={{
-            padding: "24px 24px",
-            borderTop: "1px solid rgba(244,228,193,0.08)",
-            borderBottom: "1px solid rgba(244,228,193,0.08)",
-            background: "rgba(22,17,30,0.5)",
-            margin: "20px 0",
-          }}
-        >
-          <div
-            style={{
-              maxWidth: 1300,
-              margin: "0 auto",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "space-between",
-              flexWrap: "wrap",
-              gap: 16,
-            }}
-          >
-            <div
+        {/* ======== NOTRE HISTOIRE — 1er onglet, storytelling ======== */}
+        {t.story && (
+          <>
+            <SectionDivider kicker={t.story.kicker} title={t.story.title} />
+            <section
+              id="story"
               style={{
-                fontSize: 11,
-                letterSpacing: 2,
-                textTransform: "uppercase",
-                color: "#C9A24A",
-                fontWeight: 600,
+                maxWidth: 1380,
+                margin: "0 auto",
+                padding: "0 24px 40px",
+                scrollMarginTop: 80,
               }}
             >
-              ↘ Fait pour les communautés qui se font confiance
-            </div>
-            <div
-              style={{
-                display: "flex",
-                gap: 24,
-                flexWrap: "wrap",
-                alignItems: "center",
-              }}
-            >
-              {[
-                "🪙 Tontines",
-                "🏠 Colocs",
-                "✈️ Voyages",
-                "💍 Mariages",
-                "⚽ Clubs",
-                "⛪ Associations",
-              ].map((l) => (
-                <span
-                  key={l}
-                  style={{
-                    fontSize: 13,
-                    color: "#E8D5B7",
-                    fontWeight: 600,
-                    opacity: 0.85,
-                  }}
-                >
-                  {l}
-                </span>
-              ))}
-            </div>
-          </div>
-        </div>
-
-        {/* ======== MOCKUP : LOGIN ======== */}
-        <SectionDivider
-          kicker={locale === "fr" ? "Écran 1" : "Screen 1"}
-          title={
-            locale === "fr"
-              ? "🔓 Connexion · simplicité absolue"
-              : "🔓 Login · radically simple"
-          }
-        />
-        <div
-          style={{
-            maxWidth: 1380,
-            margin: "0 auto",
-            padding: "0 24px 30px",
-          }}
-        >
-          <BrowserFrame url="app.bmd.app/login">
-            <LoginMock locale={locale} t={t} rtl={rtl} />
-          </BrowserFrame>
-        </div>
+              <StorySection data={t.story} />
+            </section>
+          </>
+        )}
 
         {/* ======== FEATURES ======== */}
         <SectionDivider
@@ -697,59 +832,90 @@ export default function MarketingPage() {
           style={{
             maxWidth: 1380,
             margin: "0 auto",
-            padding: "0 24px 60px",
+            padding: "0 24px 40px",
+            scrollMarginTop: 80,
           }}
         >
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))",
-              gap: 18,
-            }}
-          >
-            {t.features.items.map((f, i) => (
-              <div
-                key={i}
-                style={{
-                  background:
-                    "linear-gradient(180deg, rgba(42,34,68,0.4), rgba(22,17,30,0.6))",
-                  border: "1px solid rgba(244,228,193,0.08)",
-                  borderRadius: 14,
-                  padding: 22,
-                }}
-              >
+          {t.featuresLong ? (
+            <FeaturesLong data={t.featuresLong} />
+          ) : (
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))",
+                gap: 18,
+              }}
+            >
+              {t.features.items.map((f, i) => (
                 <div
+                  key={i}
                   style={{
-                    width: 48,
-                    height: 48,
-                    borderRadius: 12,
                     background:
-                      "linear-gradient(135deg, rgba(232,163,61,0.15), rgba(181,70,46,0.1))",
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    fontSize: 24,
-                    marginBottom: 12,
+                      "linear-gradient(180deg, #FFFFFF 0%, #FBF6EC 100%)",
+                    border: "1px solid rgba(197,138,46,0.22)",
+                    borderRadius: 14,
+                    padding: 22,
+                    boxShadow: "0 6px 20px rgba(43,31,21,0.05)",
                   }}
                 >
-                  {f.icon}
+                  <div
+                    style={{
+                      width: 48,
+                      height: 48,
+                      borderRadius: 12,
+                      background: "rgba(197,138,46,0.12)",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      color: "#C58A2E",
+                      marginBottom: 12,
+                    }}
+                  >
+                    <Icon
+                      name={emojiToIcon(f.icon)}
+                      size={22}
+                      color="#C58A2E"
+                      strokeWidth={1.8}
+                    />
+                  </div>
+                  <h3
+                    style={{
+                      fontSize: 18,
+                      color: "#C58A2E",
+                      marginBottom: 8,
+                    }}
+                  >
+                    {f.title}
+                  </h3>
+                  <p style={{ fontSize: 13, color: "#6B5A47", lineHeight: 1.6 }}>
+                    {f.body}
+                  </p>
                 </div>
-                <h3
-                  style={{
-                    fontSize: 18,
-                    color: "#E8A33D",
-                    marginBottom: 8,
-                  }}
-                >
-                  {f.title}
-                </h3>
-                <p style={{ fontSize: 13, color: "#E8D5B7", lineHeight: 1.6 }}>
-                  {f.body}
-                </p>
-              </div>
-            ))}
-          </div>
+              ))}
+            </div>
+          )}
         </section>
+
+        {/* ======== REFERRAL / PROGRAMME COMMERCIAL ======== */}
+        {t.referral && (
+          <>
+            <SectionDivider
+              kicker={t.referral.kicker}
+              title={t.referral.title}
+            />
+            <section
+              id="referral"
+              style={{
+                maxWidth: 1180,
+                margin: "0 auto",
+                padding: "0 24px 40px",
+                scrollMarginTop: 80,
+              }}
+            >
+              <ReferralSection data={t.referral} />
+            </section>
+          </>
+        )}
 
         {/* ======== HOW IT WORKS ======== */}
         <SectionDivider
@@ -761,8 +927,9 @@ export default function MarketingPage() {
           style={{
             maxWidth: 1100,
             margin: "0 auto",
-            padding: "0 24px 60px",
+            padding: "0 24px 40px",
             textAlign: "center",
+            scrollMarginTop: 80,
           }}
         >
           <div
@@ -780,8 +947,8 @@ export default function MarketingPage() {
                     height: 64,
                     borderRadius: "50%",
                     background:
-                      "linear-gradient(135deg, #E8A33D, #B5462E)",
-                    color: "#16111E",
+                      "linear-gradient(135deg, #C58A2E, #B5462E)",
+                    color: "#FFFFFF",
                     fontWeight: 700,
                     fontSize: 28,
                     fontFamily: "'Cormorant Garamond', serif",
@@ -789,14 +956,15 @@ export default function MarketingPage() {
                     alignItems: "center",
                     justifyContent: "center",
                     margin: "0 auto 16px",
+                    boxShadow: "0 10px 28px rgba(197,138,46,0.30)",
                   }}
                 >
                   {s.num}
                 </div>
-                <h3 style={{ fontSize: 20, color: "#F4E4C1", marginBottom: 8 }}>
+                <h3 style={{ fontSize: 20, color: "#2B1F15", marginBottom: 8 }}>
                   {s.title}
                 </h3>
-                <p style={{ fontSize: 14, color: "#E8D5B7", lineHeight: 1.6 }}>
+                <p style={{ fontSize: 14, color: "#6B5A47", lineHeight: 1.6 }}>
                   {s.body}
                 </p>
               </div>
@@ -812,34 +980,16 @@ export default function MarketingPage() {
         <section
           id="pricing"
           style={{
-            maxWidth: 980,
+            maxWidth: 1380,
             margin: "0 auto",
-            padding: "0 24px 60px",
+            padding: "0 24px 40px",
+            scrollMarginTop: 80,
           }}
         >
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))",
-              gap: 18,
-            }}
-          >
-            <PricingCard
-              highlight
-              name={t.pricing.free.name}
-              price={t.pricing.free.price}
-              features={t.pricing.free.features}
-              cta={t.cta.button}
-              ctaHref="/login"
-            />
-            <PricingCard
-              name={t.pricing.pro.name}
-              price={t.pricing.pro.price}
-              features={t.pricing.pro.features}
-              cta={t.pricing.pro.cta}
-              disabled
-            />
-          </div>
+          {/* Tarifs LIVE depuis /plans (configurés en admin).
+              Aucune duplication avec marketing-translations.ts pour rester
+              sync à 100% avec ce que voit l'utilisateur dans l'app. */}
+          <LivePricingSection locale={locale} />
         </section>
 
         {/* ======== FAQ ======== */}
@@ -850,45 +1000,17 @@ export default function MarketingPage() {
         <section
           id="faq"
           style={{
-            maxWidth: 800,
+            maxWidth: 1380,
             margin: "0 auto",
             padding: "0 24px 60px",
+            scrollMarginTop: 80,
           }}
         >
-          {t.faq.items.map((q, i) => (
-            <details
-              key={i}
-              style={{
-                background:
-                  "linear-gradient(180deg, rgba(42,34,68,0.4), rgba(22,17,30,0.6))",
-                border: "1px solid rgba(244,228,193,0.08)",
-                borderRadius: 12,
-                padding: 18,
-                marginBottom: 10,
-              }}
-            >
-              <summary
-                style={{
-                  cursor: "pointer",
-                  fontWeight: 600,
-                  fontSize: 15,
-                  color: "#F4E4C1",
-                }}
-              >
-                {q.q}
-              </summary>
-              <p
-                style={{
-                  marginTop: 10,
-                  color: "#E8D5B7",
-                  fontSize: 13,
-                  lineHeight: 1.7,
-                }}
-              >
-                {q.a}
-              </p>
-            </details>
-          ))}
+          {t.faqLong ? (
+            <FaqLong data={t.faqLong} supportEmail={supportEmail} />
+          ) : (
+            <FaqShort items={t.faq.items} />
+          )}
         </section>
 
         {/* ======== CTA ======== */}
@@ -904,35 +1026,36 @@ export default function MarketingPage() {
             style={{
               padding: "48px 28px",
               borderRadius: 24,
-              border: "1px solid rgba(232,163,61,0.3)",
+              border: "1px solid rgba(197,138,46,0.30)",
               background:
-                "radial-gradient(600px 300px at 50% 0%, rgba(232,163,61,0.12), transparent), linear-gradient(180deg, rgba(42,34,68,0.6), rgba(22,17,30,0.9))",
+                "radial-gradient(600px 300px at 50% 0%, rgba(197,138,46,0.18), transparent), linear-gradient(180deg, #FFFFFF 0%, #FBF6EC 100%)",
+              boxShadow: "0 12px 40px rgba(43,31,21,0.08)",
             }}
           >
             <h2
               style={{
                 fontSize: "clamp(28px, 4vw, 40px)",
-                color: "#E8A33D",
+                color: "#C58A2E",
                 marginBottom: 12,
               }}
             >
               {t.cta.headline}
             </h2>
-            <p style={{ color: "#E8D5B7", marginBottom: 28, fontSize: 16 }}>
+            <p style={{ color: "#6B5A47", marginBottom: 28, fontSize: 16 }}>
               {t.cta.body}
             </p>
             <Link
               href="/login"
               style={{
                 display: "inline-block",
-                background: "linear-gradient(135deg, #E8A33D, #B5462E)",
-                color: "#16111E",
+                background: "linear-gradient(135deg, #C58A2E, #B5462E)",
+                color: "#FFFFFF",
                 padding: "16px 40px",
                 borderRadius: 12,
                 textDecoration: "none",
                 fontSize: 16,
                 fontWeight: 700,
-                boxShadow: "0 12px 32px rgba(232,163,61,0.3)",
+                boxShadow: "0 12px 32px rgba(197,138,46,0.35)",
                 letterSpacing: 0.3,
               }}
             >
@@ -950,7 +1073,7 @@ export default function MarketingPage() {
             borderTop: "1px solid rgba(244,228,193,0.08)",
             textAlign: "center",
             fontSize: 12,
-            color: "#8A7B6B",
+            color: "var(--muted)",
           }}
         >
           <BmdLogo size={36} />
@@ -959,14 +1082,14 @@ export default function MarketingPage() {
               fontFamily: "'Cormorant Garamond', serif",
               fontSize: 22,
               fontWeight: 700,
-              color: "#F4E4C1",
+              color: "var(--cream)",
               marginTop: 8,
               marginBottom: 6,
             }}
           >
-            BMD<span style={{ color: "#E8A33D" }}>·</span>
+            BMD<span style={{ color: "var(--saffron)" }}>·</span>
           </div>
-          <div style={{ marginBottom: 14, fontStyle: "italic", color: "#C9A24A" }}>
+          <div style={{ marginBottom: 14, fontStyle: "italic", color: "var(--gold)" }}>
             {t.footer.tagline}
           </div>
           <div
@@ -980,7 +1103,7 @@ export default function MarketingPage() {
           >
             <Link
               href="/legal/privacy"
-              style={{ color: "#E8D5B7", textDecoration: "none" }}
+              style={{ color: "var(--cream-soft)", textDecoration: "none" }}
             >
               {t.footer.privacy}
             </Link>
@@ -989,6 +1112,17 @@ export default function MarketingPage() {
             © {new Date().getFullYear()} BMD · {t.footer.rights}
           </div>
         </footer>
+
+        {/* Spacer pour que le contenu juste avant le ticker ne soit pas
+            masqué par la barre fixée en bas. Hauteur = ~ticker height. */}
+        <div style={{ height: 48 }} aria-hidden />
+
+        {/* === FX TICKER FIXE EN BAS DE PAGE ===
+            Bandeau Bloomberg-style figé en permanence en bas du viewport :
+            même quand on scrolle, la ligne reste à sa place. Seul le
+            contenu (17 paires de devises) défile horizontalement en boucle
+            via animation CSS. Cliquable → /dashboard/plans pour upgrade. */}
+        <FxTicker />
       </div>
 
     </>
@@ -996,6 +1130,1088 @@ export default function MarketingPage() {
 }
 
 /* ============ COMPONENTS ============ */
+
+/**
+ * <FeaturesLong> · présentation détaillée et catégorisée des fonctionnalités.
+ *
+ * Layout : 1 carte par catégorie thématique (👥 Groupes, 💸 Dépenses, 🪙
+ * Tontines, ↔ Soldes, 💱 Multi-devises, 🔔 Communication, 🧠 Intelligence,
+ * 🛡 Sécurité, 📱 Plateformes). Chaque carte contient un pitch + une liste
+ * d'items (icône + titre + body) en 2 colonnes responsive.
+ *
+ * Onglets sticky en haut pour navigation rapide entre catégories.
+ */
+function FeaturesLong({
+  data,
+}: {
+  data: NonNullable<MarketingStrings["featuresLong"]>;
+}): JSX.Element {
+  // V17 : layout sidebar gauche (catégories) + frame droite (contenu actif).
+  // Plus de scroll vertical : on switche entre catégories sans scroller.
+  // Sur mobile (≤ 768px), la sidebar bascule au-dessus en barre horizontale
+  // scrollable (overflow-x), et le contenu suit en-dessous.
+  const [active, setActive] = useState<string>(data.categories[0]?.key ?? "");
+  const activeCat =
+    data.categories.find((c) => c.key === active) ?? data.categories[0];
+
+  return (
+    <div>
+      <p
+        style={{
+          fontSize: 14,
+          color: "#6B5A47",
+          lineHeight: 1.65,
+          maxWidth: 900,
+          marginBottom: 18,
+        }}
+      >
+        {data.intro}
+      </p>
+
+      {/* styled-jsx ne tolère pas les <style jsx> imbriqués : on regroupe
+          TOUTES les rules de la section ici, au même niveau de l'arbre. */}
+      <style jsx>{`
+        .bmd-sidebar-layout {
+          display: grid;
+          grid-template-columns: 240px 1fr;
+          gap: 22px;
+          align-items: start;
+        }
+        @media (max-width: 768px) {
+          .bmd-sidebar-layout {
+            grid-template-columns: 1fr;
+            gap: 14px;
+          }
+          .bmd-sidebar-nav {
+            flex-direction: row !important;
+            overflow-x: auto;
+            position: static !important;
+            top: auto !important;
+            gap: 6px !important;
+            padding: 6px !important;
+            scrollbar-width: thin;
+          }
+          .bmd-sidebar-nav button {
+            flex-shrink: 0;
+          }
+        }
+      `}</style>
+
+      <div className="bmd-sidebar-layout">
+        {/* Sidebar gauche / barre horizontale mobile : liste des catégories */}
+        <nav
+          role="tablist"
+          aria-label="Feature categories"
+          className="bmd-sidebar-nav"
+          style={{
+            display: "flex",
+            flexDirection: "column",
+            gap: 4,
+            background:
+              "linear-gradient(180deg, #FFFFFF 0%, #FBF6EC 100%)",
+            border: "1px solid rgba(197,138,46,0.22)",
+            borderRadius: 14,
+            padding: 8,
+            position: "sticky",
+            top: 80,
+            boxShadow: "0 6px 24px rgba(43,31,21,0.06)",
+          }}
+        >
+          {data.categories.map((cat) => {
+            const isActive = active === cat.key;
+            return (
+              <button
+                key={cat.key}
+                type="button"
+                role="tab"
+                aria-selected={isActive}
+                onClick={() => setActive(cat.key)}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 10,
+                  padding: "10px 12px",
+                  borderRadius: 10,
+                  fontSize: 13,
+                  fontWeight: 600,
+                  fontFamily: "inherit",
+                  cursor: "pointer",
+                  textAlign: "left",
+                  background: isActive
+                    ? "linear-gradient(135deg, #C58A2E, #B5462E)"
+                    : "transparent",
+                  color: isActive ? "#FFFFFF" : "#2B1F15",
+                  border: isActive
+                    ? "1px solid rgba(197,138,46,0.40)"
+                    : "1px solid transparent",
+                  transition: "all 0.15s ease",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                <span
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    width: 22,
+                    height: 22,
+                    color: isActive ? "#FFFFFF" : "#C58A2E",
+                  }}
+                  aria-hidden="true"
+                >
+                  <Icon
+                    name={emojiToIcon(cat.icon)}
+                    size={16}
+                    color={isActive ? "#FFFFFF" : "#C58A2E"}
+                    strokeWidth={1.8}
+                  />
+                </span>
+                <span>{cat.label}</span>
+              </button>
+            );
+          })}
+        </nav>
+
+        {/* Frame droite : catégorie active uniquement */}
+        <div
+          role="tabpanel"
+          style={{
+            background:
+              "linear-gradient(180deg, #FFFFFF 0%, #FBF6EC 100%)",
+            border: "1px solid rgba(197,138,46,0.22)",
+            borderRadius: 16,
+            padding: "18px 20px",
+            minHeight: 320,
+            boxShadow: "0 6px 24px rgba(43,31,21,0.06)",
+          }}
+        >
+          {activeCat && (
+            <>
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 12,
+                  marginBottom: 4,
+                }}
+              >
+                <div
+                  style={{
+                    width: 44,
+                    height: 44,
+                    borderRadius: 12,
+                    background:
+                      "linear-gradient(135deg, rgba(197,138,46,0.22), rgba(159,70,40,0.14))",
+                    border: "1px solid rgba(197,138,46,0.30)",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    color: "#C58A2E",
+                    flexShrink: 0,
+                  }}
+                  aria-hidden="true"
+                >
+                  <Icon
+                    name={emojiToIcon(activeCat.icon)}
+                    size={22}
+                    color="#C58A2E"
+                    strokeWidth={1.8}
+                  />
+                </div>
+                <h3
+                  style={{
+                    fontFamily: "'Cormorant Garamond', serif",
+                    fontSize: "clamp(20px, 2.4vw, 24px)",
+                    fontWeight: 600,
+                    color: "#2B1F15",
+                    margin: 0,
+                    lineHeight: 1.2,
+                  }}
+                >
+                  {activeCat.label}
+                </h3>
+              </div>
+              <p
+                style={{
+                  fontSize: 13,
+                  color: "#6B5A47",
+                  lineHeight: 1.6,
+                  marginTop: 8,
+                  marginBottom: 16,
+                }}
+              >
+                {activeCat.pitch}
+              </p>
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))",
+                  gap: 10,
+                }}
+              >
+                {activeCat.items.map((it, i) => (
+                  <div
+                    key={i}
+                    style={{
+                      background: "#FFFFFF",
+                      border: "1px solid rgba(197,138,46,0.18)",
+                      borderRadius: 12,
+                      padding: 12,
+                    }}
+                  >
+                    <div
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 8,
+                        marginBottom: 4,
+                      }}
+                    >
+                      {it.icon && (
+                        <span
+                          aria-hidden="true"
+                          style={{
+                            display: "inline-flex",
+                            width: 36,
+                            height: 36,
+                            borderRadius: 12,
+                            background: "rgba(197,138,46,0.12)",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            color: "#C58A2E",
+                            flexShrink: 0,
+                          }}
+                        >
+                          <Icon
+                            name={emojiToIcon(it.icon)}
+                            size={20}
+                            color="#C58A2E"
+                            strokeWidth={1.8}
+                          />
+                        </span>
+                      )}
+                      <h4
+                        style={{
+                          fontSize: 13,
+                          color: "#2B1F15",
+                          fontWeight: 700,
+                          fontFamily: "inherit",
+                          margin: 0,
+                          lineHeight: 1.3,
+                        }}
+                      >
+                        {it.title}
+                      </h4>
+                    </div>
+                    <p
+                      style={{
+                        fontSize: 12.5,
+                        color: "#6B5A47",
+                        lineHeight: 1.55,
+                        margin: 0,
+                      }}
+                    >
+                      {it.body}
+                    </p>
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * <ReferralSection> · présentation du programme commercial / parrainage
+ * sales (référencement simple à 1 niveau, 20% à vie).
+ */
+function ReferralSection({
+  data,
+}: {
+  data: NonNullable<MarketingStrings["referral"]>;
+}): JSX.Element {
+  // V17 : layout 2 colonnes compactes — Avantages (gauche) + Étapes (droite),
+  // intro + manifesto + CTA en un seul écran sans scroll.
+  return (
+    <div
+      style={{
+        padding: "20px 22px",
+        borderRadius: 18,
+        background:
+          "radial-gradient(700px 400px at 80% 0%, rgba(197,138,46,0.18), transparent 60%), linear-gradient(180deg, #FFFFFF 0%, #FBF6EC 100%)",
+        border: "1px solid rgba(197,138,46,0.22)",
+        boxShadow: "0 10px 30px rgba(43,31,21,0.06)",
+      }}
+    >
+      <p
+        style={{
+          fontSize: 14,
+          color: "#6B5A47",
+          lineHeight: 1.6,
+          marginBottom: 16,
+        }}
+      >
+        {data.intro}
+      </p>
+
+      <div className="bmd-ref-grid">
+        <style jsx>{`
+          .bmd-ref-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 16px;
+            margin-bottom: 14px;
+          }
+          @media (max-width: 768px) {
+            .bmd-ref-grid {
+              grid-template-columns: 1fr;
+            }
+          }
+        `}</style>
+
+        {/* Colonne gauche : 4 bénéfices empilés compact */}
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          {data.benefits.map((b, i) => (
+            <div
+              key={i}
+              style={{
+                background: "rgba(197,138,46,0.08)",
+                border: "1px solid rgba(197,138,46,0.18)",
+                borderRadius: 10,
+                padding: "10px 12px",
+                display: "flex",
+                alignItems: "flex-start",
+                gap: 10,
+              }}
+            >
+              <div
+                style={{
+                  width: 32,
+                  height: 32,
+                  borderRadius: 10,
+                  background: "rgba(197,138,46,0.14)",
+                  color: "#C58A2E",
+                  display: "inline-flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  flexShrink: 0,
+                  marginTop: 2,
+                }}
+                aria-hidden="true"
+              >
+                <Icon
+                  name={emojiToIcon(b.icon)}
+                  size={18}
+                  color="#C58A2E"
+                  strokeWidth={1.8}
+                />
+              </div>
+              <div>
+                <div
+                  style={{
+                    fontSize: 13,
+                    fontWeight: 700,
+                    color: "#2B1F15",
+                    marginBottom: 2,
+                  }}
+                >
+                  {b.title}
+                </div>
+                <p
+                  style={{
+                    fontSize: 12,
+                    color: "#6B5A47",
+                    lineHeight: 1.5,
+                    margin: 0,
+                  }}
+                >
+                  {b.body}
+                </p>
+              </div>
+            </div>
+          ))}
+        </div>
+
+        {/* Colonne droite : 4 étapes verticales compactes */}
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          {data.howItWorks.map((s, i) => (
+            <div
+              key={i}
+              style={{
+                background: "#FFFFFF",
+                border: "1px solid rgba(197,138,46,0.18)",
+                borderRadius: 10,
+                padding: "10px 12px",
+                display: "flex",
+                alignItems: "flex-start",
+                gap: 10,
+              }}
+            >
+              <div
+                style={{
+                  width: 28,
+                  height: 28,
+                  borderRadius: "50%",
+                  background:
+                    "linear-gradient(135deg, #C58A2E, #B5462E)",
+                  color: "#FFFFFF",
+                  fontFamily: "'Cormorant Garamond', serif",
+                  fontSize: 14,
+                  fontWeight: 700,
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  flexShrink: 0,
+                  marginTop: 1,
+                }}
+                aria-hidden="true"
+              >
+                {s.num}
+              </div>
+              <div>
+                <div
+                  style={{
+                    fontSize: 13,
+                    color: "#2B1F15",
+                    fontWeight: 700,
+                    marginBottom: 2,
+                  }}
+                >
+                  {s.title}
+                </div>
+                <p
+                  style={{
+                    fontSize: 12,
+                    color: "#6B5A47",
+                    lineHeight: 1.5,
+                    margin: 0,
+                  }}
+                >
+                  {s.body}
+                </p>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* CTA + small print en bas */}
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 14,
+          flexWrap: "wrap",
+          padding: "12px 14px",
+          borderRadius: 12,
+          border: "1px solid rgba(197,138,46,0.22)",
+          background: "rgba(197,138,46,0.10)",
+        }}
+      >
+        <Link
+          href={data.cta.href}
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 8,
+            background:
+              "linear-gradient(135deg, #C58A2E, #B5462E)",
+            color: "#FFFFFF",
+            padding: "10px 18px",
+            borderRadius: 10,
+            textDecoration: "none",
+            fontSize: 13,
+            fontWeight: 700,
+            minHeight: 40,
+            letterSpacing: 0.3,
+            boxShadow: "0 8px 22px rgba(197,138,46,0.30)",
+            flexShrink: 0,
+          }}
+        >
+          {data.cta.label} →
+        </Link>
+        <p
+          style={{
+            fontSize: 11,
+            color: "#6B5A47",
+            lineHeight: 1.5,
+            flex: 1,
+            minWidth: 200,
+            margin: 0,
+          }}
+        >
+          {data.smallPrint}
+        </p>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * <FaqLong> · FAQ catégorisée. Tabs sticky + sections empilées avec
+ * <details> animés. Mobile-friendly (les tabs deviennent scrollables).
+ */
+/**
+ * V28 · Fallback FAQ accordéon (utilisé seulement si la locale n'a pas
+ * de `faqLong`). Comportement identique à `FaqLong` : un seul Q/A
+ * ouvert à la fois, contrôlé via React.
+ */
+function FaqShort({
+  items,
+}: {
+  items: Array<{ q: string; a: string }>;
+}): JSX.Element {
+  const [openIndex, setOpenIndex] = useState<number | null>(null);
+  return (
+    <>
+      {items.map((q, i) => {
+        const isOpen = openIndex === i;
+        return (
+          <details
+            key={i}
+            open={isOpen}
+            style={{
+              background:
+                "linear-gradient(180deg, #FFFFFF 0%, #FBF6EC 100%)",
+              border: "1px solid rgba(197,138,46,0.22)",
+              borderRadius: 12,
+              padding: 18,
+              marginBottom: 10,
+              boxShadow: "0 4px 16px rgba(43,31,21,0.04)",
+            }}
+          >
+            <summary
+              onClick={(e) => {
+                e.preventDefault();
+                setOpenIndex((prev) => (prev === i ? null : i));
+              }}
+              style={{
+                cursor: "pointer",
+                fontWeight: 600,
+                fontSize: 15,
+                color: "#2B1F15",
+              }}
+            >
+              {q.q}
+            </summary>
+            <p
+              style={{
+                marginTop: 10,
+                color: "#6B5A47",
+                fontSize: 13,
+                lineHeight: 1.7,
+              }}
+            >
+              {q.a}
+            </p>
+          </details>
+        );
+      })}
+    </>
+  );
+}
+
+function FaqLong({
+  data,
+  supportEmail = "hello@backmesdo.com",
+}: {
+  data: NonNullable<MarketingStrings["faqLong"]>;
+  /** V23 — email configurable côté admin, remplace hello@backmesdo.com */
+  supportEmail?: string;
+}): JSX.Element {
+  // V17 : layout sidebar gauche (thèmes) + frame droite (Q/R du thème actif).
+  // Pas de scroll latéral, pas de scroll vertical excessif. Mobile : sidebar
+  // bascule en barre horizontale scrollable.
+  const [active, setActive] = useState<string>(data.categories[0]?.key ?? "");
+  const activeCat =
+    data.categories.find((c) => c.key === active) ?? data.categories[0];
+
+  // V28 — Comportement accordion : un seul Q/A ouvert à la fois dans le
+  // thème actif. Quand on change de thème, l'index est reset à null pour
+  // que le nouvel onglet s'ouvre tout fermé (l'utilisateur choisit ce qui
+  // l'intéresse). Index = numéro de la question dans `activeCat.items`.
+  const [openIndex, setOpenIndex] = useState<number | null>(null);
+  useEffect(() => {
+    setOpenIndex(null);
+  }, [active]);
+
+  return (
+    <div>
+      <p
+        style={{
+          fontSize: 14,
+          color: "#6B5A47",
+          lineHeight: 1.65,
+          marginBottom: 16,
+        }}
+      >
+        {data.intro}
+      </p>
+
+      {/* styled-jsx : un seul <style jsx> par composant, fusionné ici */}
+      <style jsx>{`
+        .bmd-faq-layout {
+          display: grid;
+          grid-template-columns: 220px 1fr;
+          gap: 22px;
+          align-items: start;
+        }
+        @media (max-width: 768px) {
+          .bmd-faq-layout {
+            grid-template-columns: 1fr;
+            gap: 14px;
+          }
+          .bmd-faq-nav {
+            flex-direction: row !important;
+            overflow-x: auto;
+            position: static !important;
+            top: auto !important;
+            gap: 6px !important;
+            padding: 6px !important;
+            scrollbar-width: thin;
+          }
+          .bmd-faq-nav button {
+            flex-shrink: 0;
+          }
+        }
+      `}</style>
+
+      <div className="bmd-faq-layout">
+        {/* Sidebar des thèmes */}
+        <nav
+          role="tablist"
+          aria-label="FAQ topics"
+          className="bmd-faq-nav"
+          style={{
+            display: "flex",
+            flexDirection: "column",
+            gap: 4,
+            background:
+              "linear-gradient(180deg, #FFFFFF 0%, #FBF6EC 100%)",
+            border: "1px solid rgba(197,138,46,0.22)",
+            borderRadius: 14,
+            padding: 8,
+            position: "sticky",
+            top: 80,
+            boxShadow: "0 6px 24px rgba(43,31,21,0.06)",
+          }}
+        >
+          {data.categories.map((cat) => {
+            const isActive = active === cat.key;
+            return (
+              <button
+                key={cat.key}
+                type="button"
+                role="tab"
+                aria-selected={isActive}
+                onClick={() => setActive(cat.key)}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 10,
+                  padding: "10px 12px",
+                  borderRadius: 10,
+                  fontSize: 13,
+                  fontWeight: 600,
+                  fontFamily: "inherit",
+                  cursor: "pointer",
+                  textAlign: "left",
+                  background: isActive
+                    ? "linear-gradient(135deg, #C58A2E, #B5462E)"
+                    : "transparent",
+                  color: isActive ? "#FFFFFF" : "#2B1F15",
+                  border: isActive
+                    ? "1px solid rgba(197,138,46,0.40)"
+                    : "1px solid transparent",
+                  transition: "all 0.15s ease",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                <span
+                  aria-hidden="true"
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    width: 22,
+                    height: 22,
+                  }}
+                >
+                  <Icon
+                    name={emojiToIcon(cat.icon)}
+                    size={16}
+                    color={isActive ? "#FFFFFF" : "#C58A2E"}
+                    strokeWidth={1.8}
+                  />
+                </span>
+                <span>{cat.label}</span>
+              </button>
+            );
+          })}
+        </nav>
+
+        {/* Frame Q/R actif */}
+        <div
+          role="tabpanel"
+          style={{
+            background:
+              "linear-gradient(180deg, #FFFFFF 0%, #FBF6EC 100%)",
+            border: "1px solid rgba(197,138,46,0.22)",
+            borderRadius: 16,
+            padding: "16px 18px",
+            minHeight: 320,
+            boxShadow: "0 6px 24px rgba(43,31,21,0.06)",
+          }}
+        >
+          {activeCat && (
+            <>
+              <h3
+                style={{
+                  fontFamily: "'Cormorant Garamond', serif",
+                  fontSize: "clamp(20px, 2.4vw, 24px)",
+                  fontWeight: 600,
+                  color: "#2B1F15",
+                  margin: "0 0 14px",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 10,
+                }}
+              >
+                <span
+                  aria-hidden="true"
+                  style={{
+                    display: "inline-flex",
+                    width: 36,
+                    height: 36,
+                    borderRadius: 12,
+                    background: "rgba(197,138,46,0.12)",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    color: "#C58A2E",
+                  }}
+                >
+                  <Icon
+                    name={emojiToIcon(activeCat.icon)}
+                    size={20}
+                    color="#C58A2E"
+                    strokeWidth={1.8}
+                  />
+                </span>
+                {activeCat.label}
+              </h3>
+              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                {activeCat.items.map((q, i) => {
+                  const isOpen = openIndex === i;
+                  return (
+                    <details
+                      key={i}
+                      open={isOpen}
+                      style={{
+                        background: "#FFFFFF",
+                        border: "1px solid rgba(197,138,46,0.18)",
+                        borderRadius: 10,
+                        padding: "10px 14px",
+                      }}
+                    >
+                      <summary
+                        onClick={(e) => {
+                          // V28 — On intercepte le toggle natif pour que
+                          // React contrôle l'état (`open` est géré via
+                          // openIndex). Sans preventDefault, le navigateur
+                          // toggle aussi, ce qui crée un état incohérent.
+                          e.preventDefault();
+                          setOpenIndex((prev) => (prev === i ? null : i));
+                        }}
+                        style={{
+                          cursor: "pointer",
+                          fontWeight: 600,
+                          fontSize: 13.5,
+                          color: "#2B1F15",
+                          listStyle: "none",
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 10,
+                          lineHeight: 1.4,
+                        }}
+                      >
+                        <span
+                          aria-hidden="true"
+                          style={{
+                            color: "#C58A2E",
+                            fontWeight: 700,
+                            fontSize: 17,
+                            lineHeight: 1,
+                            width: 16,
+                            flexShrink: 0,
+                            // V28 — rotation du « + » en « × » pour indiquer
+                            // visuellement qu'un clic referme la question.
+                            transform: isOpen
+                              ? "rotate(45deg)"
+                              : "rotate(0deg)",
+                            transition: "transform 0.18s ease",
+                            display: "inline-block",
+                          }}
+                        >
+                          +
+                        </span>
+                        {q.q}
+                      </summary>
+                      <p
+                        style={{
+                          marginTop: 8,
+                          marginLeft: 26,
+                          color: "#6B5A47",
+                          fontSize: 12.5,
+                          lineHeight: 1.65,
+                        }}
+                      >
+                        {q.a}
+                      </p>
+                    </details>
+                  );
+                })}
+              </div>
+              <div
+                style={{
+                  marginTop: 14,
+                  padding: "10px 14px",
+                  borderRadius: 10,
+                  background: "rgba(197,138,46,0.10)",
+                  border: "1px solid rgba(197,138,46,0.22)",
+                  fontSize: 12,
+                  color: "#6B5A47",
+                  lineHeight: 1.55,
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 8,
+                }}
+              >
+                <Icon name="phone" size={14} color="#C58A2E" strokeWidth={1.8} />
+                <span>{renderContactNudge(data.contactNudge, supportEmail)}</span>
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
+
+/**
+ * V23 — Remplace toute occurrence de l'email par défaut (hello@backmesdo.com)
+ * dans une chaîne FAQ par la valeur configurée côté admin, et rend le résultat
+ * en cliquable mailto: lorsque l'email est présent.
+ *
+ * Pourquoi : les chaînes traduites des 27 locales ont `hello@backmesdo.com`
+ * littéralement dans `contactNudge`. Plutôt que de toucher 27 traductions
+ * et risquer de casser les espaces/ponctuations, on remplace au render.
+ */
+function renderContactNudge(
+  text: string,
+  email: string,
+): React.ReactNode {
+  const DEFAULT = "hello@backmesdo.com";
+  // Si l'admin n'a pas changé l'email, on linkify quand même la valeur par défaut
+  const target = email || DEFAULT;
+  const parts = text.split(DEFAULT);
+  if (parts.length <= 1) {
+    // Pas trouvé — affiche le texte tel quel + un mailto séparé en fallback
+    return (
+      <>
+        {text}{" "}
+        <a
+          href={`mailto:${target}`}
+          style={{ color: "#C58A2E", fontWeight: 600 }}
+        >
+          {target}
+        </a>
+      </>
+    );
+  }
+  // Reconstruit le texte avec un mailto cliquable à chaque occurrence
+  const out: React.ReactNode[] = [];
+  parts.forEach((p, i) => {
+    out.push(<span key={`p-${i}`}>{p}</span>);
+    if (i < parts.length - 1) {
+      out.push(
+        <a
+          key={`m-${i}`}
+          href={`mailto:${target}`}
+          style={{ color: "#C58A2E", fontWeight: 600 }}
+        >
+          {target}
+        </a>,
+      );
+    }
+  });
+  return <>{out}</>;
+}
+
+/**
+ * <StorySection> · le 1er onglet du site vitrine — narrative.
+ *
+ * Layout : punchline héro centrée, 3 chapitres en grid (problème →
+ * tension → solution), manifesto en bas, CTA. Pas de scroll vertical
+ * sur desktop (1180×~620 max) ; sur mobile, empilement naturel.
+ */
+function StorySection({
+  data,
+}: {
+  data: NonNullable<MarketingStrings["story"]>;
+}): JSX.Element {
+  // V173 — Mapping emoji story → icône V45 SVG pro
+  const storyIconMap: Record<number, IconName> = {
+    0: "globe", // 🌍 Le problème
+    1: "users", // 💔 La tension (humain/relations)
+    2: "sparkles", // 🕊 La solution (paix / magie)
+  };
+  return (
+    <div>
+      {/* Punchline héro */}
+      <p
+        style={{
+          fontSize: "clamp(17px, 2vw, 21px)",
+          color: "#2B1F15",
+          lineHeight: 1.55,
+          fontWeight: 500,
+          marginBottom: 32,
+          maxWidth: 920,
+          fontStyle: "italic",
+        }}
+      >
+        {data.punchline}
+      </p>
+
+      {/* 3 chapitres en grid */}
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))",
+          gap: 18,
+          marginBottom: 28,
+        }}
+      >
+        {data.chapters.map((c, i) => (
+          <div
+            key={i}
+            style={{
+              background:
+                "linear-gradient(180deg, #FFFFFF 0%, #FBF6EC 100%)",
+              border: "1px solid rgba(197,138,46,0.22)",
+              borderRadius: 16,
+              padding: "22px 20px",
+              display: "flex",
+              flexDirection: "column",
+              gap: 10,
+              boxShadow: "0 6px 24px rgba(43,31,21,0.06)",
+            }}
+          >
+            <div
+              style={{
+                width: 52,
+                height: 52,
+                borderRadius: 14,
+                background:
+                  "linear-gradient(135deg, rgba(197,138,46,0.22), rgba(159,70,40,0.14))",
+                border: "1px solid rgba(197,138,46,0.30)",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                color: "#C58A2E",
+              }}
+              aria-hidden="true"
+            >
+              <Icon
+                name={storyIconMap[i] ?? "sparkles"}
+                size={26}
+                color="#C58A2E"
+                strokeWidth={1.8}
+              />
+            </div>
+            <h3
+              style={{
+                fontFamily: "'Cormorant Garamond', serif",
+                fontSize: 22,
+                fontWeight: 600,
+                color: "#C58A2E",
+                margin: 0,
+                lineHeight: 1.2,
+              }}
+            >
+              {c.title}
+            </h3>
+            <p
+              style={{
+                fontSize: 13.5,
+                color: "#6B5A47",
+                lineHeight: 1.65,
+                margin: 0,
+              }}
+            >
+              {c.body}
+            </p>
+          </div>
+        ))}
+      </div>
+
+      {/* Manifesto + CTA — bandeau ivory chic */}
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 20,
+          flexWrap: "wrap",
+          padding: "22px 26px",
+          borderRadius: 18,
+          background:
+            "radial-gradient(700px 280px at 30% 50%, rgba(197,138,46,0.18), transparent 60%), linear-gradient(180deg, #FFFFFF 0%, #FBF6EC 100%)",
+          border: "1px solid rgba(197,138,46,0.32)",
+          boxShadow: "0 10px 30px rgba(43,31,21,0.06)",
+        }}
+      >
+        <p
+          style={{
+            flex: 1,
+            minWidth: 240,
+            fontFamily: "'Cormorant Garamond', serif",
+            fontSize: "clamp(18px, 2.2vw, 24px)",
+            color: "#2B1F15",
+            lineHeight: 1.4,
+            margin: 0,
+            fontStyle: "italic",
+          }}
+        >
+          {data.manifesto}
+        </p>
+        <Link
+          href="/login"
+          style={{
+            background: "linear-gradient(135deg, #C58A2E, #B5462E)",
+            color: "#FFFFFF",
+            padding: "14px 24px",
+            borderRadius: 12,
+            textDecoration: "none",
+            fontSize: 14,
+            fontWeight: 700,
+            minHeight: 48,
+            display: "inline-flex",
+            alignItems: "center",
+            letterSpacing: 0.3,
+            boxShadow: "0 10px 26px rgba(197,138,46,0.30)",
+            flexShrink: 0,
+          }}
+        >
+          {data.cta} →
+        </Link>
+      </div>
+    </div>
+  );
+}
 
 function BmdLogo({ size = 64 }: { size?: number }): JSX.Element {
   // Logo simplifié inline — fidèle au BMD_logo.svg fourni
@@ -1100,8 +2316,8 @@ function SectionDivider({
     >
       <div
         style={{
-          margin: "40px 0 24px",
-          paddingBottom: 14,
+          margin: "24px 0 16px",
+          paddingBottom: 10,
           borderBottom: "1px solid rgba(244,228,193,0.08)",
           display: "flex",
           justifyContent: "space-between",
@@ -1113,12 +2329,12 @@ function SectionDivider({
         <div>
           <div
             style={{
-              fontSize: 11,
-              letterSpacing: 3,
-              color: "#C9A24A",
+              fontSize: 10,
+              letterSpacing: 2.5,
+              color: "var(--gold)",
               textTransform: "uppercase",
               fontWeight: 700,
-              marginBottom: 4,
+              marginBottom: 2,
             }}
           >
             {kicker}
@@ -1126,9 +2342,9 @@ function SectionDivider({
           <h2
             style={{
               fontFamily: "'Cormorant Garamond', serif",
-              fontSize: "clamp(22px, 3vw, 28px)",
+              fontSize: "clamp(20px, 2.6vw, 26px)",
               fontWeight: 600,
-              color: "#F4E4C1",
+              color: "var(--cream)",
             }}
           >
             {title}
@@ -1200,7 +2416,7 @@ function LoginMock({
           flexDirection: "column",
           justifyContent: "space-between",
           gap: 24,
-          borderRight: "1px solid rgba(244,228,193,0.08)",
+          borderRight: "1px solid var(--line-soft)",
           position: "relative",
           overflow: "hidden",
         }}
@@ -1212,10 +2428,10 @@ function LoginMock({
               fontFamily: "'Cormorant Garamond', serif",
               fontSize: 22,
               fontWeight: 700,
-              color: "#F4E4C1",
+              color: "var(--cream)",
             }}
           >
-            BMD<span style={{ color: "#E8A33D" }}>·</span>
+            BMD<span style={{ color: "var(--saffron)" }}>·</span>
           </div>
         </div>
         <div>
@@ -1224,7 +2440,7 @@ function LoginMock({
               fontFamily: "'Cormorant Garamond', serif",
               fontSize: 36,
               fontWeight: 600,
-              color: "#F4E4C1",
+              color: "var(--cream)",
               lineHeight: 1.1,
               marginBottom: 14,
             }}
@@ -1234,7 +2450,7 @@ function LoginMock({
                 Te reconnecter,
                 <br />
                 en{" "}
-                <em style={{ color: "#E8A33D", fontStyle: "normal" }}>
+                <em style={{ color: "var(--saffron)", fontStyle: "normal" }}>
                   30 secondes.
                 </em>
               </>
@@ -1243,7 +2459,7 @@ function LoginMock({
                 Sign in,
                 <br />
                 in{" "}
-                <em style={{ color: "#E8A33D", fontStyle: "normal" }}>
+                <em style={{ color: "var(--saffron)", fontStyle: "normal" }}>
                   30 seconds.
                 </em>
               </>
@@ -1251,7 +2467,7 @@ function LoginMock({
           </h2>
           <p
             style={{
-              color: "#E8D5B7",
+              color: "var(--cream-soft)",
               fontSize: 13,
               lineHeight: 1.7,
               marginBottom: 20,
@@ -1273,7 +2489,7 @@ function LoginMock({
                 alignItems: "center",
                 gap: 10,
                 fontSize: 12,
-                color: "#E8D5B7",
+                color: "var(--cream-soft)",
                 marginBottom: 8,
               }}
             >
@@ -1286,7 +2502,7 @@ function LoginMock({
                   display: "flex",
                   alignItems: "center",
                   justifyContent: "center",
-                  color: "#E8A33D",
+                  color: "var(--saffron)",
                   fontWeight: 700,
                   fontSize: 13,
                 }}
@@ -1301,7 +2517,7 @@ function LoginMock({
       <div
         style={{
           padding: "44px 36px",
-          background: "#16111E",
+          background: "var(--night-2)",
           display: "flex",
           flexDirection: "column",
           gap: 14,
@@ -1313,7 +2529,7 @@ function LoginMock({
             style={{
               fontFamily: "'Cormorant Garamond', serif",
               fontSize: 22,
-              color: "#F4E4C1",
+              color: "var(--cream)",
               fontWeight: 600,
             }}
           >
@@ -1321,7 +2537,7 @@ function LoginMock({
           </div>
           <div
             style={{
-              color: "#8A7B6B",
+              color: "var(--muted)",
               fontSize: 12,
               marginTop: 4,
             }}
@@ -1335,7 +2551,7 @@ function LoginMock({
           <div
             style={{
               fontSize: 10,
-              color: "#8A7B6B",
+              color: "var(--muted)",
               textTransform: "uppercase",
               letterSpacing: 1.5,
               fontWeight: 700,
@@ -1355,14 +2571,14 @@ function LoginMock({
               alignItems: "center",
               gap: 10,
               fontSize: 14,
-              color: "#F4E4C1",
+              color: "var(--cream)",
             }}
           >
             <span
               style={{
                 fontWeight: 600,
                 paddingRight: 8,
-                borderRight: "1px solid rgba(244,228,193,0.08)",
+                borderRight: "1px solid var(--line-soft)",
               }}
             >
               🇫🇷 +33
@@ -1375,7 +2591,7 @@ function LoginMock({
                 padding: "3px 8px",
                 borderRadius: 99,
                 background: "rgba(63,125,92,0.15)",
-                color: "#7DC59E",
+                color: "var(--emerald-soft)",
                 border: "1px solid rgba(63,125,92,0.3)",
               }}
             >
@@ -1393,7 +2609,7 @@ function LoginMock({
               fontWeight: 700,
               textAlign: "center",
               background: "linear-gradient(135deg, #E8A33D, #B5462E)",
-              color: "#16111E",
+              color: "var(--night-2)",
               boxShadow: "0 12px 32px rgba(232,163,61,0.25)",
             }}
           >
@@ -1408,7 +2624,7 @@ function LoginMock({
               fontWeight: 600,
               textAlign: "center",
               background: "rgba(255,255,255,0.04)",
-              color: "#F4E4C1",
+              color: "var(--cream)",
               border: "1px solid rgba(244,228,193,0.08)",
             }}
           >
@@ -1420,7 +2636,7 @@ function LoginMock({
             display: "flex",
             alignItems: "center",
             gap: 10,
-            color: "#8A7B6B",
+            color: "var(--muted)",
             fontSize: 10,
             letterSpacing: 2,
             textTransform: "uppercase",
@@ -1434,13 +2650,13 @@ function LoginMock({
           style={{
             fontSize: 11,
             textAlign: "center",
-            color: "#8A7B6B",
+            color: "var(--muted)",
           }}
         >
           {locale === "fr"
             ? "Pas encore de compte ? "
             : "No account yet? "}
-          <span style={{ color: "#E8A33D", fontWeight: 600 }}>
+          <span style={{ color: "#C58A2E", fontWeight: 600 }}>
             {locale === "fr" ? "Créer gratuitement" : "Sign up free"}
           </span>
         </div>
@@ -1497,7 +2713,7 @@ function PricingCard({
           fontFamily: "'Cormorant Garamond', serif",
           fontWeight: 700,
           marginBottom: 18,
-          color: "#F4E4C1",
+          color: "var(--cream)",
         }}
       >
         {price}
@@ -1509,12 +2725,12 @@ function PricingCard({
           margin: "0 0 20px",
           fontSize: 13,
           lineHeight: 2,
-          color: "#E8D5B7",
+          color: "var(--cream-soft)",
         }}
       >
         {features.map((f, i) => (
           <li key={i}>
-            <span style={{ color: "#E8A33D", marginRight: 6 }}>✓</span>
+            <span style={{ color: "var(--saffron)", marginRight: 6 }}>✓</span>
             {f}
           </li>
         ))}
@@ -1525,7 +2741,7 @@ function PricingCard({
           style={{
             display: "block",
             background: "linear-gradient(135deg, #E8A33D, #B5462E)",
-            color: "#16111E",
+            color: "var(--night-2)",
             padding: "14px",
             borderRadius: 10,
             textDecoration: "none",
@@ -1540,7 +2756,7 @@ function PricingCard({
         <div
           style={{
             background: "rgba(255,255,255,0.05)",
-            color: "#8A7B6B",
+            color: "var(--muted)",
             padding: "14px",
             borderRadius: 10,
             textAlign: "center",
@@ -1555,30 +2771,181 @@ function PricingCard({
   );
 }
 
+type LangGroupKey = "european" | "asian" | "arabic" | "african";
+
 function LangPicker({
   locale,
   rtl,
   show,
   setShow,
   onChange,
+  t,
 }: {
   locale: Locale;
   rtl: boolean;
   show: boolean;
   setShow: (v: boolean) => void;
   onChange: (l: Locale) => void;
+  t: MarketingStrings;
 }): JSX.Element {
+  // V19 — 5 groupes : Main (FR+EN toujours visibles) + 4 sous-groupes
+  // repliables (Européennes / Asiatiques / Arabes / Africaines).
+  //
+  // V27 — Comportement accordion : un seul groupe ouvert à la fois
+  // (cliquer un autre referme le précédent), et le picker entier se referme
+  // si l'utilisateur clique ailleurs sur la page.
+  //
+  // Auto-ouverture initiale : si la locale active appartient à un sous-groupe,
+  // ce groupe est ouvert au mount.
+  const initialGroup: LangGroupKey | null = EUROPEAN_LOCALES.includes(locale)
+    ? "european"
+    : ASIAN_LOCALES.includes(locale)
+      ? "asian"
+      : ARABIC_LOCALES.includes(locale)
+        ? "arabic"
+        : AFRICAN_LOCALES.includes(locale)
+          ? "african"
+          : null;
+  const [openGroup, setOpenGroup] = useState<LangGroupKey | null>(initialGroup);
+
+  /** Toggle "accordion" : ouvrir un groupe ferme automatiquement le précédent. */
+  const toggleGroup = (key: LangGroupKey) => {
+    setOpenGroup((prev) => (prev === key ? null : key));
+  };
+
+  // V27 — Référence au container du picker (bouton + dropdown) pour détecter
+  // les clics extérieurs. Quand l'utilisateur clique en dehors → on referme
+  // le dropdown ET on replie tous les groupes (état reset à null).
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!show) return; // pas besoin de listener si fermé
+    function handlePointerDown(ev: MouseEvent | TouchEvent) {
+      const target = ev.target as Node | null;
+      if (!target) return;
+      if (containerRef.current && containerRef.current.contains(target)) {
+        return; // clic à l'intérieur — ne rien faire
+      }
+      setShow(false);
+      setOpenGroup(null);
+    }
+    function handleEscape(ev: KeyboardEvent) {
+      if (ev.key === "Escape") {
+        setShow(false);
+        setOpenGroup(null);
+      }
+    }
+    // mousedown + touchstart pour couvrir desktop ET mobile, capture pour
+    // attraper le clic même si un autre handler le `stopPropagation`.
+    document.addEventListener("mousedown", handlePointerDown, true);
+    document.addEventListener("touchstart", handlePointerDown, true);
+    document.addEventListener("keydown", handleEscape);
+    return () => {
+      document.removeEventListener("mousedown", handlePointerDown, true);
+      document.removeEventListener("touchstart", handlePointerDown, true);
+      document.removeEventListener("keydown", handleEscape);
+    };
+  }, [show, setShow]);
+
+  const lp = t.langPicker;
+  const labels = {
+    main: lp?.main ?? "Main languages",
+    european: lp?.europeanGroup ?? "European languages",
+    asian: lp?.asianGroup ?? "Asian languages",
+    arabic: lp?.arabicGroup ?? "Arabic languages",
+    african: lp?.africanGroup ?? "African languages",
+  };
+
+  /** Bouton item d'une locale dans une liste. */
+  const renderItem = (l: Locale, indented = false) => (
+    <button
+      key={l}
+      onClick={() => onChange(l)}
+      style={{
+        display: "block",
+        width: "100%",
+        textAlign: rtl ? "right" : "left",
+        background: l === locale ? "rgba(232,163,61,0.15)" : "transparent",
+        border: "none",
+        padding: indented ? "9px 16px" : "9px 12px",
+        color: l === locale ? "var(--saffron)" : "var(--cream)",
+        cursor: "pointer",
+        borderRadius: 8,
+        fontSize: 13,
+        minHeight: 38,
+        fontFamily: "inherit",
+      }}
+    >
+      {LOCALE_FLAGS[l]} {LOCALE_NAMES[l]}
+    </button>
+  );
+
+  /** Bouton entête d'un sous-groupe (en-tête repliable). */
+  const renderGroupHeader = (
+    icon: string,
+    label: string,
+    open: boolean,
+    setOpen: (v: boolean) => void,
+  ) => (
+    <button
+      onClick={() => setOpen(!open)}
+      aria-expanded={open}
+      style={{
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "space-between",
+        width: "100%",
+        textAlign: rtl ? "right" : "left",
+        background: "transparent",
+        border: "none",
+        padding: "9px 12px",
+        color: "var(--cream-soft)",
+        cursor: "pointer",
+        borderRadius: 8,
+        fontSize: 11,
+        fontWeight: 700,
+        textTransform: "uppercase",
+        letterSpacing: 1.2,
+        fontFamily: "inherit",
+        minHeight: 36,
+      }}
+    >
+      <span>
+        {icon} {label}
+      </span>
+      <span
+        style={{
+          fontSize: 14,
+          transform: open ? "rotate(180deg)" : "rotate(0deg)",
+          transition: "transform 0.18s ease",
+        }}
+        aria-hidden="true"
+      >
+        ▾
+      </span>
+    </button>
+  );
+
   return (
-    <div style={{ position: "relative" }}>
+    <div ref={containerRef} style={{ position: "relative" }}>
       <button
-        onClick={() => setShow(!show)}
+        onClick={() => {
+          // V27 — Toggle d'ouverture du picker. Si on referme manuellement
+          // le picker via son bouton, on replie aussi tous les groupes.
+          if (show) {
+            setShow(false);
+            setOpenGroup(null);
+          } else {
+            setShow(true);
+          }
+        }}
         aria-label="Change language"
+        aria-expanded={show}
         style={{
           background: "rgba(255,255,255,0.04)",
           border: "1px solid rgba(244,228,193,0.08)",
           borderRadius: 10,
           padding: "8px 12px",
-          color: "#F4E4C1",
+          color: "var(--cream)",
           cursor: "pointer",
           fontSize: 13,
           minHeight: 40,
@@ -1592,37 +2959,100 @@ function LangPicker({
             position: "absolute",
             top: "calc(100% + 4px)",
             ...(rtl ? { left: 0 } : { right: 0 }),
-            background: "#1E1830",
+            background: "var(--indigo)",
             border: "1px solid rgba(232,163,61,0.18)",
             borderRadius: 10,
             padding: 4,
-            minWidth: 180,
+            minWidth: 240,
+            maxHeight: "min(75vh, 560px)",
+            overflowY: "auto",
             zIndex: 100,
             boxShadow: "0 12px 30px rgba(0,0,0,0.4)",
           }}
         >
-          {LOCALES.map((l) => (
-            <button
-              key={l}
-              onClick={() => onChange(l)}
-              style={{
-                display: "block",
-                width: "100%",
-                textAlign: rtl ? "right" : "left",
-                background:
-                  l === locale ? "rgba(232,163,61,0.15)" : "transparent",
-                border: "none",
-                padding: "10px 12px",
-                color: l === locale ? "#E8A33D" : "#F4E4C1",
-                cursor: "pointer",
-                borderRadius: 8,
-                fontSize: 13,
-                minHeight: 40,
-              }}
-            >
-              {LOCALE_FLAGS[l]} {LOCALE_NAMES[l]}
-            </button>
-          ))}
+          {/* === Main : FR + EN toujours visibles === */}
+          <div
+            style={{
+              padding: "8px 10px 4px",
+              fontSize: 10,
+              color: "var(--muted)",
+              textTransform: "uppercase",
+              letterSpacing: 1.2,
+              fontWeight: 700,
+            }}
+          >
+            {labels.main}
+          </div>
+          {MAIN_LOCALES.map((l) => renderItem(l))}
+
+          {/* === Européennes === */}
+          <div
+            style={{
+              marginTop: 6,
+              borderTop: "1px solid rgba(244,228,193,0.08)",
+              paddingTop: 4,
+            }}
+          >
+            {renderGroupHeader(
+              "🇪🇺",
+              labels.european,
+              openGroup === "european",
+              () => toggleGroup("european"),
+            )}
+            {openGroup === "european" &&
+              EUROPEAN_LOCALES.map((l) => renderItem(l, true))}
+          </div>
+
+          {/* === Asiatiques === */}
+          <div
+            style={{
+              borderTop: "1px solid rgba(244,228,193,0.08)",
+              paddingTop: 4,
+            }}
+          >
+            {renderGroupHeader(
+              "🌏",
+              labels.asian,
+              openGroup === "asian",
+              () => toggleGroup("asian"),
+            )}
+            {openGroup === "asian" &&
+              ASIAN_LOCALES.map((l) => renderItem(l, true))}
+          </div>
+
+          {/* === Arabes === */}
+          <div
+            style={{
+              borderTop: "1px solid rgba(244,228,193,0.08)",
+              paddingTop: 4,
+            }}
+          >
+            {renderGroupHeader(
+              "☪️",
+              labels.arabic,
+              openGroup === "arabic",
+              () => toggleGroup("arabic"),
+            )}
+            {openGroup === "arabic" &&
+              ARABIC_LOCALES.map((l) => renderItem(l, true))}
+          </div>
+
+          {/* === Africaines (12 langues) === */}
+          <div
+            style={{
+              borderTop: "1px solid rgba(244,228,193,0.08)",
+              paddingTop: 4,
+            }}
+          >
+            {renderGroupHeader(
+              "🌍",
+              labels.african,
+              openGroup === "african",
+              () => toggleGroup("african"),
+            )}
+            {openGroup === "african" &&
+              AFRICAN_LOCALES.map((l) => renderItem(l, true))}
+          </div>
         </div>
       )}
     </div>
@@ -1681,8 +3111,8 @@ function MobileWelcome({
           "radial-gradient(900px 600px at 10% -10%, rgba(232,163,61,0.12), transparent 60%), " +
           "radial-gradient(900px 600px at 110% 10%, rgba(181,70,46,0.1), transparent 60%), " +
           "radial-gradient(1200px 800px at 50% 120%, rgba(63,125,92,0.06), transparent 60%), " +
-          "linear-gradient(180deg, #0E0B14 0%, #1F1429 100%)",
-        color: "#F4E4C1",
+          "linear-gradient(180deg, var(--night) 0%, var(--indigo) 100%)",
+        color: "var(--cream)",
         fontFamily:
           "'Inter', system-ui, -apple-system, BlinkMacSystemFont, sans-serif",
         display: "flex",
@@ -1707,21 +3137,32 @@ function MobileWelcome({
         }}
       />
 
-      {/* Top : sélecteur de langue à droite (RTL flippe à gauche) */}
+      {/* Top : sélecteur de langue à droite + bouton thème (RTL flippe à gauche) */}
       <div
         style={{
           display: "flex",
           justifyContent: "flex-end",
+          gap: 8,
           position: "relative",
           zIndex: 2,
         }}
       >
+        <ThemeToggle
+          variant="ghost"
+          labelDark={
+            locale === "fr" ? "Passer en mode clair" : "Switch to light mode"
+          }
+          labelLight={
+            locale === "fr" ? "Passer en mode sombre" : "Switch to dark mode"
+          }
+        />
         <LangPicker
           locale={locale}
           rtl={rtl}
           show={showLangMenu}
           setShow={setShowLangMenu}
           onChange={onChangeLocale}
+          t={t}
         />
       </div>
 
@@ -1767,7 +3208,7 @@ function MobileWelcome({
             style={{
               fontSize: 11,
               letterSpacing: 4,
-              color: "#C9A24A",
+              color: "var(--gold)",
               textTransform: "uppercase",
               fontWeight: 700,
               marginBottom: 12,
@@ -1782,7 +3223,7 @@ function MobileWelcome({
               fontWeight: 600,
               lineHeight: 1.15,
               margin: 0,
-              color: "#F4E4C1",
+              color: "var(--cream)",
             }}
             dangerouslySetInnerHTML={{
               __html: emphasizeLast(t.hero.headline),
@@ -1792,7 +3233,7 @@ function MobileWelcome({
             style={{
               fontSize: 14,
               lineHeight: 1.6,
-              color: "#E8D5B7",
+              color: "var(--cream-soft)",
               marginTop: 16,
               maxWidth: 340,
             }}
@@ -1819,7 +3260,7 @@ function MobileWelcome({
             href="/dashboard"
             style={{
               background: "linear-gradient(135deg, #E8A33D, #B5462E)",
-              color: "#16111E",
+              color: "var(--night-2)",
               padding: "16px 24px",
               borderRadius: 14,
               textDecoration: "none",
@@ -1844,7 +3285,7 @@ function MobileWelcome({
               href="/login"
               style={{
                 background: "linear-gradient(135deg, #E8A33D, #B5462E)",
-                color: "#16111E",
+                color: "var(--night-2)",
                 padding: "16px 24px",
                 borderRadius: 14,
                 textDecoration: "none",
@@ -1865,7 +3306,7 @@ function MobileWelcome({
               href="/login"
               style={{
                 background: "rgba(255,255,255,0.04)",
-                color: "#F4E4C1",
+                color: "var(--cream)",
                 padding: "14px 24px",
                 borderRadius: 14,
                 textDecoration: "none",
@@ -1888,7 +3329,7 @@ function MobileWelcome({
         <div
           style={{
             fontSize: 11,
-            color: "#8A7B6B",
+            color: "var(--muted)",
             textAlign: "center",
             marginTop: 8,
             lineHeight: 1.5,
@@ -1900,7 +3341,7 @@ function MobileWelcome({
           <Link
             href="/legal/privacy"
             style={{
-              color: "#E8A33D",
+              color: "var(--saffron)",
               textDecoration: "none",
             }}
           >
@@ -1948,40 +3389,40 @@ function PhoneFrameHero(): JSX.Element {
         }
       `}</style>
 
-      {/* Float tags décoratifs */}
+      {/* Float tags décoratifs — V45-light */}
       <FloatTag
-        title="Ticket scanné"
-        subtitle="67,40 € · partagé en 4 ✓"
-        icon="🧾"
+        title="Receipt scanned"
+        subtitle="67,40 € · split in 4"
+        iconName="receipt"
         position={{ top: 80, left: -40 }}
       />
       <FloatTag
         title="Tontine"
         subtitle="Tour 4/12 · 1 950 € collectés"
-        icon="🪙"
+        iconName="coins"
         position={{ bottom: 120, right: -30 }}
       />
       <FloatTag
         title="Bot WhatsApp"
-        subtitle="« +25 € resto » → noté ✓"
-        icon="💬"
+        subtitle="« +25 € resto » → noté"
+        iconName="phone"
         position={{ top: "50%", right: -50 }}
       />
 
-      {/* Phone frame */}
+      {/* Phone frame — V45-light */}
       <div
         style={{
           width: 320,
           height: 640,
           borderRadius: 44,
-          background: "linear-gradient(180deg, #0A0810, #15101D)",
+          background: "linear-gradient(180deg, #2B1F15, #3A2A52)",
           padding: 12,
           boxShadow:
-            "0 40px 90px rgba(0,0,0,0.7), 0 0 0 1px rgba(232,163,61,0.15)",
+            "0 40px 90px rgba(43,31,21,0.35), 0 0 0 1px rgba(197,138,46,0.20)",
           position: "relative",
         }}
       >
-        {/* Notch */}
+        {/* Notch (reste noir, cohérent avec un vrai iPhone) */}
         <div
           aria-hidden="true"
           style={{
@@ -1996,21 +3437,21 @@ function PhoneFrameHero(): JSX.Element {
             zIndex: 5,
           }}
         />
-        {/* Screen */}
+        {/* Screen — V45-light */}
         <div
           style={{
             width: "100%",
             height: "100%",
             borderRadius: 32,
-            background: "linear-gradient(180deg, #16111E, #1E1830)",
+            background: "linear-gradient(180deg, #FFFFFF 0%, #FBF6EC 100%)",
             overflow: "hidden",
             display: "flex",
             flexDirection: "column",
             padding: "44px 18px 18px",
-            color: "#F4E4C1",
+            color: "#2B1F15",
           }}
         >
-          <div style={{ fontSize: 11, color: "#E8D5B7", opacity: 0.6 }}>
+          <div style={{ fontSize: 11, color: "#6B5A47", opacity: 0.8 }}>
             Bonsoir,
           </div>
           <div
@@ -2019,20 +3460,22 @@ function PhoneFrameHero(): JSX.Element {
               fontSize: 22,
               fontWeight: 600,
               marginBottom: 18,
+              color: "#2B1F15",
             }}
           >
             Aïcha M.
           </div>
 
-          {/* Balance card */}
+          {/* Balance card — ivory premium */}
           <div
             style={{
-              background: "linear-gradient(135deg, #2A2244, #3A2A52)",
+              background: "linear-gradient(135deg, #FBF6EC 0%, #F4ECD8 100%)",
               borderRadius: 20,
               padding: 18,
-              border: "1px solid rgba(232,163,61,0.18)",
+              border: "1px solid rgba(197,138,46,0.28)",
               position: "relative",
               overflow: "hidden",
+              boxShadow: "0 6px 20px rgba(43,31,21,0.06)",
             }}
           >
             <div
@@ -2045,7 +3488,7 @@ function PhoneFrameHero(): JSX.Element {
                 height: 150,
                 borderRadius: "50%",
                 background:
-                  "radial-gradient(circle, rgba(232,163,61,0.3), transparent 70%)",
+                  "radial-gradient(circle, rgba(197,138,46,0.22), transparent 70%)",
               }}
             />
             <div
@@ -2053,8 +3496,8 @@ function PhoneFrameHero(): JSX.Element {
                 fontSize: 9,
                 letterSpacing: 2,
                 textTransform: "uppercase",
-                color: "#E8D5B7",
-                opacity: 0.7,
+                color: "#6B5A47",
+                opacity: 0.9,
                 position: "relative",
               }}
             >
@@ -2065,13 +3508,13 @@ function PhoneFrameHero(): JSX.Element {
                 fontFamily: "'Cormorant Garamond', Georgia, serif",
                 fontSize: 38,
                 fontWeight: 600,
-                color: "#F4E4C1",
+                color: "#1F7A57",
                 marginTop: 4,
                 position: "relative",
               }}
             >
               + 247,50
-              <span style={{ color: "#E8A33D", fontSize: 20 }}>€</span>
+              <span style={{ color: "#C58A2E", fontSize: 20 }}>€</span>
             </div>
             <div
               style={{
@@ -2079,21 +3522,20 @@ function PhoneFrameHero(): JSX.Element {
                 justifyContent: "space-between",
                 fontSize: 10,
                 marginTop: 12,
-                color: "#E8D5B7",
                 position: "relative",
                 gap: 4,
               }}
             >
-              <span style={{ color: "#7DC59E", fontWeight: 600 }}>
+              <span style={{ color: "#1F7A57", fontWeight: 600 }}>
                 ↗ On vous doit 412 €
               </span>
-              <span style={{ color: "#D9714A", fontWeight: 600 }}>
+              <span style={{ color: "#9F4628", fontWeight: 600 }}>
                 ↘ Vous devez 165 €
               </span>
             </div>
           </div>
 
-          {/* Quick actions */}
+          {/* Quick actions — V45-light */}
           <div
             style={{
               display: "grid",
@@ -2103,16 +3545,16 @@ function PhoneFrameHero(): JSX.Element {
             }}
           >
             {[
-              { ic: "📷", lbl: "Scanner" },
-              { ic: "▣", lbl: "QR" },
-              { ic: "🪙", lbl: "Tontine" },
-              { ic: "💬", lbl: "Chat" },
+              { ic: "camera" as IconName, lbl: "Scanner" },
+              { ic: "scan-line" as IconName, lbl: "QR" },
+              { ic: "coins" as IconName, lbl: "Tontine" },
+              { ic: "bell" as IconName, lbl: "Notif" },
             ].map((q, i) => (
               <div
                 key={i}
                 style={{
-                  background: "rgba(232,163,61,0.06)",
-                  border: "1px solid rgba(244,228,193,0.08)",
+                  background: "#FFFFFF",
+                  border: "1px solid rgba(197,138,46,0.18)",
                   borderRadius: 12,
                   padding: "10px 4px",
                   display: "flex",
@@ -2120,11 +3562,11 @@ function PhoneFrameHero(): JSX.Element {
                   alignItems: "center",
                   gap: 4,
                   fontSize: 9,
-                  color: "#E8D5B7",
+                  color: "#6B5A47",
                   textAlign: "center",
                 }}
               >
-                <span style={{ fontSize: 16, color: "#E8A33D" }}>{q.ic}</span>
+                <Icon name={q.ic} size={16} color="#C58A2E" strokeWidth={1.8} />
                 {q.lbl}
               </div>
             ))}
@@ -2133,7 +3575,7 @@ function PhoneFrameHero(): JSX.Element {
           <div
             style={{
               fontSize: 9,
-              color: "#8A7B6B",
+              color: "#8a7b6b",
               textTransform: "uppercase",
               letterSpacing: 2,
               marginTop: 16,
@@ -2144,15 +3586,15 @@ function PhoneFrameHero(): JSX.Element {
           </div>
 
           {[
-            { ic: "🪙", n: "Tontine Bamiléké", m: "12 membres · Tour 4/12", a: "+200 €", c: "#E8A33D" },
-            { ic: "🏠", n: "Coloc Belleville", m: "4 membres", a: "-89 €", c: "#D9714A" },
+            { ic: "coins" as IconName, n: "Tontine Bamiléké", m: "12 membres · Tour 4/12", a: "+200 €", c: "#1F7A57" },
+            { ic: "home" as IconName, n: "Coloc Belleville", m: "4 membres", a: "-89 €", c: "#9F4628" },
           ].map((g, i) => (
             <div
               key={i}
               style={{
                 marginTop: 6,
-                background: "rgba(255,255,255,0.025)",
-                border: "1px solid rgba(244,228,193,0.08)",
+                background: "#FFFFFF",
+                border: "1px solid rgba(197,138,46,0.18)",
                 borderRadius: 12,
                 padding: 10,
                 display: "flex",
@@ -2165,23 +3607,22 @@ function PhoneFrameHero(): JSX.Element {
                   width: 30,
                   height: 30,
                   borderRadius: 9,
-                  background: "rgba(232,163,61,0.15)",
-                  color: "#E8A33D",
+                  background: "rgba(197,138,46,0.14)",
+                  color: "#C58A2E",
                   display: "flex",
                   alignItems: "center",
                   justifyContent: "center",
-                  fontSize: 13,
                   flexShrink: 0,
                 }}
               >
-                {g.ic}
+                <Icon name={g.ic} size={14} color="#C58A2E" strokeWidth={1.8} />
               </div>
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div
                   style={{
                     fontSize: 11,
                     fontWeight: 600,
-                    color: "#F4E4C1",
+                    color: "#2B1F15",
                     overflow: "hidden",
                     textOverflow: "ellipsis",
                     whiteSpace: "nowrap",
@@ -2189,7 +3630,7 @@ function PhoneFrameHero(): JSX.Element {
                 >
                   {g.n}
                 </div>
-                <div style={{ fontSize: 9, color: "#8A7B6B" }}>{g.m}</div>
+                <div style={{ fontSize: 9, color: "#8a7b6b" }}>{g.m}</div>
               </div>
               <div
                 style={{
@@ -2211,12 +3652,12 @@ function PhoneFrameHero(): JSX.Element {
 function FloatTag({
   title,
   subtitle,
-  icon,
+  iconName,
   position,
 }: {
   title: string;
   subtitle: string;
-  icon: string;
+  iconName: IconName;
   position: React.CSSProperties;
 }): JSX.Element {
   return (
@@ -2226,13 +3667,13 @@ function FloatTag({
         position: "absolute",
         padding: "10px 14px",
         borderRadius: 12,
-        background: "rgba(42,34,68,0.92)",
+        background: "#FFFFFF",
         backdropFilter: "blur(10px)",
         WebkitBackdropFilter: "blur(10px)",
-        border: "1px solid rgba(232,163,61,0.18)",
+        border: "1px solid rgba(197,138,46,0.30)",
         fontSize: 11,
-        color: "#F4E4C1",
-        boxShadow: "0 12px 30px rgba(0,0,0,0.4)",
+        color: "#2B1F15",
+        boxShadow: "0 12px 30px rgba(43,31,21,0.15)",
         display: "flex",
         alignItems: "center",
         gap: 8,
@@ -2249,10 +3690,24 @@ function FloatTag({
           }
         }
       `}</style>
-      <span style={{ fontSize: 14, color: "#E8A33D" }}>{icon}</span>
+      <span
+        style={{
+          display: "inline-flex",
+          width: 28,
+          height: 28,
+          borderRadius: 10,
+          background: "rgba(197,138,46,0.14)",
+          alignItems: "center",
+          justifyContent: "center",
+          color: "#C58A2E",
+          flexShrink: 0,
+        }}
+      >
+        <Icon name={iconName} size={16} color="#C58A2E" strokeWidth={1.8} />
+      </span>
       <span>
-        <strong style={{ display: "block", color: "#F4E4C1" }}>{title}</strong>
-        <span style={{ color: "#E8D5B7" }}>{subtitle}</span>
+        <strong style={{ display: "block", color: "#2B1F15" }}>{title}</strong>
+        <span style={{ color: "#6B5A47" }}>{subtitle}</span>
       </span>
     </div>
   );

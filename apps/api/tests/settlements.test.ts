@@ -5,6 +5,7 @@ import {
   quickSignup,
   startOtpCapture,
   stopOtpCapture,
+  upgradeUserPlan,
 } from "./helpers.js";
 import { simplify } from "../src/modules/settlements/balance.service.js";
 
@@ -167,5 +168,440 @@ describe("M07 · Soldes · API end-to-end", () => {
       expect(s.toUserId).toBe(aicha.userId);
       expect(parseFloat(s.amount)).toBeCloseTo(15, 2);
     }
+  });
+});
+
+describe("V26-1 · Settlements CONFIRMED affectent computeBalances", () => {
+  beforeEach(() => startOtpCapture());
+  afterEach(() => stopOtpCapture());
+
+  it("V26-1A · Un Settlement CONFIRMED ramène le solde à zéro", async () => {
+    const app = await getApp();
+    // Setup : Karim paye 60€ pour 2 personnes (lui + Linda)
+    const karim = await quickSignup({
+      displayName: "Karim",
+      phone: "+33612260100",
+    });
+    const g = await app.inject({
+      method: "POST",
+      url: "/groups",
+      headers: { authorization: `Bearer ${karim.token}` },
+      payload: { name: "V26 test", type: "GENERIC" },
+    });
+    const gid = g.json().id;
+    const lindaRes = await app.inject({
+      method: "POST",
+      url: `/groups/${gid}/members`,
+      headers: { authorization: `Bearer ${karim.token}` },
+      payload: { contactType: "PHONE", contactValue: "+33612260101" },
+    });
+    const lindaId = lindaRes.json().user.id;
+
+    // Karim paye 60€ partagé entre lui et Linda → Linda lui doit 30€
+    await app.inject({
+      method: "POST",
+      url: `/groups/${gid}/expenses`,
+      headers: { authorization: `Bearer ${karim.token}` },
+      payload: {
+        description: "Course",
+        amount: "60.00",
+        splitMode: "EQUAL",
+        participants: [{ userId: karim.userId }, { userId: lindaId }],
+      },
+    });
+
+    // Solde initial : Karim +30, Linda −30
+    let balance = await app.inject({
+      method: "GET",
+      url: `/groups/${gid}/balance`,
+      headers: { authorization: `Bearer ${karim.token}` },
+    });
+    let karimNet = parseFloat(
+      balance
+        .json()
+        .balances.find((b: { userId: string }) => b.userId === karim.userId)
+        .net,
+    );
+    expect(karimNet).toBeCloseTo(30, 2);
+
+    // Linda crée un Settlement (PROPOSED) puis le débiteur déclare avoir payé.
+    // Ici on simule directement la transition vers PAID puis CONFIRMED par Karim.
+    const settlementRes = await app.inject({
+      method: "POST",
+      url: `/groups/${gid}/settlements`,
+      headers: { authorization: `Bearer ${karim.token}` },
+      payload: {
+        fromUserId: lindaId,
+        toUserId: karim.userId,
+        amount: "30.00",
+      },
+    });
+    const settlementId = settlementRes.json().id;
+
+    // Force PROPOSED → PAID (normalement fait via /pay-confirm/:token)
+    const { prisma } = await import("../src/lib/db.js");
+    await prisma.settlement.update({
+      where: { id: settlementId },
+      data: { status: "PAID" },
+    });
+
+    // Karim confirme la réception → CONFIRMED
+    const confirmRes = await app.inject({
+      method: "POST",
+      url: `/settlements/${settlementId}/confirm`,
+      headers: { authorization: `Bearer ${karim.token}` },
+    });
+    expect(confirmRes.statusCode).toBe(200);
+
+    // Solde après confirmation : tous deux à zéro (ou très proche)
+    balance = await app.inject({
+      method: "GET",
+      url: `/groups/${gid}/balance`,
+      headers: { authorization: `Bearer ${karim.token}` },
+    });
+    karimNet = parseFloat(
+      balance
+        .json()
+        .balances.find((b: { userId: string }) => b.userId === karim.userId)
+        .net,
+    );
+    const lindaNet = parseFloat(
+      balance
+        .json()
+        .balances.find((b: { userId: string }) => b.userId === lindaId).net,
+    );
+    expect(karimNet).toBeCloseTo(0, 2);
+    expect(lindaNet).toBeCloseTo(0, 2);
+  });
+});
+
+describe("V26-2 · /me/balances/by-person · vue par personne", () => {
+  beforeEach(() => startOtpCapture());
+  afterEach(() => stopOtpCapture());
+
+  it("V26-2A · Agrégation pair-à-pair sur 2 groupes partagés", async () => {
+    const app = await getApp();
+    const alice = await quickSignup({
+      displayName: "Alice",
+      phone: "+33612260200",
+    });
+    // Crée 2 groupes avec Bob dans les deux
+    const bob = await quickSignup({
+      displayName: "Bob",
+      phone: "+33612260201",
+    });
+
+    async function createGroupWithBob(name: string) {
+      const g = await app.inject({
+        method: "POST",
+        url: "/groups",
+        headers: { authorization: `Bearer ${alice.token}` },
+        payload: { name, type: "GENERIC" },
+      });
+      const gid = g.json().id;
+      await app.inject({
+        method: "POST",
+        url: `/groups/${gid}/members`,
+        headers: { authorization: `Bearer ${alice.token}` },
+        payload: { contactType: "PHONE", contactValue: "+33612260201" },
+      });
+      return gid;
+    }
+
+    const g1 = await createGroupWithBob("Voyage");
+    const g2 = await createGroupWithBob("Coloc");
+
+    // G1 : Alice paye 100€, partagé 2 → Bob lui doit 50€
+    await app.inject({
+      method: "POST",
+      url: `/groups/${g1}/expenses`,
+      headers: { authorization: `Bearer ${alice.token}` },
+      payload: {
+        description: "Hotel",
+        amount: "100.00",
+        splitMode: "EQUAL",
+        participants: [{ userId: alice.userId }, { userId: bob.userId }],
+      },
+    });
+
+    // G2 : Bob paye 40€, partagé 2 → Alice lui doit 20€
+    await app.inject({
+      method: "POST",
+      url: `/groups/${g2}/expenses`,
+      headers: { authorization: `Bearer ${bob.token}` },
+      payload: {
+        description: "Courses",
+        amount: "40.00",
+        splitMode: "EQUAL",
+        participants: [{ userId: alice.userId }, { userId: bob.userId }],
+      },
+    });
+
+    // Alice consulte sa vue par personne — net Bob attendu = +50 - 20 = +30
+    const res = await app.inject({
+      method: "GET",
+      url: "/me/balances/by-person",
+      headers: { authorization: `Bearer ${alice.token}` },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    const bobEntry = body.people.find(
+      (p: { counterpartyUserId: string }) =>
+        p.counterpartyUserId === bob.userId,
+    );
+    expect(bobEntry).toBeTruthy();
+    expect(parseFloat(bobEntry.net)).toBeCloseTo(30, 2);
+    expect(bobEntry.sharedGroups).toBe(2);
+    expect(bobEntry.byGroup).toHaveLength(2);
+  });
+});
+
+describe("V30 · Cross-group settlement (règlement multi-groupe)", () => {
+  beforeEach(() => startOtpCapture());
+  afterEach(() => stopOtpCapture());
+
+  it("V30-A · Cross-settlement avec 3 groupes : tous passent à 0 après confirm", async () => {
+    const app = await getApp();
+    // Karim (créancier net) + Linda (débiteur net) sur 3 groupes
+    const karim = await quickSignup({
+      displayName: "Karim",
+      phone: "+33612300100",
+    });
+    const linda = await quickSignup({
+      displayName: "Linda",
+      phone: "+33612300101",
+    });
+    // V86 — Le plan FREE limite à 2 groupes max (cf. plan-limits.ts:69).
+    // Ce test en crée 3 → on upgrade Karim en PREMIUM pour débloquer.
+    // Sans cet upgrade, la 3e création de groupe par Karim renvoie 4xx,
+    // `g3` reste undefined, et toutes les étapes suivantes cassent
+    // silencieusement (le test ne checkait pas le statusCode).
+    await upgradeUserPlan(karim.userId, "PREMIUM");
+
+    // 3 groupes partagés
+    async function createGroup(name: string) {
+      const g = await app.inject({
+        method: "POST",
+        url: "/groups",
+        headers: { authorization: `Bearer ${karim.token}` },
+        payload: { name, type: "GENERIC" },
+      });
+      const gid = g.json().id;
+      await app.inject({
+        method: "POST",
+        url: `/groups/${gid}/members`,
+        headers: { authorization: `Bearer ${karim.token}` },
+        payload: { contactType: "PHONE", contactValue: "+33612300101" },
+      });
+      return gid;
+    }
+    const g1 = await createGroup("Voyage Lisbonne");
+    const g2 = await createGroup("Coloc Bordeaux");
+    const g3 = await createGroup("Tontine Noël");
+
+    // G1 : Karim paye 160€ partagé 2 → Linda lui doit 80€
+    await app.inject({
+      method: "POST",
+      url: `/groups/${g1}/expenses`,
+      headers: { authorization: `Bearer ${karim.token}` },
+      payload: {
+        description: "Hôtel",
+        amount: "160.00",
+        splitMode: "EQUAL",
+        participants: [{ userId: karim.userId }, { userId: linda.userId }],
+      },
+    });
+    // G2 : Karim paye 200€ partagé 2 → Linda lui doit 100€
+    await app.inject({
+      method: "POST",
+      url: `/groups/${g2}/expenses`,
+      headers: { authorization: `Bearer ${karim.token}` },
+      payload: {
+        description: "Loyer",
+        amount: "200.00",
+        splitMode: "EQUAL",
+        participants: [{ userId: karim.userId }, { userId: linda.userId }],
+      },
+    });
+    // G3 : Linda paye 75€ partagé 2 → Karim lui doit 37,50€
+    // V86 — Assert le statusCode pour diagnostiquer si l'expense est bien créée.
+    // Hypothèse pré-fix : la création par Linda dans G3 échouait silencieusement
+    // (Linda pas encore membre actif via le flow d'invitation phone), et le test
+    // ne contrôlait pas le résultat → 80 + 100 = 180 au lieu de 142.5.
+    const exp3 = await app.inject({
+      method: "POST",
+      url: `/groups/${g3}/expenses`,
+      headers: { authorization: `Bearer ${linda.token}` },
+      payload: {
+        description: "Cadeaux",
+        amount: "75.00",
+        splitMode: "EQUAL",
+        participants: [{ userId: karim.userId }, { userId: linda.userId }],
+      },
+    });
+    if (exp3.statusCode !== 201) {
+      // eslint-disable-next-line no-console
+      console.error(
+        "[V30-A] expense G3 by Linda failed:",
+        exp3.statusCode,
+        exp3.body,
+      );
+    }
+    expect(exp3.statusCode).toBe(201);
+
+    // Karim consulte sa vue par personne — net Linda attendu = 80 + 100 - 37,50 = +142,50
+    const balRes = await app.inject({
+      method: "GET",
+      url: "/me/balances/by-person",
+      headers: { authorization: `Bearer ${karim.token}` },
+    });
+    const lindaEntry = balRes
+      .json()
+      .people.find(
+        (p: { counterpartyUserId: string }) =>
+          p.counterpartyUserId === linda.userId,
+      );
+    expect(parseFloat(lindaEntry.net)).toBeCloseTo(142.5, 2);
+
+    // Karim crée un cross-settlement de 142,50€ avec 3 children
+    const createRes = await app.inject({
+      method: "POST",
+      url: "/me/cross-settlements",
+      headers: { authorization: `Bearer ${karim.token}` },
+      payload: {
+        counterpartyUserId: linda.userId,
+        netDirection: "actorReceives", // Karim reçoit le net
+        totalAmount: "142.50",
+        currency: "EUR",
+        memo: "Test V30",
+        children: [
+          // Sur G1+G2 : Linda paye Karim (actorReceives)
+          {
+            groupId: g1,
+            direction: "actorReceives",
+            amount: "80.00",
+            currency: "EUR",
+          },
+          {
+            groupId: g2,
+            direction: "actorReceives",
+            amount: "100.00",
+            currency: "EUR",
+          },
+          // Sur G3 : Karim "paye" Linda — il l'inclut pour solder G3 aussi
+          {
+            groupId: g3,
+            direction: "actorPays",
+            amount: "37.50",
+            currency: "EUR",
+          },
+        ],
+      },
+    });
+    expect(createRes.statusCode).toBe(200);
+    const crossId = createRes.json().id;
+    expect(crossId).toBeTruthy();
+    expect(createRes.json().childrenIds).toHaveLength(3);
+
+    // Karim confirme la réception (lui = créancier net)
+    const confirmRes = await app.inject({
+      method: "POST",
+      url: `/cross-settlements/${crossId}/confirm`,
+      headers: { authorization: `Bearer ${karim.token}` },
+    });
+    expect(confirmRes.statusCode).toBe(200);
+
+    // Vérification : les 3 soldes de groupes doivent être à 0
+    for (const gid of [g1, g2, g3]) {
+      const b = await app.inject({
+        method: "GET",
+        url: `/groups/${gid}/balance`,
+        headers: { authorization: `Bearer ${karim.token}` },
+      });
+      const karimNet = parseFloat(
+        b.json().balances.find(
+          (x: { userId: string }) => x.userId === karim.userId,
+        ).net,
+      );
+      expect(karimNet).toBeCloseTo(0, 2);
+    }
+
+    // Et la vue par personne doit aussi montrer Linda à 0 (badge "à jour")
+    const balRes2 = await app.inject({
+      method: "GET",
+      url: "/me/balances/by-person",
+      headers: { authorization: `Bearer ${karim.token}` },
+    });
+    const lindaAfter = balRes2
+      .json()
+      .people.find(
+        (p: { counterpartyUserId: string }) =>
+          p.counterpartyUserId === linda.userId,
+      );
+    expect(parseFloat(lindaAfter.net)).toBeCloseTo(0, 2);
+  });
+
+  it("V30-B · Seul le créancier net peut confirmer la réception", async () => {
+    const app = await getApp();
+    const a = await quickSignup({
+      displayName: "Alice",
+      phone: "+33612300200",
+    });
+    const b = await quickSignup({
+      displayName: "Bob",
+      phone: "+33612300201",
+    });
+    const g = await app.inject({
+      method: "POST",
+      url: "/groups",
+      headers: { authorization: `Bearer ${a.token}` },
+      payload: { name: "G", type: "GENERIC" },
+    });
+    const gid = g.json().id;
+    await app.inject({
+      method: "POST",
+      url: `/groups/${gid}/members`,
+      headers: { authorization: `Bearer ${a.token}` },
+      payload: { contactType: "PHONE", contactValue: "+33612300201" },
+    });
+    await app.inject({
+      method: "POST",
+      url: `/groups/${gid}/expenses`,
+      headers: { authorization: `Bearer ${a.token}` },
+      payload: {
+        description: "X",
+        amount: "20.00",
+        splitMode: "EQUAL",
+        participants: [{ userId: a.userId }, { userId: b.userId }],
+      },
+    });
+    const create = await app.inject({
+      method: "POST",
+      url: "/me/cross-settlements",
+      headers: { authorization: `Bearer ${a.token}` },
+      payload: {
+        counterpartyUserId: b.userId,
+        netDirection: "actorReceives",
+        totalAmount: "10.00",
+        currency: "EUR",
+        children: [
+          {
+            groupId: gid,
+            direction: "actorReceives",
+            amount: "10.00",
+            currency: "EUR",
+          },
+        ],
+      },
+    });
+    const crossId = create.json().id;
+
+    // Bob (le débiteur) tente de confirmer → doit échouer
+    const bobConfirm = await app.inject({
+      method: "POST",
+      url: `/cross-settlements/${crossId}/confirm`,
+      headers: { authorization: `Bearer ${b.token}` },
+    });
+    expect(bobConfirm.statusCode).toBeGreaterThanOrEqual(400);
   });
 });

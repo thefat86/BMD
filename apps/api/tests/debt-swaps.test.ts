@@ -4,10 +4,16 @@ import {
   quickSignup,
   startOtpCapture,
   stopOtpCapture,
+  upgradeUserPlan,
 } from "./helpers.js";
 
 /**
  * Hélper : créer un groupe avec 4 membres + ajouter une dépense pour générer des dettes.
+ *
+ * V86 — Upgrade l'owner en PREMIUM car les debt-swaps sont gated derrière
+ * cette feature (cf. debt-swaps.routes.ts:49 `assertFeatureEnabled("debtSwap")`).
+ * Sans cet upgrade, tous les POST /groups/:id/debt-swaps retournaient
+ * 402 Payment Required → 6 tests T70-T75 cassés silencieusement.
  */
 async function setupGroupWithDebts() {
   const app = await getApp();
@@ -17,6 +23,8 @@ async function setupGroupWithDebts() {
       .toString()
       .padStart(7, "0")}`,
   });
+  // V86 — Plan PREMIUM requis pour utiliser debt-swap
+  await upgradeUserPlan(owner.userId, "PREMIUM");
 
   const g = await app.inject({
     method: "POST",
@@ -105,6 +113,8 @@ describe("M09 · Debt Swaps · proposition & cycle de vie", () => {
       displayName: "X",
       phone: "+33614000099",
     });
+    // V86 — Plan PREMIUM requis pour utiliser debt-swap
+    await upgradeUserPlan(owner.userId, "PREMIUM");
     const g = await app.inject({
       method: "POST",
       url: "/groups",

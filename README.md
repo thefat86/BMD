@@ -2,23 +2,29 @@
 
 > « L'argent partagé. L'amitié protégée. »
 
-Sprint 0 + MVP vertical slice : **monorepo Turborepo** avec un backend Node.js / Fastify / Prisma et un client web Next.js. Les 4 modules de cœur d'application sont implémentés et testés : **Auth (M01)**, **Groupes (M05)**, **Dépenses (M06)**, **Soldes & règlements (M07)**.
+**BMD** est une fintech sociale pour la diaspora africaine et asiatique. Elle gère collectivement l'argent — dépenses partagées entre amis, **tontines rotatives**, événements ponctuels (mariages, voyages), associations cultuelles — avec un parcours sans friction, multi-devises et multi-langues.
+
+Ce repo est un **monorepo Turborepo** : backend Node.js / Fastify, client web Next.js 15 (PWA installable, mode dark only), et types partagés. La PWA fait office d'app native pour la beta privée — l'app mobile native iOS + Android est prévue pour le go-live grand public.
+
+État au sprint **AD-3** (8 mai 2026) : **227+ sprints livrés**, produit techniquement prêt pour la beta fermée.
+
+---
 
 ## Démarrage en 3 minutes
 
-Tu as besoin de **Node.js 20+**, **Docker**, et **npm 10+**.
+Pré-requis : **Node.js 20+**, **Docker**, **npm 10+**.
 
 ```bash
 # 1. Installer les dépendances du monorepo
 npm install
 
-# 2. Démarrer Postgres en local (port 5433 pour ne pas entrer en conflit avec un Postgres existant)
+# 2. Démarrer Postgres en local (port 5433 pour ne pas entrer en conflit)
 npm run db:up
 
 # 3. Configurer l'environnement du backend
 cp apps/api/.env.example apps/api/.env
 
-# 4. Créer le schéma de base de données + générer le client Prisma
+# 4. Migrations + génération du client Prisma
 npm run db:migrate
 
 # 5. Lancer le backend (port 4000) ET le client web (port 3000) en parallèle
@@ -27,158 +33,188 @@ npm run dev
 
 Ouvre [http://localhost:3000](http://localhost:3000).
 
+En mode dev, l'API affiche aussi les IPs LAN au boot pour que tu puisses tester depuis ton iPhone sur le même Wi-Fi (`http://192.168.x.x:3000`).
+
 ### Lancer les tests
 
 ```bash
-# Tests du backend (Vitest, avec couverture ≥ 80%)
+# Backend (Vitest, ≥ 80% de couverture sur src/modules + src/lib)
 npm test --workspace apps/api
 
-# Tests d'un module spécifique
-npm test --workspace apps/api -- auth
-npm test --workspace apps/api -- groups
-npm test --workspace apps/api -- expenses
-npm test --workspace apps/api -- settlements
+# i18n strict — zéro régression sur les 27 locales, zéro string FR hardcodée
+cd apps/web
+npm run i18n:check:strict
+npm run i18n:audit:strict
+
+# E2E Playwright (3 viewports : desktop-chrome, mobile-iphone, tablet-ipad)
+cd apps/e2e
+npm test
 ```
 
-> **Note importante** : les tests utilisent la même base que le développement. En CI, une base dédiée `bmd_test` est créée par GitHub Actions (voir `.github/workflows/ci.yml`).
+---
 
-## Architecture
+## Architecture du monorepo
 
 ```
-bmd/
+bmd-app/
 ├── apps/
 │   ├── api/                       # Backend Node.js + Fastify + Prisma
-│   │   ├── prisma/schema.prisma   # Schéma DB (users, groups, expenses, settlements)
+│   │   ├── prisma/schema.prisma   # 81 modèles & enums, 28 migrations
 │   │   ├── src/
-│   │   │   ├── lib/               # env, db, errors
-│   │   │   ├── modules/
-│   │   │   │   ├── auth/          # M01 · OTP + JWT + sessions
-│   │   │   │   ├── groups/        # M05 · CRUD groupes + membres
-│   │   │   │   ├── expenses/      # M06 · saisie + 3 modes de partage
-│   │   │   │   └── settlements/   # M07 · soldes + algo de simplification
+│   │   │   ├── lib/               # env, db, errors, scheduler, cache, queue,
+│   │   │   │                      # email-templates, fx, stripe, totp, web-push,
+│   │   │   │                      # crypto-vault, seed-plans, seed-currencies…
+│   │   │   ├── modules/           # 38 modules métier (cf. ci-dessous)
 │   │   │   ├── server.ts          # Fastify app + middlewares + routes
-│   │   │   └── index.ts           # Entrypoint
-│   │   └── tests/                 # Vitest : 25+ cas de test
+│   │   │   └── index.ts           # Entrypoint + seeds idempotents + scheduler
+│   │   └── tests/                 # Vitest
 │   │
-│   └── web/                       # Client web Next.js 15
-│       ├── app/
-│       │   ├── login/             # Connexion par OTP
-│       │   ├── dashboard/         # Liste des groupes
-│       │   └── dashboard/groups/[id]/  # Détail groupe + dépenses + soldes
-│       └── lib/api-client.ts      # Wrapper typé pour l'API
+│   ├── web/                       # Client Next.js 15 (App Router) + PWA
+│   │   ├── app/                   # Vitrine, login, dashboard, admin, legal, cms
+│   │   ├── lib/
+│   │   │   ├── i18n/              # Catalog typé : 1095+ clés × 27 locales
+│   │   │   └── ui/                # 50+ composants partagés
+│   │   └── scripts/               # check-i18n-coverage, check-no-fr-strings
+│   │
+│   └── e2e/                       # Playwright E2E
 │
 └── packages/
-    └── shared-types/              # Types TypeScript partagés API ↔ clients
+    └── shared-types/              # Types TypeScript partagés API ↔ web
 ```
+
+---
 
 ## Modules livrés
 
-### M01 · Auth (Authentication)
+### Foundation
 
-- **Connexion sans mot de passe** : OTP à 6 chiffres envoyé par SMS, WhatsApp ou e-mail
-- **Sessions JWT** révocables (stockées hashées en DB pour permettre la déconnexion à distance)
-- **Anti-bombing** : 5 OTP max par contact / heure → 429 Too Many Requests au-delà
-- **Anti-bruteforce** : 3 essais max par code, code consommé en cas de succès (anti-rejeu)
-- **OTP hashés argon2 + pepper** : jamais stockés en clair, jamais retournés à l'utilisateur
-- **Mode dev** : les OTP s'affichent dans la console du backend (pas besoin de Twilio)
+**M01 · Auth** — OTP 6 chiffres (SMS/WhatsApp/email via Twilio Verify + Resend), sessions JWT révocables, **passkeys WebAuthn** (Face ID / Touch ID), SSO Google + Apple + WhatsApp, 2FA TOTP, anti-bombing 5/h, anti-bruteforce 3 essais, anti-replay challenge.
 
-### M05 · Groups (Groupes)
+**M02 · Profil & contacts vérifiés** — Multi-contacts (jusqu'à 3 numéros + 3 emails), contact principal, vérification OTP, badge SIM-swap.
 
-- **6 types de groupes** : tontine, coloc, voyage, événement, club, paroisse, générique
-- **Rôles** : ADMIN, TREASURER, MEMBER, OBSERVER (avec contrôles d'accès stricts)
-- **Invitations** : ajout d'un membre par téléphone ou e-mail. Si le contact n'existe pas, un compte « shadow » est créé pour qu'il puisse rejoindre dès sa première connexion
-- **Vérifications** : pas de groupe en double (idempotence), pas de membre en double, accès interdit aux non-membres
+**M03 · i18n 27 locales** — fr, en, es, pt, ar (RTL), de, it, lb, ru, ja, ko, hi, zh, sw, wo, ln, am, pcm, ha, yo, om, ig, ff, zu, ak, **fr-cm (Francanglais)**, **fr-ci (Nouchi)**. Console admin reste en FR.
 
-### M06 · Expenses (Dépenses)
+**M04 · Multi-devises** — 25+ devises (XAF, XOF, NGN, INR, etc.), FX live via OpenExchangeRates + fallback, tarification PPA régionale.
 
-- **3 modes de partage** : EQUAL (parts égales), UNEQUAL (parts explicites), PERCENTAGE (%)
-- **Decimal-safe** : utilise `decimal.js` côté serveur, `Decimal(14,4)` côté Postgres → zéro perte de centimes
-- **Auto-correction des arrondis** : la dernière part absorbe les décimales pour que la somme matche EXACTEMENT le montant
-- **Multi-devises prêt** : chaque dépense a sa devise (par défaut celle du groupe)
+### Domaine
 
-### M07 · Settlements (Soldes & règlements)
+**M05 · Groupes** — 7 types (TONTINE, COLOC, TRAVEL, EVENT, CLUB, PARISH, GENERIC), 4 rôles (ADMIN, TREASURER, MEMBER, OBSERVER), invitations par lien WhatsApp / QR / numéro / e-mail, mode invité (compte « shadow »), thèmes par communauté, règles catégories.
 
-- **Calcul automatique des soldes** par membre : `payé - dû`
-- **Algorithme de simplification de dettes** (Greedy minimum cash flow) : O(n log n), apurement parfait des soldes, nombre de transactions ≤ n - 1
-- **Suggestions de paiement** : qui doit payer combien à qui, en minimisant le nombre de transactions
+**M06 · Dépenses** — 4 modes de saisie (manuel, **OCR ticket** à 3 moteurs avec fallback transparent, vocal Whisper, import bancaire CSV). 4 modes de partage (EQUAL, UNEQUAL, PERCENTAGE, ITEMIZED), **multi-payeurs** sur une dépense, presets de partage réutilisables. Decimal-safe (`Decimal(14,4)` côté DB), auto-correction des arrondis. Pièces jointes, journal d'audit hash-chained immuable, **détection d'anomalies** (montant inhabituel, doublon, retard).
 
-## API REST
+**M07 · Soldes & règlements** — Solde par membre + global multi-groupes (par devise), algorithme greedy de simplification (≤ n-1 transactions), `Settlement` avec confirmation 2 parties, **règlements cross-groupes** (V30) en 1 tap, vue par groupe / vue par personne, page imprimable PDF via Cmd+P.
 
-Toutes les routes (sauf `/health` et `/auth/otp/*`) nécessitent un header `Authorization: Bearer <token>`.
+**M08 · Tontines** — Cycles rotatifs avec ordre RANDOM ou MANUAL, cagnotte centralisée ou versements directs, **mode AUCTION (Hui chinois 標會)** avec enchères par tour, double validation cotisations PENDING → PAID → CONFIRMED, calendrier 6 mois × 5 lignes, journal hash-chained.
 
-| Méthode | Route                          | Description                           |
-| ------- | ------------------------------ | ------------------------------------- |
-| GET     | `/health`                      | Health check                          |
-| POST    | `/auth/otp/request`            | Demander un OTP                       |
-| POST    | `/auth/otp/verify`             | Vérifier OTP + créer session          |
-| GET     | `/auth/me`                     | Profil + contacts vérifiés            |
-| POST    | `/auth/logout`                 | Révoquer la session                   |
-| GET     | `/groups`                      | Lister mes groupes                    |
-| POST    | `/groups`                      | Créer un groupe                       |
-| GET     | `/groups/:id`                  | Détail du groupe                      |
-| POST    | `/groups/:id/members`          | Inviter un membre                     |
-| GET     | `/groups/:id/expenses`         | Lister les dépenses du groupe         |
-| POST    | `/groups/:id/expenses`         | Ajouter une dépense                   |
-| GET     | `/groups/:id/balance`          | Soldes + suggestions de règlement     |
+**M09 · Swap de dettes** — Détection croisée intra-groupe + transferts binaires A→C↔B, swap **N-aire** triangulaire, acceptation explicite par toutes parties, délai 48h, audit log, gating Premium.
+
+**M10 · Partages flexibles** — Couple, tous les contributeurs, membres choisis, parts inégales / %, presets réutilisables (`SplitPreset`).
+
+### Intégration
+
+**M11 · Paiements** — Stripe (fiat) + add-on billing (réunion premium 1h, audio proof 5min, OCR factures Mindee), **Mobile Money** (M-Pesa, MTN MoMo, Orange Money, Wave, Airtel — orchestration P2P sans séquestre de fonds), vault paiement AES-256-GCM, Stripe portal sur refus add-on.
+
+**M12 · QR Code** — Page `/login/qr` + `/qr-login/[token]` pour connexion par scan depuis mobile. Token URL-safe 24 octets, TTL 14 jours, usage unique. Token de paiement invité `/pay/[token]`.
+
+**M13 · Notifications** — In-app (`<NotificationBell>`), email transactionnel (Resend), SMS / WhatsApp (Twilio + Meta WABA), **Web Push VAPID** (PWA installée iOS 16.4+), tonalités paramétrables (sympa / ferme / humour / pro), mode « Ne pas déranger » par groupe, résumé hebdo automatique, relances invitations J+2/J+5/J+10.
+
+**M16 · Bot WhatsApp** — Adaptateurs Meta WABA Cloud API, signature `X-Hub-Signature-256`, templates pré-approuvés. Bot conversationnel natif **partiel** : OTP + login + à étoffer pour la sync bidirectionnelle complète.
+
+### Intelligence
+
+**M14 · OCR tickets** — Pipeline 3 moteurs avec fallback transparent : **Mindee Invoice/Receipts** > **GPT-4o Vision** > **Tesseract** local. Compteur d'usage par plan (`assertCanUseOcr`). Trial Premium 14 jours auto au 4ᵉ scan.
+
+**M15 · IA conversationnelle** — Parse-expense GPT-4o (« ajoute 25€ pour le resto d'hier »), Whisper (vocal → texte), suggestions IA partage, **réunions enregistrées** (audio S3 + transcription Whisper + extraction de décisions GPT-4o), audio proof 5min cas marché Afrique.
+
+### Plateforme
+
+**M17-M19 · Apps mobiles natives** — Pas démarrées (cible go-live). PWA actuelle : Service Worker network-first, install prompt iOS + Android, push notifications, haptics, safe-areas, passkeys WebAuthn. Cf. roadmap.
+
+**M20 · Web** — Vitrine 3551 lignes (hero, story, features, FAQ, pricing live, lang picker), espace client complet, dashboard dual-view, search globale (incluant transcripts de réunions).
+
+**M21 · Console admin** — Dashboard temps réel (sparklines SSE, pulse LIVE, KPIs MRR/ARR/ARPU/Churn, cohort retention, conversion funnel), recherche/filtres users + groupes + tontines, **plans éditables** depuis l'admin avec cache TTL 5 min, FX override, gestion AB tests, journal d'audit, gestion publicités, CMS pages.
+
+### Cross-cutting
+
+**M22 · Sécurité & audit** — Cf. [SECURITY.md](./SECURITY.md). OTP argon2 + pepper, vault AES-256-GCM, JWT révocables, anti-replay WebAuthn, signatures Stripe + WhatsApp, audit log hash-chained, rate-limit aggressif, headers HSTS/X-Frame/CSP, CORS whitelisté.
+
+**M23 · Monétisation** — 5 plans freemium (FREE / PREMIUM / COMMUNITY / PARISH / EVENT), tarification PPA régionale (XAF, NGN, INR…), trial Premium 14 jours après 4ᵉ scan OCR, **programme parrainage** (filleul → parrain, codes AFF-XXXX commerciaux multi-niveaux, KYC anti-fraude, payouts via Stripe Connect Express), promos, reçus fiscaux automatiques (Article 200 CGI sur PARISH).
+
+---
 
 ## Stack technique
 
-- **Backend** : Node.js 20 · Fastify 4 · Prisma 5 · Postgres 16 · TypeScript 5 · Zod (validation) · argon2 (OTP) · @fastify/jwt (sessions) · decimal.js (calculs financiers)
-- **Web** : Next.js 15 · React 18 · TypeScript · CSS modules
-- **Tests** : Vitest · couverture ≥ 80% sur `src/modules/**` et `src/lib/**`
-- **Tooling** : Turborepo · npm workspaces · ESLint · Docker Compose · GitHub Actions
+**Backend** · Node.js 20 · **Fastify 4** · **Prisma 5** sur PostgreSQL 16 · TypeScript 5 · Zod (validation) · argon2 (OTP) · @fastify/jwt + @fastify/cors + @fastify/multipart + @fastify/compress (Brotli/gzip) · @simplewebauthn/server · decimal.js · pdf-lib · tesseract.js · stripe.
+
+**Frontend web** · **Next.js 15.5** (App Router) · React 18 · TypeScript · CSS-in-JS inline + variables CSS · **mode dark uniquement** · PWA (Service Worker network-first, install prompt iOS + Android, haptics, safe-areas) · @simplewebauthn/browser · hooks `useT()` maison.
+
+**Infra** · Postgres 16 + PgBouncer (transaction pool) · Redis 7 (drop-in optionnel via `REDIS_URL`, fallback in-memory) · BullMQ (jobs lourds, optionnel) · S3 (audio, rotation 90 jours).
+
+**Tests** · Vitest (≥ 80% couverture sur API) · Playwright E2E sur 3 viewports.
+
+**Tooling** · Turborepo · npm workspaces · Docker + Docker Compose · GitHub Actions (`ci.yml`, `e2e.yml`, `deploy.yml`) · pino-pretty (logs structurés avec request-id propagé).
+
+---
+
+## i18n — règle d'or
+
+> Un Chinois ne doit jamais voir du français sur son compte.
+
+Catalog single source of truth en TypeScript (`apps/web/lib/i18n/app-strings.ts`, ~29 000 traductions). CI stricte zéro tolérance : chaque ajout de clé doit être complété sur les 27 locales avant merge. Cf. [CONTRIBUTING.md](./CONTRIBUTING.md) — section « Règle d'or i18n ».
+
+Emails transactionnels : 14 locales avec copy native (fr, en, es, pt, ar, de, it, sw, wo, ln, am, ja, ko, zh) + 11 fallback EN. **Citation BMD du jour** auto-injectée dans chaque email (rotation déterministe par jour pour cohérence intra-journée). Logo BMD inline SVG + BIMI configuré (logo dans Gmail/Apple Mail/Yahoo).
+
+---
 
 ## Sécurité
 
-- ✓ OTP hashés argon2 + pepper (impossible à reverse-engineer même avec accès DB)
-- ✓ Anti-bombing OTP (rate limit par contact)
-- ✓ Anti-bruteforce OTP (3 essais max par code)
-- ✓ Anti-replay OTP (consommation après 1 succès)
-- ✓ JWT signés HMAC-SHA256, sessions stockées hashées (sha256) et révocables
-- ✓ Validation stricte de tous les inputs avec Zod
-- ✓ Erreurs métier typées (jamais de stack trace renvoyée au client)
-- ✓ CORS configuré (à restreindre en prod sur le domaine front)
+Voir [SECURITY.md](./SECURITY.md) pour le threat model et la checklist go-live complète.
 
-## Prochaines étapes (modules à venir)
+Highlights : pas de mot de passe (OTP + passkeys + SSO uniquement), vault paiement AES-256-GCM, audit log hash-chained immuable, anti-bombing OTP, anti-replay WebAuthn (challenge cleared avant verify), signatures webhooks Stripe + WhatsApp vérifiées, rate-limit `/auth/passkey/options` 30/min/IP, audio proof rotation S3 + rétention 90 jours.
 
-| Module | Nom                       | Itération | Statut    |
-| ------ | ------------------------- | --------- | --------- |
-| M02    | Profil & contacts vérifiés (multi-pays) | IT1       | À faire |
-| M03    | i18n · 12 langues + RTL    | IT1       | À faire |
-| M04    | Multi-devises live (25 devises) | IT1   | À faire |
-| M08    | Tontines (cycles, anti-fraude) | IT3   | À faire |
-| M09    | Swap de dettes (compensation N-aire) | IT3 | À faire |
-| M10    | Partages flexibles (mariages) | IT3   | À faire |
-| M11    | Paiements (Lydia, Wave, Wise…) | IT4 | À faire |
-| ...    | (voir BMD_plan_developpement.docx) | | |
+DPO contact : `privacy@backmesdo.com`. Disclosure responsable : `security@backmesdo.com`.
 
-## Ce que tu dois faire de ton côté (humain)
+---
 
-Toutes les étapes ci-dessous nécessitent ton intervention :
+## Documentation
 
-1. **Comptes développeurs**
-   - Créer un Apple Developer Account (99 $/an)
-   - Créer un Google Play Console Account (25 $)
+| Fichier | Description |
+|---|---|
+| [`CHANGELOG.md`](./CHANGELOG.md) | Récap exhaustif de tous les sprints (V1 → AD-3, ~2000 lignes) |
+| [`CONTRIBUTING.md`](./CONTRIBUTING.md) | Conventions code, règle d'or i18n, fanout GPT auto-traduction |
+| [`DEPLOYMENT.md`](./DEPLOYMENT.md) | Vercel + Railway · Docker self-host · Cloudflare Pages, secrets, Stripe / WhatsApp / Apple / Google setup, smoke tests, checklist go-live |
+| [`SECURITY.md`](./SECURITY.md) | Threat model, défenses, checklist sécu, procédure d'incident, rotation de secrets |
+| [`docs/EMAIL-BIMI-SETUP.md`](./docs/EMAIL-BIMI-SETUP.md) | Setup BIMI (logo dans Gmail / Apple Mail / Yahoo) |
+| [`docs/HUI-TEST.md`](./docs/HUI-TEST.md) | Procédure de test des tontines mode AUCTION (Hui chinois) |
 
-2. **Comptes partenaires** (au moment de M11)
-   - Twilio (SMS), Postmark (email), Meta WhatsApp Business API
-   - Lydia, Wise, Revolut Business, PayPal Business, Wero (EPI)
-   - Orange Money, MTN MoMo, Wave (avec ton entreprise enregistrée)
+---
 
-3. **Hébergement de production**
-   - Backend : Fly.io / Railway / Render + Postgres managé (Supabase / Neon)
-   - Web : Vercel
-   - Coût estimé : 50-100 $/mois pour démarrer
+## Roadmap
 
-4. **Légal**
-   - Société (SAS / SARL), KYC, ouverture de compte bancaire pro
-   - Mentions légales, CGU, politique de confidentialité (avocat recommandé)
-   - Déclaration CNIL / DPO si > 250 utilisateurs
+### En cours
 
-5. **Beta-test & lancement**
-   - Recruter 50 testeurs réels (10 par communauté cible)
-   - Soumettre l'app aux stores et passer la review
+- **Recrutement beta fermée 50 utilisateurs diaspora** (CM, CI, SN en priorité) — onboarding individuel, feedback WhatsApp, NPS hebdo, cible 6 semaines.
+- **Élargissement des statuts juridiques** de TPL Mobility (EURL France, en cours via Legalplace) pour ajouter la création et vente de logiciels.
+
+### Avant le go-live grand public
+
+- **App mobile native iOS + Android** — la PWA actuelle reste l'étape transitoire ; le live se fera sur des apps dans l'App Store et le Play Store. Techno à arbitrer.
+- **Création de TPL Group au Luxembourg** — prévu novembre 2026.
+- **Compliance & licence paiements** — clarifier statut PSP / Établissement de Paiement / Agent. BMD reste en mode « orchestration sans séquestre de fonds » pour l'instant ; à valider avec un conseil franco-luxembourgeois avant scaling.
+- **Vérification fiscale LU/FR** — convention franco-luxembourgeoise, TVA OSS sur abonnements B2C UE.
+- **RGPD marchés africains** — audit conformité Cameroun (loi n°2010/012) + Côte d'Ivoire (loi 2013-450), DPO, hébergement local.
+
+### Après le go-live
+
+- Newsletter mensuelle « La lettre BMD » (anonymisations + citation BMD).
+- Marketing organique : landing CM/CI/SN dédiées, témoignages vidéo, TikTok diaspora.
+- Programme parrainage récompensé activé (1 mois Premium offert).
+- Internationalisation paiements : Hong Kong, Taïwan, Singapour, Brésil (Pix).
+- Audit a11y systématique (WCAG 2.1 AA).
+- Monitoring complet : Sentry (errors), Datadog APM ou OTel, UptimeRobot.
+
+---
 
 ## Licence
 
-À définir.
+Propriétaire — © **TPL Mobility** (en transition vers TPL Group LU). Tous droits réservés.

@@ -1,6 +1,7 @@
 import { createWorker, type Worker } from "tesseract.js";
 import { parseReceipt, type ParsedReceipt } from "./receipt-parser.js";
 import { Errors } from "../../lib/errors.js";
+import { scanReceiptViaProvider } from "./ocr-providers.js";
 
 /**
  * MODULE M14 · Service OCR multi-format
@@ -110,12 +111,55 @@ export function isSupportedMime(mime: string): boolean {
 }
 
 /**
+ * Pipeline Tesseract local — utilisé en fallback quand aucun provider externe
+ * n'est configuré (ou quand le provider externe échoue).
+ */
+async function scanWithTesseract(input: {
+  buffer: Buffer;
+  mimetype: string;
+}): Promise<ParsedReceipt> {
+  const mime = input.mimetype.toLowerCase();
+  let text = "";
+  try {
+    if (mime === PDF_MIME) {
+      text = await extractFromPdf(input.buffer);
+    } else {
+      text = await extractFromImage(input.buffer);
+    }
+  } catch (err) {
+    if (err instanceof Error && err.message.includes("Impossible de lire")) {
+      throw err;
+    }
+    throw Errors.internal(
+      `Extraction du contenu échouée : ${(err as Error).message}`,
+    );
+  }
+  return parseReceipt(text);
+}
+
+/**
+ * V46 · Tier IA selon le plan du payeur. Passé par la route OCR.
+ * Influence le pipeline (economy / standard / premium).
+ */
+import type { IaPipelineTier } from "./ocr-providers.js";
+
+/**
  * Scan un fichier (image ou PDF) et retourne la donnée structurée.
+ *
+ * V46 · Pipeline ADAPTATIF selon le tier IA du plan :
+ *  - economy  (Free/Perso) → Tesseract + OpenAI Vision (~0,003€/scan)
+ *  - standard (Famille)    → Vision + Mindee fallback si confidence<75% (~0,01€)
+ *  - premium  (Pro)        → Mindee Pro Invoice+Receipts parallèle (~0,07€)
+ *
+ * Le champ `provider` indique lequel a effectivement été utilisé — pratique
+ * pour les stats côté admin et le debug coût.
  */
 export async function scanReceiptFile(input: {
   buffer: Buffer;
   mimetype: string;
-}): Promise<ParsedReceipt> {
+  /** V46 · tier IA du plan du payeur. Default economy si absent. */
+  iaTier?: IaPipelineTier;
+}): Promise<ParsedReceipt & { provider: string }> {
   if (!input.buffer || input.buffer.length === 0) {
     throw Errors.badRequest("Fichier vide");
   }
@@ -130,23 +174,18 @@ export async function scanReceiptFile(input: {
     );
   }
 
-  let text = "";
-  try {
-    if (mime === PDF_MIME) {
-      text = await extractFromPdf(input.buffer);
-    } else {
-      text = await extractFromImage(input.buffer);
-    }
-  } catch (err) {
-    if (err instanceof Error && err.message.includes("Impossible de lire")) {
-      throw err; // déjà formaté
-    }
-    throw Errors.internal(
-      `Extraction du contenu échouée : ${(err as Error).message}`,
-    );
+  // Mindee/OpenAI ne savent pas lire les PDF directement → bypass pour PDF
+  if (mime === PDF_MIME) {
+    const r = await scanWithTesseract(input);
+    return { ...r, provider: "tesseract" };
   }
 
-  return parseReceipt(text);
+  return scanReceiptViaProvider({
+    buffer: input.buffer,
+    mimetype: mime,
+    tesseractFallback: () => scanWithTesseract(input),
+    iaTier: input.iaTier,
+  });
 }
 
 /**
